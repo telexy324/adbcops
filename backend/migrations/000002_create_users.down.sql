@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS login_audit;
+DROP TABLE IF EXISTS app_user;
