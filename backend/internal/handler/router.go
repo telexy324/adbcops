@@ -20,6 +20,7 @@ type RouterDependencies struct {
 	ToolHandler         *ToolHandler
 	SkillHandler        *SkillHandler
 	AgentHandler        *AgentHandler
+	WorkflowHandler     *WorkflowHandler
 	SFTPHandler         *SFTPHandler
 	K8sHandler          *K8sHandler
 	MetricsHandler      *MetricsHandler
@@ -145,6 +146,15 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		agentRunRoutes.Use(dependencies.Authenticate, dependencies.RequireAdmin)
 		agentRunRoutes.GET("", dependencies.AgentHandler.ListRuns)
 		agentRunRoutes.GET("/:id", dependencies.AgentHandler.GetRun)
+	}
+	if dependencies.WorkflowHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		workflowRoutes := router.Group("/api/workflows")
+		workflowRoutes.Use(dependencies.Authenticate)
+		workflowRoutes.GET("", dependencies.WorkflowHandler.List)
+		workflowRoutes.POST("", dependencies.RequireAdmin, dependencies.WorkflowHandler.Create)
+		workflowRoutes.GET("/:id", dependencies.WorkflowHandler.Get)
+		workflowRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.WorkflowHandler.Update)
+		workflowRoutes.POST("/:id/validate", dependencies.RequireAdmin, dependencies.WorkflowHandler.Validate)
 	}
 	if dependencies.AnalysisHandler != nil && dependencies.Authenticate != nil {
 		analysisRoutes := router.Group("/api/analysis")

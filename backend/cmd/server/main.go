@@ -83,6 +83,7 @@ func run() error {
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
 	agentRunRepository := repository.NewAgentRunRepository(databaseConnection.GORM)
+	workflowRepository := repository.NewWorkflowRepository(databaseConnection.GORM)
 	credentialManager, err := credential.NewManager(cfg.Credential.MasterKey, cfg.Credential.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("initialize credential manager: %w", err)
@@ -147,6 +148,7 @@ func run() error {
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
+	workflowHandler := handler.NewWorkflowHandler(workflowRepository, agentRuntime, skillRegistry)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 	k8sHandler := handler.NewK8sHandler(k8sService)
 	metricsHandler := handler.NewMetricsHandler(metricsService)
@@ -166,6 +168,7 @@ func run() error {
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
 			AgentHandler:        agentHandler,
+			WorkflowHandler:     workflowHandler,
 			SFTPHandler:         sftpHandler,
 			K8sHandler:          k8sHandler,
 			MetricsHandler:      metricsHandler,
