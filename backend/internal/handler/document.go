@@ -56,6 +56,11 @@ type reviewDocumentRequest struct {
 	Result json.RawMessage `json:"result" binding:"required"`
 }
 
+type knowledgeSearchRequest struct {
+	Query string `json:"query" binding:"required"`
+	Limit int    `json:"limit"`
+}
+
 func (h *DocumentHandler) Upload(c *gin.Context) {
 	actor, ok := currentUser(c)
 	if !ok {
@@ -165,6 +170,27 @@ func (h *DocumentHandler) Review(c *gin.Context) {
 		"document":      toDocumentResponse(document),
 		"qualityResult": result,
 		"canPublish":    documentsvc.CanPublish(document),
+	})
+}
+
+func (h *DocumentHandler) Search(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request knowledgeSearchRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	chunks, err := h.service.Search(c.Request.Context(), actor, request.Query, request.Limit)
+	if handleDocumentError(c, err, "search knowledge failed") {
+		return
+	}
+	success(c, gin.H{
+		"query":  request.Query,
+		"count":  len(chunks),
+		"chunks": toChunkResponses(chunks),
 	})
 }
 

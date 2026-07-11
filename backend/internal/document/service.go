@@ -42,6 +42,7 @@ type Repository interface {
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
+	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 }
 
 type Service struct {
@@ -229,6 +230,20 @@ func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id in
 		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
 	}
 	return updated, result, nil
+}
+
+func (s *Service) Search(ctx context.Context, actor *model.AppUser, query string, limit int) ([]model.KBChunk, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, ErrInvalidInput
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	return s.documents.SearchChunks(ctx, query, limit)
 }
 
 func normalizeFileName(name string) (string, error) {

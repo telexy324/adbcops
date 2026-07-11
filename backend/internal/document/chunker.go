@@ -158,7 +158,7 @@ func newChunk(document *model.KBDocument, index int, content, section string) mo
 	if document != nil {
 		documentID = document.ID
 	}
-	return model.KBChunk{
+	chunk := model.KBChunk{
 		DocumentID:    documentID,
 		ChunkIndex:    index,
 		Content:       strings.TrimSpace(content),
@@ -166,6 +166,8 @@ func newChunk(document *model.KBDocument, index int, content, section string) mo
 		SourceSection: sourceSection,
 		TokenCount:    utf8.RuneCountInString(strings.TrimSpace(content)),
 	}
+	EnhanceChunk(&chunk)
+	return chunk
 }
 
 func tailRunes(value string, count int) string {

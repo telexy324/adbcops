@@ -7,6 +7,7 @@ import (
 
 	"aiops-platform/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type DocumentRepository interface {
@@ -16,6 +17,7 @@ type DocumentRepository interface {
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
+	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 }
 
 func (r *GORMUserRepository) CreateDocument(ctx context.Context, document *model.KBDocument) error {
@@ -86,4 +88,20 @@ func (r *GORMUserRepository) UpdateDocumentQuality(ctx context.Context, id int64
 		return nil, ErrNotFound
 	}
 	return r.FindDocumentByID(ctx, id)
+}
+
+func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error) {
+	var chunks []model.KBChunk
+	if limit <= 0 {
+		limit = 10
+	}
+	pattern := "%" + query + "%"
+	if err := r.db.WithContext(ctx).
+		Where("search_text ILIKE ? OR content ILIKE ?", pattern, pattern).
+		Order(clause.OrderBy{Expression: clause.Expr{SQL: "similarity(coalesce(search_text, ''), ?) DESC, chunk_index ASC", Vars: []any{query}}}).
+		Limit(limit).
+		Find(&chunks).Error; err != nil {
+		return nil, fmt.Errorf("search kb chunks: %w", err)
+	}
+	return chunks, nil
 }

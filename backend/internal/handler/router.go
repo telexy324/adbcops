@@ -78,6 +78,10 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		documentRoutes.GET("/:id/chunks", dependencies.DocumentHandler.Chunks)
 		documentRoutes.POST("/:id/review", dependencies.DocumentHandler.Review)
 		documentRoutes.POST("/:id/reprocess", dependencies.DocumentHandler.Reprocess)
+
+		knowledgeRoutes := router.Group("/api/knowledge")
+		knowledgeRoutes.Use(dependencies.Authenticate)
+		knowledgeRoutes.POST("/search", dependencies.DocumentHandler.Search)
 	}
 	return router
 }

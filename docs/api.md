@@ -266,6 +266,7 @@ GET  /api/documents/{id}/chunks
 ```
 
 `reprocess` 会读取已上传原文，按 Markdown 标题、空行段落和固定长度规则生成 `kb_chunk`。默认 `RAG_CHUNK_SIZE=800`、`RAG_CHUNK_OVERLAP=100`，返回的 `chunkIndex` 从 0 开始连续递增，空白 chunk 会被丢弃。
+每个 chunk 会生成 `summary`、`keywords`、`possibleQuestions` 和 `searchText`，供检索召回使用。
 
 ### 文档质检
 
@@ -284,3 +285,17 @@ Content-Type: application/json
 ```
 
 `result` 必须符合本地 JSON schema：`score` 为 0～100，且 `summary`、`findings`、`suggestions` 不能为空。`score >= 70` 会进入 `reviewing`，`score < 70` 会进入 `rejected`，不可发布。
+
+### 知识检索
+
+```http
+POST /api/knowledge/search
+Content-Type: application/json
+
+{
+  "query": "数据库连接池",
+  "limit": 10
+}
+```
+
+当前使用 `kb_chunk.search_text` 与 `content` 进行 pg_trgm 召回并返回 chunk 列表。发布态过滤会在审核发布任务中收紧。

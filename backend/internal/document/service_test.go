@@ -66,12 +66,35 @@ func TestReprocessTypicalMarkdownCreatesContinuousNonEmptyChunks(t *testing.T) {
 		if strings.TrimSpace(chunk.Content) == "" {
 			t.Fatalf("chunk %d is empty", index)
 		}
+		if chunk.Summary == nil || strings.TrimSpace(*chunk.Summary) == "" {
+			t.Fatalf("chunk %d summary is empty", index)
+		}
+		if chunk.SearchText == nil || strings.TrimSpace(*chunk.SearchText) == "" {
+			t.Fatalf("chunk %d search text is empty", index)
+		}
+		if len(chunk.Keywords) == 0 || string(chunk.Keywords) == "[]" {
+			t.Fatalf("chunk %d keywords are empty", index)
+		}
+		if len(chunk.PossibleQuestions) == 0 || string(chunk.PossibleQuestions) == "[]" {
+			t.Fatalf("chunk %d possible questions are empty", index)
+		}
 		if chunk.SourceTitle == nil || *chunk.SourceTitle != "支付系统 Runbook" {
 			t.Fatalf("chunk %d source title = %v", index, chunk.SourceTitle)
 		}
 	}
 	if chunks[0].SourceSection == nil || *chunks[0].SourceSection != "支付系统" {
 		t.Fatalf("first source section = %v", chunks[0].SourceSection)
+	}
+
+	results, err := service.Search(context.Background(), actor, "数据库连接池", 5)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Search() returned no chunks")
+	}
+	if !strings.Contains(results[0].Content, "数据库连接池") && (results[0].SearchText == nil || !strings.Contains(*results[0].SearchText, "数据库连接池")) {
+		t.Fatalf("top result did not recall database pool chunk: %+v", results[0])
 	}
 }
 
@@ -234,4 +257,23 @@ func (f *fakeRepository) UpdateDocumentQuality(_ context.Context, id int64, scor
 	document.QualityResult = append([]byte(nil), result...)
 	document.Status = status
 	return document, nil
+}
+
+func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int) ([]model.KBChunk, error) {
+	var results []model.KBChunk
+	for _, chunks := range f.chunks {
+		for _, chunk := range chunks {
+			searchText := ""
+			if chunk.SearchText != nil {
+				searchText = *chunk.SearchText
+			}
+			if strings.Contains(chunk.Content, query) || strings.Contains(searchText, query) {
+				results = append(results, chunk)
+				if len(results) >= limit {
+					return results, nil
+				}
+			}
+		}
+	}
+	return results, nil
 }
