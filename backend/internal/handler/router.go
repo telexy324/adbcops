@@ -18,6 +18,7 @@ type RouterDependencies struct {
 	AnalysisHandler     *AnalysisHandler
 	SFTPHandler         *SFTPHandler
 	K8sHandler          *K8sHandler
+	MetricsHandler      *MetricsHandler
 	Authenticate        gin.HandlerFunc
 	RequireAdmin        gin.HandlerFunc
 }
@@ -118,6 +119,10 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 			analysisRoutes.POST("/k8s/test", dependencies.K8sHandler.Test)
 			analysisRoutes.POST("/k8s/resources", dependencies.K8sHandler.Resources)
 			analysisRoutes.POST("/k8s/pod-diagnose", dependencies.K8sHandler.DiagnosePod)
+		}
+		if dependencies.MetricsHandler != nil {
+			analysisRoutes.POST("/metrics/test", dependencies.MetricsHandler.Test)
+			analysisRoutes.POST("/metrics/query", dependencies.MetricsHandler.Query)
 		}
 	}
 	return router

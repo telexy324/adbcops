@@ -535,3 +535,43 @@ Content-Type: application/json
 接口会采集 Pod 摘要、OwnerReference、相关 Events、current/previous container logs、匹配该 Pod labels 的 Service/Endpoint/Ingress，并可选采集所在 Node 的条件摘要。`logTailLines` 最大 2000，默认 200；`logMaxBytes` 最大 1MiB，默认 64KiB。诊断结果不读取、不返回 Kubernetes Secret 对象，也不返回 Pod 原始 Spec 中的 Secret 引用明细。
 
 响应中的 `rules` 是确定性规则引擎输出，当前覆盖 `CrashLoopBackOff`、`OOMKilled`、`ImagePullBackOff`、`Pending`、Service 无可用 Endpoint、Ingress backend 无可用 Endpoint。每条规则包含 `id`、`severity`、`category`、`description`、`suggestion` 和 `evidenceKeys`，其中 `evidenceKeys` 用于指向触发规则的 Pod / Event / Service / Endpoint / Ingress 摘要字段。
+
+### Prometheus Metrics Tool
+
+Prometheus Tool 要求 `prometheus` 类型数据源，只调用 HTTP 查询 API，不执行任何写操作。数据源 `config` 示例：
+
+```json
+{
+  "baseUrl": "https://prometheus.example",
+  "timeoutMs": 10000
+}
+```
+
+凭据放入 `credential`，支持 `username` / `password` 或 `bearerToken`。
+
+```http
+POST /api/analysis/metrics/test
+Content-Type: application/json
+
+{
+  "dataSourceId": 1
+}
+```
+
+```http
+POST /api/analysis/metrics/query
+Content-Type: application/json
+
+{
+  "dataSourceId": 1,
+  "query": "rate(http_requests_total[5m])",
+  "range": true,
+  "start": "2026-07-12T10:00:00+08:00",
+  "end": "2026-07-12T11:00:00+08:00",
+  "stepSeconds": 60,
+  "maxSeries": 20,
+  "maxPoints": 500
+}
+```
+
+`range=false` 时调用 `/api/v1/query`，`range=true` 时调用 `/api/v1/query_range`。响应统一为 `series[].metric` 和 `series[].points[]`，每个点包含 `timestamp`、`value` 和 `rawValue`。`maxSeries` 最大 100，默认 20；`maxPoints` 最大 2000，默认 500，服务端会强制截断超限返回。
