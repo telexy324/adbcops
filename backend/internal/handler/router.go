@@ -155,6 +155,13 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		workflowRoutes.GET("/:id", dependencies.WorkflowHandler.Get)
 		workflowRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.WorkflowHandler.Update)
 		workflowRoutes.POST("/:id/validate", dependencies.RequireAdmin, dependencies.WorkflowHandler.Validate)
+		workflowRoutes.POST("/:id/run", dependencies.RequireAdmin, dependencies.WorkflowHandler.Run)
+
+		workflowRunRoutes := router.Group("/api/workflow-runs")
+		workflowRunRoutes.Use(dependencies.Authenticate, dependencies.RequireAdmin)
+		workflowRunRoutes.GET("", dependencies.WorkflowHandler.ListRuns)
+		workflowRunRoutes.GET("/:id", dependencies.WorkflowHandler.GetRun)
+		workflowRunRoutes.POST("/:id/cancel", dependencies.WorkflowHandler.CancelRun)
 	}
 	if dependencies.AnalysisHandler != nil && dependencies.Authenticate != nil {
 		analysisRoutes := router.Group("/api/analysis")

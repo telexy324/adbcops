@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
@@ -14,12 +15,13 @@ import (
 
 type WorkflowHandler struct {
 	repository repository.WorkflowRepository
+	executor   *workflowdsl.Executor
 	agents     workflowdsl.AgentCatalog
 	skills     workflowdsl.SkillCatalog
 }
 
-func NewWorkflowHandler(repository repository.WorkflowRepository, agents workflowdsl.AgentCatalog, skills workflowdsl.SkillCatalog) *WorkflowHandler {
-	return &WorkflowHandler{repository: repository, agents: agents, skills: skills}
+func NewWorkflowHandler(repository repository.WorkflowRepository, executor *workflowdsl.Executor, agents workflowdsl.AgentCatalog, skills workflowdsl.SkillCatalog) *WorkflowHandler {
+	return &WorkflowHandler{repository: repository, executor: executor, agents: agents, skills: skills}
 }
 
 type saveWorkflowRequest struct {
@@ -40,6 +42,42 @@ type workflowDefinitionView struct {
 	CreatedBy   *int64                 `json:"createdBy,omitempty"`
 	CreatedAt   any                    `json:"createdAt"`
 	UpdatedAt   any                    `json:"updatedAt"`
+}
+
+type runWorkflowRequest struct {
+	Input          json.RawMessage `json:"input"`
+	ConversationID *int64          `json:"conversationId"`
+	IncidentID     *int64          `json:"incidentId"`
+	TimeoutSeconds int             `json:"timeoutSeconds"`
+}
+
+type workflowRunView struct {
+	ID             int64                 `json:"id"`
+	WorkflowID     *int64                `json:"workflowId,omitempty"`
+	UserID         *int64                `json:"userId,omitempty"`
+	ConversationID *int64                `json:"conversationId,omitempty"`
+	IncidentID     *int64                `json:"incidentId,omitempty"`
+	Status         string                `json:"status"`
+	Input          json.RawMessage       `json:"input,omitempty"`
+	Output         json.RawMessage       `json:"output,omitempty"`
+	ErrorMessage   *string               `json:"errorMessage,omitempty"`
+	StartedAt      any                   `json:"startedAt,omitempty"`
+	FinishedAt     any                   `json:"finishedAt,omitempty"`
+	CreatedAt      any                   `json:"createdAt"`
+	NodeRuns       []workflowNodeRunView `json:"nodeRuns,omitempty"`
+}
+
+type workflowNodeRunView struct {
+	ID           int64           `json:"id"`
+	NodeID       string          `json:"nodeId"`
+	NodeType     string          `json:"nodeType"`
+	Status       string          `json:"status"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	Output       json.RawMessage `json:"output,omitempty"`
+	ErrorMessage *string         `json:"errorMessage,omitempty"`
+	Attempt      int             `json:"attempt"`
+	StartedAt    any             `json:"startedAt,omitempty"`
+	FinishedAt   any             `json:"finishedAt,omitempty"`
 }
 
 func (h *WorkflowHandler) List(c *gin.Context) {
@@ -168,6 +206,79 @@ func (h *WorkflowHandler) Validate(c *gin.Context) {
 	success(c, workflowdsl.Validate(definition, h.agents, h.skills))
 }
 
+func (h *WorkflowHandler) Run(c *gin.Context) {
+	if h.executor == nil {
+		failure(c, http.StatusInternalServerError, 50096, "workflow executor is not configured")
+		return
+	}
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := workflowID(c)
+	if !ok {
+		return
+	}
+	var request runWorkflowRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	run, err := h.executor.Run(c.Request.Context(), workflowdsl.ExecutorInput{
+		Actor:          actor,
+		WorkflowID:     id,
+		ConversationID: request.ConversationID,
+		IncidentID:     request.IncidentID,
+		Input:          request.Input,
+		Timeout:        secondsDuration(request.TimeoutSeconds),
+	})
+	if run != nil {
+		success(c, workflowRunViewFromModel(*run))
+		return
+	}
+	if handleWorkflowError(c, err, "run workflow failed") {
+		return
+	}
+	success(c, gin.H{"ok": true})
+}
+
+func (h *WorkflowHandler) ListRuns(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	runs, err := h.repository.ListWorkflowRuns(c.Request.Context(), limit)
+	if handleWorkflowError(c, err, "list workflow runs failed") {
+		return
+	}
+	views := make([]workflowRunView, 0, len(runs))
+	for _, run := range runs {
+		views = append(views, workflowRunViewFromModel(run))
+	}
+	success(c, views)
+}
+
+func (h *WorkflowHandler) GetRun(c *gin.Context) {
+	id, ok := workflowID(c)
+	if !ok {
+		return
+	}
+	run, err := h.repository.FindWorkflowRunByID(c.Request.Context(), id)
+	if handleWorkflowError(c, err, "get workflow run failed") {
+		return
+	}
+	success(c, workflowRunViewFromModel(*run))
+}
+
+func (h *WorkflowHandler) CancelRun(c *gin.Context) {
+	id, ok := workflowID(c)
+	if !ok {
+		return
+	}
+	run, err := h.repository.CancelWorkflowRun(c.Request.Context(), id, nowUTC())
+	if handleWorkflowError(c, err, "cancel workflow run failed") {
+		return
+	}
+	success(c, workflowRunViewFromModel(*run))
+}
+
 func bindWorkflowRequest(c *gin.Context) (saveWorkflowRequest, bool) {
 	var request saveWorkflowRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -216,6 +327,50 @@ func workflowView(definition model.WorkflowDefinition) (workflowDefinitionView, 
 		CreatedAt:   definition.CreatedAt,
 		UpdatedAt:   definition.UpdatedAt,
 	}, nil
+}
+
+func workflowRunViewFromModel(run model.WorkflowRun) workflowRunView {
+	nodes := make([]workflowNodeRunView, 0, len(run.NodeRuns))
+	for _, node := range run.NodeRuns {
+		nodes = append(nodes, workflowNodeRunView{
+			ID:           node.ID,
+			NodeID:       node.NodeID,
+			NodeType:     node.NodeType,
+			Status:       node.Status,
+			Input:        json.RawMessage(node.Input),
+			Output:       json.RawMessage(node.Output),
+			ErrorMessage: node.ErrorMessage,
+			Attempt:      node.Attempt,
+			StartedAt:    node.StartedAt,
+			FinishedAt:   node.FinishedAt,
+		})
+	}
+	return workflowRunView{
+		ID:             run.ID,
+		WorkflowID:     run.WorkflowID,
+		UserID:         run.UserID,
+		ConversationID: run.ConversationID,
+		IncidentID:     run.IncidentID,
+		Status:         run.Status,
+		Input:          json.RawMessage(run.Input),
+		Output:         json.RawMessage(run.Output),
+		ErrorMessage:   run.ErrorMessage,
+		StartedAt:      run.StartedAt,
+		FinishedAt:     run.FinishedAt,
+		CreatedAt:      run.CreatedAt,
+		NodeRuns:       nodes,
+	}
+}
+
+func secondsDuration(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func nowUTC() time.Time {
+	return time.Now().UTC()
 }
 
 func handleWorkflowError(c *gin.Context, err error, fallback string) bool {

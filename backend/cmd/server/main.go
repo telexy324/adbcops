@@ -33,6 +33,7 @@ import (
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
 	"aiops-platform/backend/internal/toolregistry"
 	usersvc "aiops-platform/backend/internal/user"
+	workflowexec "aiops-platform/backend/internal/workflow"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -148,7 +149,8 @@ func run() error {
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
-	workflowHandler := handler.NewWorkflowHandler(workflowRepository, agentRuntime, skillRegistry)
+	workflowExecutor := workflowexec.NewExecutor(workflowRepository, agentRuntime, skillRegistry, 0)
+	workflowHandler := handler.NewWorkflowHandler(workflowRepository, workflowExecutor, agentRuntime, skillRegistry)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 	k8sHandler := handler.NewK8sHandler(k8sService)
 	metricsHandler := handler.NewMetricsHandler(metricsService)
