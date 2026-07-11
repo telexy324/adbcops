@@ -69,12 +69,13 @@ type SkillRequest struct {
 }
 
 type AgentResult struct {
-	Summary       string         `json:"summary"`
-	Facts         []Fact         `json:"facts,omitempty"`
-	Hypotheses    []Hypothesis   `json:"hypotheses,omitempty"`
-	EvidenceRefs  []string       `json:"evidenceRefs,omitempty"`
-	SuggestedNext []SkillRequest `json:"suggestedNext,omitempty"`
-	Confidence    float64        `json:"confidence"`
+	Summary       string          `json:"summary"`
+	Facts         []Fact          `json:"facts,omitempty"`
+	Hypotheses    []Hypothesis    `json:"hypotheses,omitempty"`
+	EvidenceRefs  []string        `json:"evidenceRefs,omitempty"`
+	SuggestedNext []SkillRequest  `json:"suggestedNext,omitempty"`
+	Structured    json.RawMessage `json:"structured,omitempty"`
+	Confidence    float64         `json:"confidence"`
 }
 
 type Agent interface {
@@ -153,6 +154,7 @@ func NewRuntime(skills *skillframework.Registry, audit AuditRepository, limits L
 
 func BuiltinAgents() []Agent {
 	return []Agent{
+		CoordinatorAgent{},
 		EchoAgent{},
 		KnowledgeAgent{},
 		LogAgent{},

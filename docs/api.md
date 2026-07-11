@@ -708,6 +708,7 @@ GET  /api/agent-runs/{id}
 
 若 Agent 出现循环、过度调用 Skill 或返回不存在的 Evidence 引用，Runtime 会返回结构化错误并终止执行。当前内置 Agent：
 
+- `coordinator_agent`：识别 intent，提取 scope，选择只读 Workflow 和 Specialist Agent；
 - `echo_agent`：运行时冒烟测试；
 - `knowledge_agent`：调用 `search_knowledge` 产出知识库事实和引用；
 - `log_agent`：调用 `query_logs` 产出日志事实和引用；
@@ -715,3 +716,18 @@ GET  /api/agent-runs/{id}
 - `kubernetes_agent`：调用 `get_pod_context` 与 `run_k8s_diagnostic_rules` 产出 K8s 事实和引用。
 
 Specialist Agent 缺少必要 scope 时不会直接访问生产数据源，而是返回低置信度 Hypothesis 提示需要补充参数。
+
+`coordinator_agent` 的 `structured` 字段固定符合以下计划结构：
+
+```json
+{
+  "intent": "knowledge|log_analysis|metrics_analysis|k8s_diagnosis|alert_analysis|general_rca",
+  "scope": {},
+  "workflow": "knowledge_qa_workflow",
+  "agents": ["knowledge_agent"],
+  "reason": "intent knowledge maps to read-only workflow knowledge_qa_workflow",
+  "missingParameters": []
+}
+```
+
+Coordinator 只做计划选择，不调用 Skill；普通知识问题只会选择 `knowledge_agent`，不会触达日志、指标或 Kubernetes 等生产数据源。
