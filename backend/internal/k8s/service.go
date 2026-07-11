@@ -465,6 +465,23 @@ func readResources(ctx context.Context, client kubernetes.Interface, resource, n
 			items = append(items, deploymentItem(&list.Items[index]))
 		}
 		return items, nil
+	case "ingresses":
+		if name != "" {
+			ingress, err := client.NetworkingV1().Ingresses(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return nil, err
+			}
+			return []ResourceItem{objectItem("Ingress", ingress, "")}, nil
+		}
+		list, err := client.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{Limit: int64(limit)})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceItem, 0, len(list.Items))
+		for index := range list.Items {
+			items = append(items, objectItem("Ingress", &list.Items[index], ""))
+		}
+		return items, nil
 	case "namespaces":
 		items := make([]ResourceItem, 0, len(allowedNamespaces))
 		for _, ns := range allowedNamespaces {

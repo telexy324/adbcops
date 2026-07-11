@@ -677,5 +677,10 @@ Content-Type: application/json
 - `query_logs`：通过日志 Tool 查询 Elasticsearch/OpenSearch；
 - `aggregate_log_templates`：对日志进行脱敏、模板聚类和时间桶统计；
 - `extract_log_entities`：从日志中抽取 host、namespace、pod、container、traceId、requestId、errorCode 等实体。
+- `get_pod_context`：采集 Pod 上下文、日志、事件、Service/Endpoint 和规则；
+- `get_ingress_context`：读取 allowed namespace 内的 Ingress 资源；
+- `run_k8s_diagnostic_rules`：运行确定性 K8s 诊断规则；
+- `query_metrics`：执行 Prometheus instant/range 查询；
+- `compare_metric_baseline`：对比当前窗口与 baseline 窗口的指标均值。
 
-其中 `query_logs`、`aggregate_log_templates`、`extract_log_entities` 风险等级为 `sensitive_read`，直接执行要求管理员；普通用户仍通过专用分析 API 或后续 Workflow 间接使用。
+其中日志、K8s 和指标类 Skill 风险等级为 `sensitive_read`，直接执行要求管理员；普通用户仍通过专用分析 API 或后续 Workflow 间接使用。Tool 调用失败时，Skill 会返回结构化 `{ "partial": true, "error": {...} }`，便于 Workflow 继续汇总部分结果。

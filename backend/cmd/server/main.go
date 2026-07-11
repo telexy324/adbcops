@@ -108,6 +108,7 @@ func run() error {
 	alertService := alertsvc.NewService(eventRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
+	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
 	skillRegistry, err := skillframework.NewRegistry(toolRegistry, skillRunRepository, skills...)
 	if err != nil {
 		return fmt.Errorf("initialize skill registry: %w", err)
