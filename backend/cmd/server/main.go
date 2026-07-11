@@ -137,6 +137,13 @@ func run() error {
 		return fmt.Errorf("initialize admin user: %w", err)
 	}
 	logger.Info("initial admin verified")
+	bootstrapWorkflowContext, cancelBootstrapWorkflow := context.WithTimeout(context.Background(), databaseTimeout)
+	err = workflowexec.BootstrapBuiltinDefinitions(bootstrapWorkflowContext, workflowRepository, nil)
+	cancelBootstrapWorkflow()
+	if err != nil {
+		return fmt.Errorf("bootstrap builtin workflows: %w", err)
+	}
+	logger.Info("builtin workflows verified")
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	conversationHandler := handler.NewConversationHandler(conversationService)

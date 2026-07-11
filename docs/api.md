@@ -807,3 +807,15 @@ POST /api/workflow-runs/{id}/cancel
 - 任一节点失败：`partial_success`，失败节点会记录 `errorMessage`；
 - 超时或上下文取消：`failed`；
 - 手动取消 pending/running/waiting 的 run：`cancelled`。
+
+### Built-in Workflows
+
+服务启动时会自动 upsert 以下内置 Workflow（版本均为 `v1`）：
+
+- `knowledge_qa_workflow`：Knowledge QA；
+- `log_analysis_workflow`：Log Analysis；
+- `pod_diagnosis_workflow`：K8s Pod Diagnosis；
+- `ingress_diagnosis_workflow`：Ingress Diagnosis；
+- `alert_diagnosis_workflow`：Alert Diagnosis。
+
+内置 Workflow 均通过同一套 DSL 校验，且只引用已注册 Agent / Skill。暂未落地的中间能力以 `condition` 控制节点表达，不会伪造新的外部数据访问能力。
