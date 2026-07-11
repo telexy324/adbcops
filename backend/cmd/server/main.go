@@ -20,6 +20,7 @@ import (
 	datasourcesvc "aiops-platform/backend/internal/datasource"
 	documentsvc "aiops-platform/backend/internal/document"
 	"aiops-platform/backend/internal/handler"
+	k8ssvc "aiops-platform/backend/internal/k8s"
 	llmsvc "aiops-platform/backend/internal/llm"
 	logssvc "aiops-platform/backend/internal/logs"
 	appmiddleware "aiops-platform/backend/internal/middleware"
@@ -96,6 +97,7 @@ func run() error {
 	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
 	logsService := logssvc.NewService(dataSourceRepository, credentialManager, nil)
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
+	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
 	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
@@ -121,6 +123,7 @@ func run() error {
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
+	k8sHandler := handler.NewK8sHandler(k8sService)
 
 	server := &http.Server{
 		Addr: cfg.Address(),
@@ -134,6 +137,7 @@ func run() error {
 			DataSourceHandler:   dataSourceHandler,
 			AnalysisHandler:     analysisHandler,
 			SFTPHandler:         sftpHandler,
+			K8sHandler:          k8sHandler,
 			Authenticate:        appmiddleware.Authenticate(authService),
 			RequireAdmin:        appmiddleware.RequireAdmin(),
 		}),

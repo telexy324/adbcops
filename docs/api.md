@@ -469,3 +469,48 @@ Content-Type: application/json
 ```
 
 路径必须是绝对路径，不允许 `..`，清理和软链接解析后仍必须位于 `pathAllowlist` 内；`/etc`、`/root`、`/proc`、`/sys` 和 `.ssh` 等敏感路径会被拒绝。
+
+### Kubernetes 只读资源 Tool
+
+K8s Tool 要求 `kubernetes` 类型数据源，只提供只读资源读取和连通性测试，不提供 create、update、patch、delete 等写操作。数据源 `config` 示例：
+
+```json
+{
+  "apiServer": "https://kubernetes.example",
+  "allowedNamespaces": ["prod", "ops"],
+  "insecureSkipTlsVerify": false,
+  "timeoutMs": 10000
+}
+```
+
+`allowedNamespaces` 必填，不允许为空或使用 `*`。除 `namespaces` 资源外，请求 namespace 必须位于允许列表内，否则返回 403。凭据放入 `credential`，支持完整 `kubeconfig`，或 `bearerToken` / `caData`：
+
+```json
+{
+  "bearerToken": "...",
+  "caData": "-----BEGIN CERTIFICATE-----..."
+}
+```
+
+```http
+POST /api/analysis/k8s/test
+Content-Type: application/json
+
+{
+  "dataSourceId": 1
+}
+```
+
+```http
+POST /api/analysis/k8s/resources
+Content-Type: application/json
+
+{
+  "dataSourceId": 1,
+  "namespace": "prod",
+  "resource": "pods",
+  "limit": 50
+}
+```
+
+当前支持 `pods`、`services`、`events`、`deployments` 和 `namespaces`。返回条目包含 `kind`、`namespace`、`name`、`status` 和原始 Kubernetes 对象 `raw`。
