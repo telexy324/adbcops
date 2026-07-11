@@ -20,9 +20,11 @@ import (
 	documentsvc "aiops-platform/backend/internal/document"
 	"aiops-platform/backend/internal/handler"
 	llmsvc "aiops-platform/backend/internal/llm"
+	logssvc "aiops-platform/backend/internal/logs"
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	ragsvc "aiops-platform/backend/internal/rag"
 	"aiops-platform/backend/internal/repository"
+	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
 	usersvc "aiops-platform/backend/internal/user"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -90,6 +92,8 @@ func run() error {
 	llmService := llmsvc.NewService(llmRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	ragService := ragsvc.NewService(ragRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
+	logsService := logssvc.NewService(dataSourceRepository, credentialManager, nil)
+	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
@@ -112,6 +116,8 @@ func run() error {
 	documentHandler := handler.NewDocumentHandler(documentService, cfg.FileStorage.MaxUploadBytes)
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
+	analysisHandler := handler.NewAnalysisHandler(logsService)
+	sftpHandler := handler.NewSFTPHandler(sftpService)
 
 	server := &http.Server{
 		Addr: cfg.Address(),
@@ -123,6 +129,8 @@ func run() error {
 			DocumentHandler:     documentHandler,
 			RAGHandler:          ragHandler,
 			DataSourceHandler:   dataSourceHandler,
+			AnalysisHandler:     analysisHandler,
+			SFTPHandler:         sftpHandler,
 			Authenticate:        appmiddleware.Authenticate(authService),
 			RequireAdmin:        appmiddleware.RequireAdmin(),
 		}),

@@ -368,3 +368,54 @@ Content-Type: application/json
 ```
 
 `config` 只能保存非敏感连接配置；包含 `password`、`token`、`secret`、`apiKey`、`privateKey` 等字段会被拒绝。`credential` 会加密保存到 `credential_secret`，响应只返回 `credentialConfigured`，不会返回明文或密文。
+
+## Analysis Logs
+
+日志查询接口要求登录，当前支持 `elasticsearch` / `opensearch` 类型数据源。接口只执行 `_search` 查询，不提供任何管理操作。
+
+```http
+POST /api/analysis/logs
+Content-Type: application/json
+
+{
+  "dataSourceId": 1,
+  "index": "logs-*",
+  "from": "2026-07-11T00:00:00Z",
+  "to": "2026-07-11T01:00:00Z",
+  "keyword": "database",
+  "level": "ERROR",
+  "size": 100,
+  "timeoutMs": 10000
+}
+```
+
+默认不允许查询超过 24 小时的时间范围，超过会返回明确错误；如确需大范围查询，需要显式传入 `allowLargeRange: true`。返回统一 `LogItem` 列表，字段包含 `timestamp`、`level`、`message`、`source`、`systemName`、`component`、`environment`、`host`、`cluster`、`namespace`、`pod`、`container`、`traceId`、`requestId`、`errorCode` 和 `raw`。
+
+### SFTP 文件读取
+
+SFTP 工具要求 `ssh` 类型数据源，且只提供只读文件读取，不提供 Shell 执行能力。数据源 `config` 示例：
+
+```json
+{
+  "host": "sftp.example",
+  "port": 22,
+  "username": "ops",
+  "pathAllowlist": ["/var/log/app"],
+  "maxBytes": 1048576
+}
+```
+
+凭据放入 `credential`，支持 `password` 或 `privateKey` / `passphrase`。
+
+```http
+POST /api/analysis/sftp/read
+Content-Type: application/json
+
+{
+  "dataSourceId": 1,
+  "path": "/var/log/app/app.log",
+  "maxBytes": 1048576
+}
+```
+
+路径必须是绝对路径，不允许 `..`，清理和软链接解析后仍必须位于 `pathAllowlist` 内；`/etc`、`/root`、`/proc`、`/sys` 和 `.ssh` 等敏感路径会被拒绝。

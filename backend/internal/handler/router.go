@@ -15,6 +15,8 @@ type RouterDependencies struct {
 	DocumentHandler     *DocumentHandler
 	RAGHandler          *RAGHandler
 	DataSourceHandler   *DataSourceHandler
+	AnalysisHandler     *AnalysisHandler
+	SFTPHandler         *SFTPHandler
 	Authenticate        gin.HandlerFunc
 	RequireAdmin        gin.HandlerFunc
 }
@@ -99,6 +101,14 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		dataSourceRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Update)
 		dataSourceRoutes.DELETE("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Delete)
 		dataSourceRoutes.POST("/:id/test", dependencies.RequireAdmin, dependencies.DataSourceHandler.Test)
+	}
+	if dependencies.AnalysisHandler != nil && dependencies.Authenticate != nil {
+		analysisRoutes := router.Group("/api/analysis")
+		analysisRoutes.Use(dependencies.Authenticate)
+		analysisRoutes.POST("/logs", dependencies.AnalysisHandler.QueryLogs)
+		if dependencies.SFTPHandler != nil {
+			analysisRoutes.POST("/sftp/read", dependencies.SFTPHandler.ReadFile)
+		}
 	}
 	return router
 }
