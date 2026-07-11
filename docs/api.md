@@ -691,6 +691,63 @@ POST /api/evidence/validate
 
 若任一 key 不存在，接口返回失败；Agent Runtime 自身也会拒绝“事实引用了不存在 Evidence”的结果。
 
+## Topology
+
+Topology Center 保存运维对象节点和关系边。v1 支持手工维护节点/边，以及从 Kubernetes 只读资源同步生成 Deployment、Pod、Service、Ingress 关系。
+
+```http
+GET  /api/topology/graph
+POST /api/topology/nodes
+POST /api/topology/edges
+POST /api/topology/sync/k8s
+```
+
+`graph` 要求登录，写入和同步要求管理员。图查询支持 `environment`、`cluster`、`namespace`、`kind`、`limit`。
+
+手工维护节点：
+
+```json
+{
+  "nodeKey": "svc:prod:payment-api",
+  "kind": "service",
+  "name": "payment-api",
+  "environment": "prod",
+  "properties": {
+    "owner": "payment"
+  }
+}
+```
+
+手工维护边：
+
+```json
+{
+  "fromNodeKey": "svc:prod:payment-web",
+  "toNodeKey": "svc:prod:payment-api",
+  "edgeType": "depends_on",
+  "confidence": 1
+}
+```
+
+Kubernetes 同步：
+
+```json
+{
+  "dataSourceId": 1,
+  "environment": "prod",
+  "cluster": "prod-a",
+  "namespace": "payment",
+  "limit": 200
+}
+```
+
+同步会生成：
+
+- `Deployment owns Pod`
+- `Service selects Pod`
+- `Service depends_on Deployment`
+- `Ingress routes_to Service`
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。

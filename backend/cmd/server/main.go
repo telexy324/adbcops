@@ -33,6 +33,7 @@ import (
 	"aiops-platform/backend/internal/skillframework"
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
 	"aiops-platform/backend/internal/toolregistry"
+	topologysvc "aiops-platform/backend/internal/topology"
 	usersvc "aiops-platform/backend/internal/user"
 	workflowexec "aiops-platform/backend/internal/workflow"
 	"github.com/gin-gonic/gin"
@@ -84,6 +85,7 @@ func run() error {
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	evidenceRepository := repository.NewEvidenceRepository(databaseConnection.GORM)
+	topologyRepository := repository.NewTopologyRepository(databaseConnection.GORM)
 	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
 	agentRunRepository := repository.NewAgentRunRepository(databaseConnection.GORM)
 	workflowRepository := repository.NewWorkflowRepository(databaseConnection.GORM)
@@ -113,6 +115,7 @@ func run() error {
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
 	evidenceService := evidencesvc.NewService(evidenceRepository)
+	topologyService := topologysvc.NewService(topologyRepository, k8sService)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
@@ -157,6 +160,7 @@ func run() error {
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
+	topologyHandler := handler.NewTopologyHandler(topologyService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
@@ -179,6 +183,7 @@ func run() error {
 			AnalysisHandler:     analysisHandler,
 			EventHandler:        eventHandler,
 			EvidenceHandler:     evidenceHandler,
+			TopologyHandler:     topologyHandler,
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
 			AgentHandler:        agentHandler,

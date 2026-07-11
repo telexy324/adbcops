@@ -18,6 +18,7 @@ type RouterDependencies struct {
 	AnalysisHandler     *AnalysisHandler
 	EventHandler        *EventHandler
 	EvidenceHandler     *EvidenceHandler
+	TopologyHandler     *TopologyHandler
 	ToolHandler         *ToolHandler
 	SkillHandler        *SkillHandler
 	AgentHandler        *AgentHandler
@@ -58,6 +59,14 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		evidenceRoutes.GET("/:idOrKey", dependencies.EvidenceHandler.Get)
 		evidenceRoutes.POST("", dependencies.RequireAdmin, dependencies.EvidenceHandler.Create)
 		evidenceRoutes.POST("/validate", dependencies.RequireAdmin, dependencies.EvidenceHandler.Validate)
+	}
+	if dependencies.TopologyHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		topologyRoutes := router.Group("/api/topology")
+		topologyRoutes.Use(dependencies.Authenticate)
+		topologyRoutes.GET("/graph", dependencies.TopologyHandler.Graph)
+		topologyRoutes.POST("/nodes", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertNode)
+		topologyRoutes.POST("/edges", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertEdge)
+		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
 	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")
