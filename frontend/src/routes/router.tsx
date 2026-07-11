@@ -1,6 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: "dashboard", element: <DashboardPage /> },
+      { path: "analysis", element: <AnalysisPage /> },
       { path: "knowledge", element: <KnowledgePage /> },
     ],
   },

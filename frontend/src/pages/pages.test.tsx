@@ -2,7 +2,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 
+import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
@@ -21,6 +23,26 @@ vi.mock("@/api/knowledge", () => ({
   toAPIErrorMessage: vi.fn(() => "请求失败"),
   uploadDocument: vi.fn(),
 }));
+
+vi.mock("@/api/analysis", () => ({
+  diagnosePod: vi.fn(),
+  listAnalysisTasks: vi.fn().mockResolvedValue([]),
+  queryMetrics: vi.fn(),
+  runGeneralAnalysis: vi.fn(),
+  sendAlertmanagerWebhook: vi.fn(),
+  toAPIErrorMessage: vi.fn(() => "请求失败"),
+}));
+
+function renderWithQueryClient(element: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{element}</MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 describe("LoginPage", () => {
   it("renders the login form and reports authentication failure", async () => {
@@ -63,17 +85,7 @@ describe("DashboardPage", () => {
 
 describe("KnowledgePage", () => {
   it("renders the knowledge workflow from upload to chat", () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <KnowledgePage />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
+    renderWithQueryClient(<KnowledgePage />);
 
     expect(
       screen.getByRole("heading", { name: "知识中心" }),
@@ -85,6 +97,34 @@ describe("KnowledgePage", () => {
       screen.getByText("只有 published 文档会进入正式问答召回。", {
         exact: false,
       }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("AnalysisPage", () => {
+  it("renders analysis entries and the current-user task panel", () => {
+    renderWithQueryClient(<AnalysisPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "智能分析" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "日志分析" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "K8s 诊断" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "指标查询" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "告警输入" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "我的分析任务" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("普通用户只会看到自己的分析任务。", { exact: false }),
     ).toBeInTheDocument();
   });
 });
