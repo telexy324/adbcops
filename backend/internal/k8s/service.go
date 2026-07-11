@@ -12,6 +12,7 @@ import (
 	"aiops-platform/backend/internal/model"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -115,7 +116,9 @@ type PodDiagnosisResult struct {
 	Logs         []PodLogSummary       `json:"logs"`
 	Services     []ServiceSummary      `json:"services"`
 	Endpoints    []EndpointSummary     `json:"endpoints"`
+	Ingresses    []IngressSummary      `json:"ingresses,omitempty"`
 	Node         *NodeSummary          `json:"node,omitempty"`
+	Rules        []RuleFinding         `json:"rules"`
 	Limits       PodDiagnosisLogLimits `json:"limits"`
 }
 
@@ -148,6 +151,9 @@ type ContainerSummary struct {
 	Reason       string `json:"reason,omitempty"`
 	Message      string `json:"message,omitempty"`
 	ExitCode     int32  `json:"exitCode,omitempty"`
+	LastState    string `json:"lastState,omitempty"`
+	LastReason   string `json:"lastReason,omitempty"`
+	LastExitCode int32  `json:"lastExitCode,omitempty"`
 }
 
 type ConditionSummary struct {
@@ -195,9 +201,31 @@ type EndpointSummary struct {
 	Ports     []string `json:"ports,omitempty"`
 }
 
+type IngressSummary struct {
+	Name     string              `json:"name"`
+	Class    string              `json:"class,omitempty"`
+	Hosts    []string            `json:"hosts,omitempty"`
+	Backends []IngressBackendRef `json:"backends,omitempty"`
+}
+
+type IngressBackendRef struct {
+	Service string `json:"service"`
+	Port    string `json:"port,omitempty"`
+}
+
 type NodeSummary struct {
 	Name       string             `json:"name"`
 	Conditions []ConditionSummary `json:"conditions,omitempty"`
+}
+
+type RuleFinding struct {
+	ID           string   `json:"id"`
+	Severity     string   `json:"severity"`
+	Category     string   `json:"category"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	EvidenceKeys []string `json:"evidenceKeys"`
+	Suggestion   string   `json:"suggestion,omitempty"`
 }
 
 func NewService(repository Repository, secrets SecretManager, factory ClientFactory) *Service {
@@ -298,6 +326,10 @@ func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input P
 	if err != nil {
 		return nil, err
 	}
+	result.Ingresses, err = collectIngressesForServices(ctx, client, namespace, result.Services)
+	if err != nil {
+		return nil, err
+	}
 	result.Logs, err = s.collectPodLogs(ctx, client, pod, input.IncludePreviousLogs, int64(tailLines), int64(maxBytes))
 	if err != nil {
 		return nil, err
@@ -309,6 +341,7 @@ func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input P
 		}
 		result.Node = summarizeNode(node)
 	}
+	result.Rules = EvaluatePodRules(result)
 	return result, nil
 }
 
@@ -487,6 +520,7 @@ func summarizeContainers(containers []corev1.Container, statuses []corev1.Contai
 			item.Ready = status.Ready
 			item.RestartCount = status.RestartCount
 			item.State, item.Reason, item.Message, item.ExitCode = summarizeContainerState(status.State)
+			item.LastState, item.LastReason, _, item.LastExitCode = summarizeContainerState(status.LastTerminationState)
 		}
 		result = append(result, item)
 	}
@@ -601,6 +635,70 @@ func summarizeEndpoint(endpoint *corev1.Endpoints) EndpointSummary {
 	return summary
 }
 
+func collectIngressesForServices(ctx context.Context, client kubernetes.Interface, namespace string, services []ServiceSummary) ([]IngressSummary, error) {
+	if len(services) == 0 {
+		return nil, nil
+	}
+	serviceNames := make(map[string]struct{}, len(services))
+	for _, service := range services {
+		serviceNames[service.Name] = struct{}{}
+	}
+	list, err := client.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]IngressSummary, 0)
+	for index := range list.Items {
+		ingress := &list.Items[index]
+		summary := summarizeIngress(ingress)
+		if ingressReferencesServices(summary, serviceNames) {
+			result = append(result, summary)
+		}
+	}
+	return result, nil
+}
+
+func summarizeIngress(ingress *networkingv1.Ingress) IngressSummary {
+	summary := IngressSummary{Name: ingress.Name}
+	if ingress.Spec.IngressClassName != nil {
+		summary.Class = *ingress.Spec.IngressClassName
+	}
+	if ingress.Spec.DefaultBackend != nil && ingress.Spec.DefaultBackend.Service != nil {
+		summary.Backends = append(summary.Backends, summarizeIngressBackend(*ingress.Spec.DefaultBackend.Service))
+	}
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host != "" {
+			summary.Hosts = append(summary.Hosts, rule.Host)
+		}
+		if rule.HTTP == nil {
+			continue
+		}
+		for _, path := range rule.HTTP.Paths {
+			if path.Backend.Service != nil {
+				summary.Backends = append(summary.Backends, summarizeIngressBackend(*path.Backend.Service))
+			}
+		}
+	}
+	return summary
+}
+
+func summarizeIngressBackend(backend networkingv1.IngressServiceBackend) IngressBackendRef {
+	port := backend.Port.Name
+	if port == "" && backend.Port.Number > 0 {
+		port = fmt.Sprintf("%d", backend.Port.Number)
+	}
+	return IngressBackendRef{Service: backend.Name, Port: port}
+}
+
+func ingressReferencesServices(ingress IngressSummary, serviceNames map[string]struct{}) bool {
+	for _, backend := range ingress.Backends {
+		if _, ok := serviceNames[backend.Service]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) collectPodLogs(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, includePrevious bool, tailLines, maxBytes int64) ([]PodLogSummary, error) {
 	result := make([]PodLogSummary, 0, len(pod.Spec.Containers)*2)
 	for _, container := range pod.Spec.Containers {
@@ -677,6 +775,192 @@ func summarizeNode(node *corev1.Node) *NodeSummary {
 		})
 	}
 	return summary
+}
+
+func EvaluatePodRules(result *PodDiagnosisResult) []RuleFinding {
+	if result == nil {
+		return nil
+	}
+	findings := make([]RuleFinding, 0)
+	findings = append(findings, evaluateCrashLoopBackOff(result)...)
+	findings = append(findings, evaluateOOMKilled(result)...)
+	findings = append(findings, evaluateImagePullBackOff(result)...)
+	findings = append(findings, evaluatePending(result)...)
+	findings = append(findings, evaluateServiceEndpoint(result)...)
+	findings = append(findings, evaluateIngress(result)...)
+	return findings
+}
+
+func evaluateCrashLoopBackOff(result *PodDiagnosisResult) []RuleFinding {
+	findings := make([]RuleFinding, 0)
+	for _, container := range allContainers(result.Pod) {
+		if strings.EqualFold(container.Reason, "CrashLoopBackOff") || strings.Contains(container.Message, "CrashLoopBackOff") || hasEventReason(result.Events, "BackOff") {
+			findings = append(findings, RuleFinding{
+				ID:           "k8s.pod.crash_loop_backoff",
+				Severity:     "critical",
+				Category:     "pod",
+				Title:        "Pod container is in CrashLoopBackOff",
+				Description:  fmt.Sprintf("container %s is repeatedly restarting or has BackOff events", container.Name),
+				EvidenceKeys: []string{evidenceKey("pod.container", container.Name, "reason"), "pod.events.BackOff"},
+				Suggestion:   "查看 previous logs、启动参数、配置依赖和最近变更。",
+			})
+		}
+	}
+	return findings
+}
+
+func evaluateOOMKilled(result *PodDiagnosisResult) []RuleFinding {
+	findings := make([]RuleFinding, 0)
+	for _, container := range allContainers(result.Pod) {
+		if strings.EqualFold(container.LastReason, "OOMKilled") || strings.EqualFold(container.Reason, "OOMKilled") || containsAnyEvent(result.Events, "OOMKilled", "out of memory") {
+			findings = append(findings, RuleFinding{
+				ID:           "k8s.pod.oom_killed",
+				Severity:     "critical",
+				Category:     "pod",
+				Title:        "Container was OOMKilled",
+				Description:  fmt.Sprintf("container %s was terminated due to memory pressure", container.Name),
+				EvidenceKeys: []string{evidenceKey("pod.container", container.Name, "lastReason"), "pod.events.OOMKilled"},
+				Suggestion:   "检查内存使用趋势、limit 设置、启动后内存峰值和泄漏风险。",
+			})
+		}
+	}
+	return findings
+}
+
+func evaluateImagePullBackOff(result *PodDiagnosisResult) []RuleFinding {
+	findings := make([]RuleFinding, 0)
+	for _, container := range allContainers(result.Pod) {
+		if isImagePullReason(container.Reason) || containsAnyEvent(result.Events, "ImagePullBackOff", "ErrImagePull", "pull image") {
+			findings = append(findings, RuleFinding{
+				ID:           "k8s.pod.image_pull_backoff",
+				Severity:     "high",
+				Category:     "pod",
+				Title:        "Container image cannot be pulled",
+				Description:  fmt.Sprintf("container %s image pull is failing", container.Name),
+				EvidenceKeys: []string{evidenceKey("pod.container", container.Name, "reason"), "pod.events.ImagePull"},
+				Suggestion:   "检查镜像地址、tag、仓库权限、镜像拉取 Secret 和节点到仓库网络。",
+			})
+		}
+	}
+	return findings
+}
+
+func evaluatePending(result *PodDiagnosisResult) []RuleFinding {
+	if !strings.EqualFold(result.Pod.Phase, "Pending") && !hasPodCondition(result.Pod.Conditions, "PodScheduled", "False") {
+		return nil
+	}
+	return []RuleFinding{{
+		ID:           "k8s.pod.pending",
+		Severity:     "high",
+		Category:     "scheduling",
+		Title:        "Pod is pending or unscheduled",
+		Description:  "pod is not scheduled or still pending",
+		EvidenceKeys: []string{"pod.phase", "pod.conditions.PodScheduled", "pod.events.FailedScheduling"},
+		Suggestion:   "检查资源请求、节点污点/亲和性、PVC 绑定和调度事件。",
+	}}
+}
+
+func evaluateServiceEndpoint(result *PodDiagnosisResult) []RuleFinding {
+	findings := make([]RuleFinding, 0)
+	endpointByName := make(map[string]EndpointSummary, len(result.Endpoints))
+	for _, endpoint := range result.Endpoints {
+		endpointByName[endpoint.Name] = endpoint
+	}
+	for _, service := range result.Services {
+		endpoint, ok := endpointByName[service.Name]
+		if !ok || len(endpoint.Addresses) == 0 {
+			findings = append(findings, RuleFinding{
+				ID:           "k8s.service.no_ready_endpoint",
+				Severity:     "high",
+				Category:     "service",
+				Title:        "Service has no ready endpoint for this Pod selector",
+				Description:  fmt.Sprintf("service %s matches the pod labels but has no ready endpoint addresses", service.Name),
+				EvidenceKeys: []string{evidenceKey("service", service.Name, "selector"), evidenceKey("endpoint", service.Name, "addresses")},
+				Suggestion:   "检查 Service selector、Pod readiness、EndpointSlice/Endpoints 和容器健康检查。",
+			})
+		}
+	}
+	return findings
+}
+
+func evaluateIngress(result *PodDiagnosisResult) []RuleFinding {
+	if len(result.Ingresses) == 0 {
+		return nil
+	}
+	noEndpointServices := map[string]struct{}{}
+	endpointByName := make(map[string]EndpointSummary, len(result.Endpoints))
+	for _, endpoint := range result.Endpoints {
+		endpointByName[endpoint.Name] = endpoint
+	}
+	for _, service := range result.Services {
+		endpoint, ok := endpointByName[service.Name]
+		if !ok || len(endpoint.Addresses) == 0 {
+			noEndpointServices[service.Name] = struct{}{}
+		}
+	}
+	findings := make([]RuleFinding, 0)
+	for _, ingress := range result.Ingresses {
+		for _, backend := range ingress.Backends {
+			if _, ok := noEndpointServices[backend.Service]; !ok {
+				continue
+			}
+			findings = append(findings, RuleFinding{
+				ID:           "k8s.ingress.backend_no_endpoint",
+				Severity:     "high",
+				Category:     "ingress",
+				Title:        "Ingress backend service has no ready endpoint",
+				Description:  fmt.Sprintf("ingress %s routes to service %s, but the service has no ready endpoints", ingress.Name, backend.Service),
+				EvidenceKeys: []string{evidenceKey("ingress", ingress.Name, "backend"), evidenceKey("endpoint", backend.Service, "addresses")},
+				Suggestion:   "检查 Ingress backend、Service selector、Pod readiness 和 Endpoint 状态。",
+			})
+		}
+	}
+	return findings
+}
+
+func allContainers(pod PodSummary) []ContainerSummary {
+	result := make([]ContainerSummary, 0, len(pod.InitContainers)+len(pod.Containers))
+	result = append(result, pod.InitContainers...)
+	result = append(result, pod.Containers...)
+	return result
+}
+
+func evidenceKey(parts ...string) string {
+	return strings.Join(parts, ".")
+}
+
+func hasEventReason(events []EventSummary, reason string) bool {
+	for _, event := range events {
+		if strings.EqualFold(event.Reason, reason) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyEvent(events []EventSummary, needles ...string) bool {
+	for _, event := range events {
+		haystack := strings.ToLower(event.Reason + " " + event.Message)
+		for _, needle := range needles {
+			if strings.Contains(haystack, strings.ToLower(needle)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isImagePullReason(reason string) bool {
+	return strings.EqualFold(reason, "ImagePullBackOff") || strings.EqualFold(reason, "ErrImagePull")
+}
+
+func hasPodCondition(conditions []ConditionSummary, conditionType string, status string) bool {
+	for _, condition := range conditions {
+		if condition.Type == conditionType && condition.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 func copyStringMap(values map[string]string) map[string]string {

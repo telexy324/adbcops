@@ -9,6 +9,7 @@ import (
 
 	"aiops-platform/backend/internal/model"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -182,6 +183,121 @@ func TestDiagnosePodCollectsContextWithLimitedLogsAndNoSecret(t *testing.T) {
 	}
 }
 
+func TestDiagnosePodRulesFromFakeClientDataset(t *testing.T) {
+	className := "nginx"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-0",
+			Namespace: "prod",
+			Labels:    map[string]string{"app": "api"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "app", Image: "repo/api:v1"},
+			},
+			InitContainers: []corev1.Container{
+				{Name: "init", Image: "repo/init:missing"},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable"},
+			},
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "app",
+					RestartCount: 5,
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff", Message: "back-off restarting failed container"},
+					},
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137},
+					},
+				},
+			},
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "init",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "failed to pull image"},
+					},
+				},
+			},
+		},
+	}
+	serviceObject := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": "api"},
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-ingress", Namespace: "prod"},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: &className,
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "api.example.test",
+					IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{
+							{
+								Path: "/",
+								Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+									Name: "api",
+									Port: networkingv1.ServiceBackendPort{Number: 8080},
+								}},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-0.1", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:      "Pod",
+			Namespace: "prod",
+			Name:      "api-0",
+		},
+		Type:    corev1.EventTypeWarning,
+		Reason:  "FailedScheduling",
+		Message: "0/3 nodes are available",
+		Count:   1,
+	}
+	k8sService, _ := newTestService(t, pod, serviceObject, ingress, event)
+	k8sService.logReader = testLogReader{content: "boot failed\n"}
+
+	result, err := k8sService.DiagnosePod(context.Background(), testActor(), PodDiagnosisInput{
+		DataSourceID:        1,
+		Namespace:           "prod",
+		PodName:             "api-0",
+		IncludePreviousLogs: true,
+	})
+	if err != nil {
+		t.Fatalf("diagnose pod: %v", err)
+	}
+	expected := []string{
+		"k8s.pod.crash_loop_backoff",
+		"k8s.pod.oom_killed",
+		"k8s.pod.image_pull_backoff",
+		"k8s.pod.pending",
+		"k8s.service.no_ready_endpoint",
+		"k8s.ingress.backend_no_endpoint",
+	}
+	for _, id := range expected {
+		finding := findRule(result.Rules, id)
+		if finding == nil {
+			t.Fatalf("expected rule %s in %+v", id, result.Rules)
+		}
+		if len(finding.EvidenceKeys) == 0 {
+			t.Fatalf("rule %s has no evidence keys", id)
+		}
+	}
+}
+
 func newTestService(t *testing.T, objects ...runtime.Object) (*Service, *fake.Clientset) {
 	t.Helper()
 	client := fake.NewSimpleClientset(objects...)
@@ -215,6 +331,15 @@ type testLogReader struct {
 
 func (r testLogReader) ReadPodLog(context.Context, kubernetes.Interface, string, string, string, bool, int64, int64) (string, error) {
 	return r.content, nil
+}
+
+func findRule(findings []RuleFinding, id string) *RuleFinding {
+	for index := range findings {
+		if findings[index].ID == id {
+			return &findings[index]
+		}
+	}
+	return nil
 }
 
 func testDataSource(t *testing.T, config Config) *model.DataSource {

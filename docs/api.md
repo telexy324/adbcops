@@ -532,4 +532,6 @@ Content-Type: application/json
 }
 ```
 
-接口会采集 Pod 摘要、OwnerReference、相关 Events、current/previous container logs、匹配该 Pod labels 的 Service/Endpoint，并可选采集所在 Node 的条件摘要。`logTailLines` 最大 2000，默认 200；`logMaxBytes` 最大 1MiB，默认 64KiB。诊断结果不读取、不返回 Kubernetes Secret 对象，也不返回 Pod 原始 Spec 中的 Secret 引用明细。
+接口会采集 Pod 摘要、OwnerReference、相关 Events、current/previous container logs、匹配该 Pod labels 的 Service/Endpoint/Ingress，并可选采集所在 Node 的条件摘要。`logTailLines` 最大 2000，默认 200；`logMaxBytes` 最大 1MiB，默认 64KiB。诊断结果不读取、不返回 Kubernetes Secret 对象，也不返回 Pod 原始 Spec 中的 Secret 引用明细。
+
+响应中的 `rules` 是确定性规则引擎输出，当前覆盖 `CrashLoopBackOff`、`OOMKilled`、`ImagePullBackOff`、`Pending`、Service 无可用 Endpoint、Ingress backend 无可用 Endpoint。每条规则包含 `id`、`severity`、`category`、`description`、`suggestion` 和 `evidenceKeys`，其中 `evidenceKeys` 用于指向触发规则的 Pod / Event / Service / Endpoint / Ingress 摘要字段。
