@@ -21,6 +21,7 @@ import (
 	"aiops-platform/backend/internal/database"
 	datasourcesvc "aiops-platform/backend/internal/datasource"
 	documentsvc "aiops-platform/backend/internal/document"
+	evidencesvc "aiops-platform/backend/internal/evidence"
 	"aiops-platform/backend/internal/handler"
 	k8ssvc "aiops-platform/backend/internal/k8s"
 	llmsvc "aiops-platform/backend/internal/llm"
@@ -82,6 +83,7 @@ func run() error {
 	dataSourceRepository := repository.NewDataSourceRepository(databaseConnection.GORM)
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
+	evidenceRepository := repository.NewEvidenceRepository(databaseConnection.GORM)
 	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
 	agentRunRepository := repository.NewAgentRunRepository(databaseConnection.GORM)
 	workflowRepository := repository.NewWorkflowRepository(databaseConnection.GORM)
@@ -110,6 +112,7 @@ func run() error {
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
+	evidenceService := evidencesvc.NewService(evidenceRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
@@ -153,6 +156,7 @@ func run() error {
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
+	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
@@ -174,6 +178,7 @@ func run() error {
 			DataSourceHandler:   dataSourceHandler,
 			AnalysisHandler:     analysisHandler,
 			EventHandler:        eventHandler,
+			EvidenceHandler:     evidenceHandler,
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
 			AgentHandler:        agentHandler,

@@ -17,6 +17,7 @@ type RouterDependencies struct {
 	DataSourceHandler   *DataSourceHandler
 	AnalysisHandler     *AnalysisHandler
 	EventHandler        *EventHandler
+	EvidenceHandler     *EvidenceHandler
 	ToolHandler         *ToolHandler
 	SkillHandler        *SkillHandler
 	AgentHandler        *AgentHandler
@@ -49,6 +50,14 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 			protectedEventRoutes.GET("", dependencies.EventHandler.List)
 			protectedEventRoutes.GET("/:id", dependencies.EventHandler.Get)
 		}
+	}
+	if dependencies.EvidenceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		evidenceRoutes := router.Group("/api/evidence")
+		evidenceRoutes.Use(dependencies.Authenticate)
+		evidenceRoutes.GET("", dependencies.EvidenceHandler.List)
+		evidenceRoutes.GET("/:idOrKey", dependencies.EvidenceHandler.Get)
+		evidenceRoutes.POST("", dependencies.RequireAdmin, dependencies.EvidenceHandler.Create)
+		evidenceRoutes.POST("/validate", dependencies.RequireAdmin, dependencies.EvidenceHandler.Validate)
 	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")

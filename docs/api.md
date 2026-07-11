@@ -646,6 +646,51 @@ GET  /api/events/{id}
 
 列表查询支持 `limit`、`sourceType`、`status`、`environment`、`systemName`、`componentName`、`namespace`、`resourceName`、`from`、`to`。
 
+## Evidence Center
+
+Evidence Center 用于沉淀 Agent、Skill 和人工分析可引用的证据。Evidence 使用全局唯一 `evidenceKey` 作为引用键，保留来源引用 `sourceRef`、正文 `content` 和敏感级别 `sensitivity`。
+
+```http
+GET  /api/evidence
+GET  /api/evidence/{idOrKey}
+POST /api/evidence
+POST /api/evidence/validate
+```
+
+全部接口要求登录；创建和引用验证要求管理员。创建时可显式传入 `evidenceKey`，未传时平台会基于 `sourceType + sourceRef + summary` 生成稳定 key。
+
+```json
+{
+  "sourceType": "log_anomaly",
+  "sourceRef": {
+    "dataSourceId": 1,
+    "index": "app-logs",
+    "query": "error AND service:payment-api"
+  },
+  "observedAt": "2026-07-12T10:15:00+08:00",
+  "title": "payment api error spike",
+  "summary": "payment api error logs spiked after deploy",
+  "content": {
+    "errorCount": 42,
+    "sample": "timeout waiting for upstream"
+  },
+  "confidence": 0.92,
+  "sensitivity": "internal"
+}
+```
+
+`sensitivity` 支持：`public`、`internal`、`confidential`、`restricted`，默认 `internal`。列表查询支持 `limit`、`sourceType`、`sensitivity`、`from`、`to`。
+
+引用验证用于在 Agent/Workflow 入库前检查 Evidence 是否存在：
+
+```json
+{
+  "keys": ["ev_existing_key"]
+}
+```
+
+若任一 key 不存在，接口返回失败；Agent Runtime 自身也会拒绝“事实引用了不存在 Evidence”的结果。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。
