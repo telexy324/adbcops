@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	analysissvc "aiops-platform/backend/internal/analysis"
 	"aiops-platform/backend/internal/auth"
 	"aiops-platform/backend/internal/config"
 	conversationsvc "aiops-platform/backend/internal/conversation"
@@ -72,6 +73,7 @@ func run() error {
 	llmRepository := repository.NewLLMRepository(databaseConnection.GORM)
 	ragRepository := repository.NewRAGRepository(databaseConnection.GORM)
 	dataSourceRepository := repository.NewDataSourceRepository(databaseConnection.GORM)
+	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	credentialManager, err := credential.NewManager(cfg.Credential.MasterKey, cfg.Credential.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("initialize credential manager: %w", err)
@@ -94,6 +96,7 @@ func run() error {
 	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
 	logsService := logssvc.NewService(dataSourceRepository, credentialManager, nil)
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
+	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
@@ -116,7 +119,7 @@ func run() error {
 	documentHandler := handler.NewDocumentHandler(documentService, cfg.FileStorage.MaxUploadBytes)
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
-	analysisHandler := handler.NewAnalysisHandler(logsService)
+	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 
 	server := &http.Server{

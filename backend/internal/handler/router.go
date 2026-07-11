@@ -107,6 +107,9 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		analysisRoutes.Use(dependencies.Authenticate)
 		analysisRoutes.POST("/logs", dependencies.AnalysisHandler.QueryLogs)
 		analysisRoutes.POST("/logs/preprocess", dependencies.AnalysisHandler.PreprocessLogs)
+		analysisRoutes.POST("/general", dependencies.AnalysisHandler.RunGeneral)
+		analysisRoutes.GET("/tasks", dependencies.AnalysisHandler.ListTasks)
+		analysisRoutes.GET("/tasks/:id", dependencies.AnalysisHandler.GetTask)
 		if dependencies.SFTPHandler != nil {
 			analysisRoutes.POST("/sftp/read", dependencies.SFTPHandler.ReadFile)
 		}

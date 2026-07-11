@@ -412,6 +412,35 @@ Content-Type: application/json
 
 预处理按顺序执行字段/时间标准化、敏感信息脱敏、去重、模板聚类、错误计数、时间桶统计和堆栈截断。脱敏覆盖手机号、身份证、银行卡号、token、password 等；结果返回 `items`、`clusters`、`timeStats`、`errorCount` 和 `redactionCount`。
 
+### 日志分析 MVP
+
+```http
+POST /api/analysis/general
+Content-Type: application/json
+
+{
+  "conversationId": 12,
+  "question": "支付接口 9 点后超时增多，可能是什么原因？",
+  "scope": {
+    "environment": "prod",
+    "systemName": "支付系统",
+    "componentName": "payment-api",
+    "timeStart": "2026-07-11T09:00:00+08:00",
+    "timeEnd": "2026-07-11T10:00:00+08:00"
+  },
+  "dataSourceIds": [1]
+}
+```
+
+接口会查询日志、执行预处理、检索已发布知识库并生成分析报告，同时保存 `analysis_task`。结果包含 `facts`、`evidence`、`citations`、`rootCauseCandidates`、`missingEvidence` 和 `confidence`；事实来自日志统计，根因候选会以“推测”标注。若配置了默认启用 LLM，会优先使用 LLM 生成摘要；否则返回确定性的本地报告。
+
+```http
+GET /api/analysis/tasks
+GET /api/analysis/tasks/{id}
+```
+
+普通用户只能查看自己的分析任务，管理员可查看全部。
+
 ### SFTP 文件读取
 
 SFTP 工具要求 `ssh` 类型数据源，且只提供只读文件读取，不提供 Shell 执行能力。数据源 `config` 示例：
