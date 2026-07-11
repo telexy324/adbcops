@@ -3,10 +3,12 @@ package model
 import "time"
 
 const (
-	DocumentStatusDraft     = "draft"
-	DocumentStatusReviewing = "reviewing"
-	DocumentStatusRejected  = "rejected"
-	DocumentStatusPublished = "published"
+	DocumentStatusDraft      = "draft"
+	DocumentStatusReviewing  = "reviewing"
+	DocumentStatusRejected   = "rejected"
+	DocumentStatusPublished  = "published"
+	DocumentStatusArchived   = "archived"
+	DocumentStatusDeprecated = "deprecated"
 
 	DocumentFileTypeMarkdown = "md"
 	DocumentFileTypeText     = "txt"
@@ -37,6 +39,14 @@ type KBDocument struct {
 	ReviewedAt    *time.Time `gorm:"column:reviewed_at" json:"reviewedAt,omitempty"`
 }
 
+const (
+	DocumentReviewActionPublish   = "publish"
+	DocumentReviewActionReject    = "reject"
+	DocumentReviewActionArchive   = "archive"
+	DocumentReviewActionDeprecate = "deprecate"
+	DocumentReviewActionQuality   = "quality"
+)
+
 func (KBDocument) TableName() string {
 	return "kb_document"
 }
@@ -59,4 +69,19 @@ type KBChunk struct {
 
 func (KBChunk) TableName() string {
 	return "kb_chunk"
+}
+
+type KBDocumentReview struct {
+	ID         int64     `gorm:"column:id;primaryKey" json:"id"`
+	DocumentID int64     `gorm:"column:document_id;not null" json:"documentId"`
+	ReviewerID int64     `gorm:"column:reviewer_id;not null" json:"reviewerId"`
+	Action     string    `gorm:"column:action;size:50;not null" json:"action"`
+	FromStatus string    `gorm:"column:from_status;size:50;not null" json:"fromStatus"`
+	ToStatus   string    `gorm:"column:to_status;size:50;not null" json:"toStatus"`
+	Comment    *string   `gorm:"column:comment" json:"comment,omitempty"`
+	CreatedAt  time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+}
+
+func (KBDocumentReview) TableName() string {
+	return "kb_document_review"
 }

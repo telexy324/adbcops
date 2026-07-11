@@ -17,6 +17,7 @@ type DocumentRepository interface {
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
+	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 }
 
@@ -90,6 +91,49 @@ func (r *GORMUserRepository) UpdateDocumentQuality(ctx context.Context, id int64
 	return r.FindDocumentByID(ctx, id)
 }
 
+func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error) {
+	var updated model.KBDocument
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var document model.KBDocument
+		if err := tx.First(&document, id).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		review := &model.KBDocumentReview{
+			DocumentID: id,
+			ReviewerID: reviewerID,
+			Action:     action,
+			FromStatus: document.Status,
+			ToStatus:   toStatus,
+			Comment:    comment,
+		}
+		now := time.Now().UTC()
+		updates := map[string]any{
+			"status":      toStatus,
+			"reviewed_by": reviewerID,
+			"reviewed_at": now,
+			"updated_at":  now,
+		}
+		result := tx.Model(&model.KBDocument{}).Where("id = ?", id).Updates(updates)
+		if result.Error != nil {
+			return fmt.Errorf("update document review status: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return ErrNotFound
+		}
+		if err := tx.Create(review).Error; err != nil {
+			return fmt.Errorf("create document review: %w", err)
+		}
+		if err := tx.First(&updated, id).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error) {
 	var chunks []model.KBChunk
 	if limit <= 0 {
@@ -97,8 +141,10 @@ func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, lim
 	}
 	pattern := "%" + query + "%"
 	if err := r.db.WithContext(ctx).
-		Where("search_text ILIKE ? OR content ILIKE ?", pattern, pattern).
-		Order(clause.OrderBy{Expression: clause.Expr{SQL: "similarity(coalesce(search_text, ''), ?) DESC, chunk_index ASC", Vars: []any{query}}}).
+		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
+		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("kb_chunk.search_text ILIKE ? OR kb_chunk.content ILIKE ?", pattern, pattern).
+		Order(clause.OrderBy{Expression: clause.Expr{SQL: "similarity(coalesce(kb_chunk.search_text, ''), ?) DESC, kb_chunk.chunk_index ASC", Vars: []any{query}}}).
 		Limit(limit).
 		Find(&chunks).Error; err != nil {
 		return nil, fmt.Errorf("search kb chunks: %w", err)

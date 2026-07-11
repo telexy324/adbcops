@@ -76,7 +76,9 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		documentRoutes.GET("", dependencies.DocumentHandler.List)
 		documentRoutes.GET("/:id", dependencies.DocumentHandler.Get)
 		documentRoutes.GET("/:id/chunks", dependencies.DocumentHandler.Chunks)
-		documentRoutes.POST("/:id/review", dependencies.DocumentHandler.Review)
+		if dependencies.RequireAdmin != nil {
+			documentRoutes.POST("/:id/review", dependencies.RequireAdmin, dependencies.DocumentHandler.Review)
+		}
 		documentRoutes.POST("/:id/reprocess", dependencies.DocumentHandler.Reprocess)
 
 		knowledgeRoutes := router.Group("/api/knowledge")

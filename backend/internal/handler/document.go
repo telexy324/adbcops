@@ -53,7 +53,9 @@ type chunkResponse struct {
 }
 
 type reviewDocumentRequest struct {
-	Result json.RawMessage `json:"result" binding:"required"`
+	Result  json.RawMessage `json:"result"`
+	Action  string          `json:"action"`
+	Comment string          `json:"comment"`
 }
 
 type knowledgeSearchRequest struct {
@@ -162,6 +164,25 @@ func (h *DocumentHandler) Review(c *gin.Context) {
 		failure(c, http.StatusBadRequest, 40001, "invalid JSON request")
 		return
 	}
+	if request.Action != "" {
+		document, err := h.service.ReviewDecision(c.Request.Context(), actor, documentID, documentsvc.ReviewDecision{
+			Action:  request.Action,
+			Comment: request.Comment,
+		})
+		if handleDocumentError(c, err, "review document failed") {
+			return
+		}
+		success(c, gin.H{
+			"document":   toDocumentResponse(document),
+			"action":     request.Action,
+			"canPublish": documentsvc.CanPublish(document),
+		})
+		return
+	}
+	if len(request.Result) == 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
 	document, result, err := h.service.ReviewQuality(c.Request.Context(), actor, documentID, request.Result)
 	if handleDocumentError(c, err, "review document failed") {
 		return
@@ -222,6 +243,12 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, documentsvc.ErrInvalidQualityJSON):
 		failure(c, http.StatusBadRequest, 40005, err.Error())
+	case errors.Is(err, documentsvc.ErrInvalidReviewAction):
+		failure(c, http.StatusBadRequest, 40006, "invalid review action")
+	case errors.Is(err, documentsvc.ErrCannotPublish):
+		failure(c, http.StatusConflict, 40901, "document cannot be published")
+	case errors.Is(err, documentsvc.ErrAdminRequired):
+		failure(c, http.StatusForbidden, 40304, "admin role required")
 	case errors.Is(err, documentsvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40303, "document access forbidden")
 	case errors.Is(err, repository.ErrNotFound):

@@ -86,6 +86,13 @@ func TestReprocessTypicalMarkdownCreatesContinuousNonEmptyChunks(t *testing.T) {
 		t.Fatalf("first source section = %v", chunks[0].SourceSection)
 	}
 
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	if _, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`)); err != nil {
+		t.Fatalf("ReviewQuality() error = %v", err)
+	}
+	if _, err := service.ReviewDecision(context.Background(), admin, document.ID, ReviewDecision{Action: model.DocumentReviewActionPublish}); err != nil {
+		t.Fatalf("ReviewDecision(publish) error = %v", err)
+	}
 	results, err := service.Search(context.Background(), actor, "数据库连接池", 5)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
@@ -131,13 +138,18 @@ func TestReviewQualityRejectsInvalidJSONWithClearError(t *testing.T) {
 func TestReviewQualitySetsStatusByScore(t *testing.T) {
 	store := newFakeRepository()
 	service := newTestService(t, store, t.TempDir(), 1024)
-	actor := &model.AppUser{ID: 7, Role: model.RoleUser}
-	document, err := service.Upload(context.Background(), actor, newFileHeader(t, "guide.md", "# hello"), UploadMetadata{Title: "Guide"})
+	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	document, err := service.Upload(context.Background(), owner, newFileHeader(t, "guide.md", "# hello"), UploadMetadata{Title: "Guide"})
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
 
-	low, _, err := service.ReviewQuality(context.Background(), actor, document.ID, json.RawMessage(`{"score":69,"summary":"thin","findings":["missing owner"],"suggestions":["add owner"]}`))
+	if _, _, err := service.ReviewQuality(context.Background(), owner, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`)); !errors.Is(err, ErrAdminRequired) {
+		t.Fatalf("ReviewQuality(non-admin) error = %v, want ErrAdminRequired", err)
+	}
+
+	low, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":69,"summary":"thin","findings":["missing owner"],"suggestions":["add owner"]}`))
 	if err != nil {
 		t.Fatalf("ReviewQuality(low) error = %v", err)
 	}
@@ -145,12 +157,87 @@ func TestReviewQualitySetsStatusByScore(t *testing.T) {
 		t.Fatalf("low-quality document = %+v, canPublish=%v", low, CanPublish(low))
 	}
 
-	high, _, err := service.ReviewQuality(context.Background(), actor, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`))
+	high, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`))
 	if err != nil {
 		t.Fatalf("ReviewQuality(high) error = %v", err)
 	}
 	if high.Status != model.DocumentStatusReviewing || high.QualityScore != 70 || !CanPublish(high) {
 		t.Fatalf("high-quality document = %+v, canPublish=%v", high, CanPublish(high))
+	}
+}
+
+func TestReviewDecisionRequiresAdminAndPublishableDocument(t *testing.T) {
+	store := newFakeRepository()
+	service := newTestService(t, store, t.TempDir(), 1024)
+	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	document, err := service.Upload(context.Background(), owner, newFileHeader(t, "guide.md", "# hello"), UploadMetadata{Title: "Guide"})
+	if err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	if _, err := service.ReviewDecision(context.Background(), owner, document.ID, ReviewDecision{Action: model.DocumentReviewActionPublish}); !errors.Is(err, ErrAdminRequired) {
+		t.Fatalf("ReviewDecision(non-admin) error = %v, want ErrAdminRequired", err)
+	}
+	if _, err := service.ReviewDecision(context.Background(), admin, document.ID, ReviewDecision{Action: model.DocumentReviewActionPublish}); !errors.Is(err, ErrCannotPublish) {
+		t.Fatalf("ReviewDecision(draft publish) error = %v, want ErrCannotPublish", err)
+	}
+
+	reviewing, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`))
+	if err != nil {
+		t.Fatalf("ReviewQuality() error = %v", err)
+	}
+	if !CanPublish(reviewing) {
+		t.Fatalf("reviewing document should be publishable: %+v", reviewing)
+	}
+	published, err := service.ReviewDecision(context.Background(), admin, document.ID, ReviewDecision{Action: model.DocumentReviewActionPublish, Comment: " approved "})
+	if err != nil {
+		t.Fatalf("ReviewDecision(publish) error = %v", err)
+	}
+	if published.Status != model.DocumentStatusPublished || published.ReviewedBy == nil || *published.ReviewedBy != admin.ID {
+		t.Fatalf("published document = %+v", published)
+	}
+	if len(store.reviews) != 1 || store.reviews[0].Action != model.DocumentReviewActionPublish || store.reviews[0].ToStatus != model.DocumentStatusPublished {
+		t.Fatalf("review records = %+v", store.reviews)
+	}
+}
+
+func TestSearchOnlyReturnsPublishedDocumentChunks(t *testing.T) {
+	store := newFakeRepository()
+	service := newTestServiceWithChunk(t, store, t.TempDir(), 1024, 50, 5)
+	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	draft, err := service.Upload(context.Background(), owner, newFileHeader(t, "draft.md", "数据库连接池 draft"), UploadMetadata{Title: "Draft"})
+	if err != nil {
+		t.Fatalf("Upload(draft) error = %v", err)
+	}
+	if _, err := service.Reprocess(context.Background(), owner, draft.ID); err != nil {
+		t.Fatalf("Reprocess(draft) error = %v", err)
+	}
+	published, err := service.Upload(context.Background(), owner, newFileHeader(t, "published.md", "数据库连接池 published"), UploadMetadata{Title: "Published"})
+	if err != nil {
+		t.Fatalf("Upload(published) error = %v", err)
+	}
+	if _, err := service.Reprocess(context.Background(), owner, published.ID); err != nil {
+		t.Fatalf("Reprocess(published) error = %v", err)
+	}
+	if _, _, err := service.ReviewQuality(context.Background(), admin, published.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`)); err != nil {
+		t.Fatalf("ReviewQuality() error = %v", err)
+	}
+	if _, err := service.ReviewDecision(context.Background(), admin, published.ID, ReviewDecision{Action: model.DocumentReviewActionPublish}); err != nil {
+		t.Fatalf("ReviewDecision(publish) error = %v", err)
+	}
+
+	results, err := service.Search(context.Background(), owner, "数据库连接池", 10)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Search() returned no published chunks")
+	}
+	for _, result := range results {
+		if result.DocumentID != published.ID {
+			t.Fatalf("Search() returned unpublished chunk: %+v", result)
+		}
 	}
 }
 
@@ -199,6 +286,7 @@ type fakeRepository struct {
 	nextChunkID int64
 	documents   map[int64]*model.KBDocument
 	chunks      map[int64][]model.KBChunk
+	reviews     []model.KBDocumentReview
 }
 
 func newFakeRepository() *fakeRepository {
@@ -259,9 +347,32 @@ func (f *fakeRepository) UpdateDocumentQuality(_ context.Context, id int64, scor
 	return document, nil
 }
 
+func (f *fakeRepository) RecordDocumentReview(_ context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error) {
+	document, ok := f.documents[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	f.reviews = append(f.reviews, model.KBDocumentReview{
+		ID:         int64(len(f.reviews) + 1),
+		DocumentID: id,
+		ReviewerID: reviewerID,
+		Action:     action,
+		FromStatus: document.Status,
+		ToStatus:   toStatus,
+		Comment:    comment,
+	})
+	document.Status = toStatus
+	document.ReviewedBy = &reviewerID
+	return document, nil
+}
+
 func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int) ([]model.KBChunk, error) {
 	var results []model.KBChunk
-	for _, chunks := range f.chunks {
+	for documentID, chunks := range f.chunks {
+		document, ok := f.documents[documentID]
+		if !ok || document.Status != model.DocumentStatusPublished {
+			continue
+		}
 		for _, chunk := range chunks {
 			searchText := ""
 			if chunk.SearchText != nil {

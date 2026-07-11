@@ -27,12 +27,15 @@ const (
 )
 
 var (
-	ErrForbidden      = errors.New("document access forbidden")
-	ErrInvalidInput   = errors.New("invalid input")
-	ErrInvalidFile    = errors.New("invalid file")
-	ErrFileTooLarge   = errors.New("file too large")
-	ErrPathTraversal  = errors.New("file path traversal is not allowed")
-	ErrUnsupportedExt = errors.New("unsupported file type")
+	ErrForbidden           = errors.New("document access forbidden")
+	ErrAdminRequired       = errors.New("admin role required")
+	ErrInvalidInput        = errors.New("invalid input")
+	ErrInvalidFile         = errors.New("invalid file")
+	ErrFileTooLarge        = errors.New("file too large")
+	ErrPathTraversal       = errors.New("file path traversal is not allowed")
+	ErrUnsupportedExt      = errors.New("unsupported file type")
+	ErrInvalidReviewAction = errors.New("invalid review action")
+	ErrCannotPublish       = errors.New("document cannot be published")
 )
 
 type Repository interface {
@@ -42,6 +45,7 @@ type Repository interface {
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
+	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 }
 
@@ -61,6 +65,11 @@ type UploadMetadata struct {
 	DocType       string
 	Version       string
 	Tags          json.RawMessage
+}
+
+type ReviewDecision struct {
+	Action  string
+	Comment string
 }
 
 func NewService(documents Repository, localFileDir string, maxUploadBytes int64, chunkSize, chunkOverlap int) (*Service, error) {
@@ -216,7 +225,13 @@ func (s *Service) ListChunks(ctx context.Context, actor *model.AppUser, id int64
 }
 
 func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id int64, rawResult json.RawMessage) (*model.KBDocument, QualityResult, error) {
-	document, err := s.Get(ctx, actor, id)
+	if actor == nil || id <= 0 {
+		return nil, QualityResult{}, ErrInvalidInput
+	}
+	if actor.Role != model.RoleAdmin {
+		return nil, QualityResult{}, ErrAdminRequired
+	}
+	document, err := s.documents.FindDocumentByID(ctx, id)
 	if err != nil {
 		return nil, QualityResult{}, err
 	}
@@ -232,6 +247,29 @@ func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id in
 	return updated, result, nil
 }
 
+func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id int64, input ReviewDecision) (*model.KBDocument, error) {
+	if actor == nil || id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	if actor.Role != model.RoleAdmin {
+		return nil, ErrAdminRequired
+	}
+	document, err := s.documents.FindDocumentByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(strings.TrimSpace(input.Action))
+	toStatus, err := reviewActionTargetStatus(action)
+	if err != nil {
+		return nil, err
+	}
+	if action == model.DocumentReviewActionPublish && !CanPublish(document) {
+		return nil, ErrCannotPublish
+	}
+	comment := optionalReviewComment(input.Comment)
+	return s.documents.RecordDocumentReview(ctx, document.ID, actor.ID, action, toStatus, comment)
+}
+
 func (s *Service) Search(ctx context.Context, actor *model.AppUser, query string, limit int) ([]model.KBChunk, error) {
 	if actor == nil {
 		return nil, ErrForbidden
@@ -244,6 +282,29 @@ func (s *Service) Search(ctx context.Context, actor *model.AppUser, query string
 		limit = 10
 	}
 	return s.documents.SearchChunks(ctx, query, limit)
+}
+
+func reviewActionTargetStatus(action string) (string, error) {
+	switch action {
+	case model.DocumentReviewActionPublish:
+		return model.DocumentStatusPublished, nil
+	case model.DocumentReviewActionReject:
+		return model.DocumentStatusRejected, nil
+	case model.DocumentReviewActionArchive:
+		return model.DocumentStatusArchived, nil
+	case model.DocumentReviewActionDeprecate:
+		return model.DocumentStatusDeprecated, nil
+	default:
+		return "", ErrInvalidReviewAction
+	}
+}
+
+func optionalReviewComment(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func normalizeFileName(name string) (string, error) {
