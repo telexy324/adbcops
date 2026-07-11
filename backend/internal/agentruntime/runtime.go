@@ -28,6 +28,7 @@ var (
 	ErrStepLimitExceeded  = errors.New("agent step limit exceeded")
 	ErrSkillLimitExceeded = errors.New("agent skill call limit exceeded")
 	ErrContextTooLarge    = errors.New("agent context too large")
+	ErrEvidenceRefMissing = errors.New("agent evidence reference missing")
 )
 
 type AgentDefinition struct {
@@ -151,7 +152,13 @@ func NewRuntime(skills *skillframework.Registry, audit AuditRepository, limits L
 }
 
 func BuiltinAgents() []Agent {
-	return []Agent{EchoAgent{}}
+	return []Agent{
+		EchoAgent{},
+		KnowledgeAgent{},
+		LogAgent{},
+		MetricsAgent{},
+		KubernetesAgent{},
+	}
 }
 
 func (r *Runtime) Register(agent Agent) error {
@@ -224,6 +231,9 @@ func (r *Runtime) Run(ctx context.Context, input RunInput) (*RunOutput, error) {
 	executeCtx, cancel := context.WithTimeout(ctx, r.limits.Timeout)
 	defer cancel()
 	result, runErr := entry.agent.Analyze(executeCtx, input.Context, runCtx)
+	if runErr == nil {
+		runErr = validateAgentResult(input.Context, result)
+	}
 	finishedAt := r.now()
 	status := model.AgentRunStatusSuccess
 	var errorMessage *string
@@ -319,6 +329,35 @@ func validateContextSize(input AgentContext, maxBytes int) error {
 	}
 	if len(raw) > maxBytes {
 		return ErrContextTooLarge
+	}
+	return nil
+}
+
+func validateAgentResult(input AgentContext, result *AgentResult) error {
+	if result == nil {
+		return ErrInvalidInput
+	}
+	knownRefs := map[string]struct{}{}
+	for _, evidence := range input.Evidence {
+		key := strings.TrimSpace(evidence.Key)
+		if key != "" {
+			knownRefs[key] = struct{}{}
+		}
+	}
+	for _, ref := range result.EvidenceRefs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return ErrEvidenceRefMissing
+		}
+		knownRefs[ref] = struct{}{}
+	}
+	for _, fact := range result.Facts {
+		if fact.EvidenceKey == "" {
+			continue
+		}
+		if _, ok := knownRefs[fact.EvidenceKey]; !ok {
+			return fmt.Errorf("%w: %s", ErrEvidenceRefMissing, fact.EvidenceKey)
+		}
 	}
 	return nil
 }

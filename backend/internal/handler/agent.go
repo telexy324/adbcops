@@ -91,6 +91,8 @@ func handleAgentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusConflict, 40901, "agent step limit exceeded")
 	case errors.Is(err, agentruntime.ErrSkillLimitExceeded):
 		failure(c, http.StatusConflict, 40902, "agent skill call limit exceeded")
+	case errors.Is(err, agentruntime.ErrEvidenceRefMissing):
+		failure(c, http.StatusBadRequest, 40002, "agent evidence reference missing")
 	default:
 		failure(c, http.StatusInternalServerError, 50095, fallback)
 	}

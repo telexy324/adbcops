@@ -706,4 +706,12 @@ GET  /api/agent-runs/{id}
 - 超时：180 秒；
 - 最大上下文：1 MiB。
 
-若 Agent 出现循环或过度调用 Skill，Runtime 会返回结构化错误并终止执行。当前内置 `echo_agent` 用于运行时冒烟测试。
+若 Agent 出现循环、过度调用 Skill 或返回不存在的 Evidence 引用，Runtime 会返回结构化错误并终止执行。当前内置 Agent：
+
+- `echo_agent`：运行时冒烟测试；
+- `knowledge_agent`：调用 `search_knowledge` 产出知识库事实和引用；
+- `log_agent`：调用 `query_logs` 产出日志事实和引用；
+- `metrics_agent`：调用 `query_metrics` 产出指标事实和引用；
+- `kubernetes_agent`：调用 `get_pod_context` 与 `run_k8s_diagnostic_rules` 产出 K8s 事实和引用。
+
+Specialist Agent 缺少必要 scope 时不会直接访问生产数据源，而是返回低置信度 Hypothesis 提示需要补充参数。
