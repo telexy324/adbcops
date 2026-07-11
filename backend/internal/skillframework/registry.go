@@ -186,6 +186,7 @@ func (r *Registry) Execute(ctx context.Context, input ExecuteInput) (*ExecuteRes
 	}
 	executeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	executeCtx = ContextWithActor(executeCtx, input.Actor)
 	output, executeErr := entry.skill.Execute(executeCtx, input.Payload)
 	finishedAt := r.now()
 	status := model.SkillRunStatusSuccess

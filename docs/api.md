@@ -669,3 +669,13 @@ Content-Type: application/json
   }
 }
 ```
+
+当前已注册内置 Skill：
+
+- `echo_safe`：框架冒烟 Skill；
+- `search_knowledge`：检索已发布知识 chunk，返回引用片段；
+- `query_logs`：通过日志 Tool 查询 Elasticsearch/OpenSearch；
+- `aggregate_log_templates`：对日志进行脱敏、模板聚类和时间桶统计；
+- `extract_log_entities`：从日志中抽取 host、namespace、pod、container、traceId、requestId、errorCode 等实体。
+
+其中 `query_logs`、`aggregate_log_templates`、`extract_log_entities` 风险等级为 `sensitive_read`，直接执行要求管理员；普通用户仍通过专用分析 API 或后续 Workflow 间接使用。
