@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"aiops-platform/backend/internal/agentruntime"
 	alertsvc "aiops-platform/backend/internal/alert"
 	analysissvc "aiops-platform/backend/internal/analysis"
 	"aiops-platform/backend/internal/auth"
@@ -81,6 +82,7 @@ func run() error {
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
+	agentRunRepository := repository.NewAgentRunRepository(databaseConnection.GORM)
 	credentialManager, err := credential.NewManager(cfg.Credential.MasterKey, cfg.Credential.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("initialize credential manager: %w", err)
@@ -113,6 +115,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize skill registry: %w", err)
 	}
+	agentRuntime, err := agentruntime.NewRuntime(skillRegistry, agentRunRepository, agentruntime.Limits{}, agentruntime.BuiltinAgents()...)
+	if err != nil {
+		return fmt.Errorf("initialize agent runtime: %w", err)
+	}
 	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
@@ -140,6 +146,7 @@ func run() error {
 	eventHandler := handler.NewEventHandler(alertService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
+	agentHandler := handler.NewAgentHandler(agentRuntime)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 	k8sHandler := handler.NewK8sHandler(k8sService)
 	metricsHandler := handler.NewMetricsHandler(metricsService)
@@ -158,6 +165,7 @@ func run() error {
 			EventHandler:        eventHandler,
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
+			AgentHandler:        agentHandler,
 			SFTPHandler:         sftpHandler,
 			K8sHandler:          k8sHandler,
 			MetricsHandler:      metricsHandler,

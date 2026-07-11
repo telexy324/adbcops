@@ -684,3 +684,26 @@ Content-Type: application/json
 - `compare_metric_baseline`：对比当前窗口与 baseline 窗口的指标均值。
 
 其中日志、K8s 和指标类 Skill 风险等级为 `sensitive_read`，直接执行要求管理员；普通用户仍通过专用分析 API 或后续 Workflow 间接使用。Tool 调用失败时，Skill 会返回结构化 `{ "partial": true, "error": {...} }`，便于 Workflow 继续汇总部分结果。
+
+## Agent Runtime
+
+Agent Runtime 是后续自动诊断 Agent 的执行边界。Agent 只接收受限 `RunContext`，可记录 step、调用 Skill，但不能直接访问 Tool Registry；所有底层能力仍必须经过 Skill Framework 的 Schema、风险等级、Tool 启停和审计校验。
+
+```http
+GET  /api/agents
+GET  /api/agents/{name}
+POST /api/agents/{name}/test
+GET  /api/agent-runs
+GET  /api/agent-runs/{id}
+```
+
+`GET /api/agents` 与 `GET /api/agents/{name}` 要求登录；`test` 和 `agent-runs` 要求管理员。每次执行会写入 `agent_run` 审计记录，包含 Agent 名称、输入摘要、输出、状态、错误信息和起止时间。
+
+默认运行限制：
+
+- 最大 step：12；
+- 最大 Skill 调用：20；
+- 超时：180 秒；
+- 最大上下文：1 MiB。
+
+若 Agent 出现循环或过度调用 Skill，Runtime 会返回结构化错误并终止执行。当前内置 `echo_agent` 用于运行时冒烟测试。
