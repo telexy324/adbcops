@@ -514,3 +514,22 @@ Content-Type: application/json
 ```
 
 当前支持 `pods`、`services`、`events`、`deployments` 和 `namespaces`。返回条目包含 `kind`、`namespace`、`name`、`status` 和原始 Kubernetes 对象 `raw`。
+
+#### Pod 诊断采集
+
+```http
+POST /api/analysis/k8s/pod-diagnose
+Content-Type: application/json
+
+{
+  "dataSourceId": 1,
+  "namespace": "prod",
+  "podName": "payment-api-0",
+  "includeNode": true,
+  "includePreviousLogs": true,
+  "logTailLines": 200,
+  "logMaxBytes": 65536
+}
+```
+
+接口会采集 Pod 摘要、OwnerReference、相关 Events、current/previous container logs、匹配该 Pod labels 的 Service/Endpoint，并可选采集所在 Node 的条件摘要。`logTailLines` 最大 2000，默认 200；`logMaxBytes` 最大 1MiB，默认 64KiB。诊断结果不读取、不返回 Kubernetes Secret 对象，也不返回 Pod 原始 Spec 中的 Secret 引用明细。

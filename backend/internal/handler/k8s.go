@@ -29,6 +29,16 @@ type k8sResourceRequest struct {
 	Limit        int    `json:"limit"`
 }
 
+type k8sPodDiagnosisRequest struct {
+	DataSourceID        int64  `json:"dataSourceId" binding:"required"`
+	Namespace           string `json:"namespace" binding:"required"`
+	PodName             string `json:"podName" binding:"required"`
+	IncludeNode         bool   `json:"includeNode"`
+	LogTailLines        int    `json:"logTailLines"`
+	LogMaxBytes         int    `json:"logMaxBytes"`
+	IncludePreviousLogs bool   `json:"includePreviousLogs"`
+}
+
 func (h *K8sHandler) Test(c *gin.Context) {
 	actor, ok := currentUser(c)
 	if !ok {
@@ -64,6 +74,31 @@ func (h *K8sHandler) Resources(c *gin.Context) {
 		Limit:        request.Limit,
 	})
 	if handleK8sError(c, err, "read kubernetes resources failed") {
+		return
+	}
+	success(c, result)
+}
+
+func (h *K8sHandler) DiagnosePod(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request k8sPodDiagnosisRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.DiagnosePod(c.Request.Context(), actor, k8ssvc.PodDiagnosisInput{
+		DataSourceID:        request.DataSourceID,
+		Namespace:           request.Namespace,
+		PodName:             request.PodName,
+		IncludeNode:         request.IncludeNode,
+		LogTailLines:        request.LogTailLines,
+		LogMaxBytes:         request.LogMaxBytes,
+		IncludePreviousLogs: request.IncludePreviousLogs,
+	})
+	if handleK8sError(c, err, "diagnose kubernetes pod failed") {
 		return
 	}
 	success(c, result)

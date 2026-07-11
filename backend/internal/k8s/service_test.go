@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"aiops-platform/backend/internal/model"
@@ -78,6 +79,109 @@ func TestEmptyAllowedNamespacesRejected(t *testing.T) {
 	}
 }
 
+func TestDiagnosePodCollectsContextWithLimitedLogsAndNoSecret(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-0",
+			Namespace: "prod",
+			Labels:    map[string]string{"app": "api"},
+			OwnerReferences: []metav1.OwnerReference{
+				{Kind: "ReplicaSet", Name: "api-74d9f8", UID: "rs-uid"},
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "node-a",
+			Containers: []corev1.Container{
+				{Name: "app", Image: "repo/api:v1"},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "app", Ready: true, RestartCount: 2, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "db-password", Namespace: "prod"},
+		Data:       map[string][]byte{"password": []byte("top-secret")},
+	}
+	serviceObject := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: corev1.ServiceSpec{
+			Selector:  map[string]string{"app": "api"},
+			ClusterIP: "10.0.0.1",
+			Ports:     []corev1.ServicePort{{Name: "http", Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	endpoint := &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Subsets: []corev1.EndpointSubset{
+			{
+				Addresses: []corev1.EndpointAddress{{IP: "10.1.1.5"}},
+				Ports:     []corev1.EndpointPort{{Name: "http", Port: 8080, Protocol: corev1.ProtocolTCP}},
+			},
+		},
+	}
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-0.1", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:      "Pod",
+			Namespace: "prod",
+			Name:      "api-0",
+		},
+		Type:    corev1.EventTypeWarning,
+		Reason:  "BackOff",
+		Message: "Back-off restarting failed container",
+		Count:   3,
+	}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+	k8sService, client := newTestService(t, pod, secret, serviceObject, endpoint, event, node)
+	k8sService.logReader = testLogReader{content: "line-1\nline-2\nline-3\n"}
+
+	result, err := k8sService.DiagnosePod(context.Background(), testActor(), PodDiagnosisInput{
+		DataSourceID:        1,
+		Namespace:           "prod",
+		PodName:             "api-0",
+		IncludeNode:         true,
+		LogTailLines:        2,
+		LogMaxBytes:         14,
+		IncludePreviousLogs: true,
+	})
+	if err != nil {
+		t.Fatalf("diagnose pod: %v", err)
+	}
+	if result.Pod.Name != "api-0" || result.Node == nil || result.Node.Name != "node-a" {
+		t.Fatalf("unexpected pod/node summary: %+v", result)
+	}
+	if len(result.Events) != 1 || result.Events[0].Reason != "BackOff" {
+		t.Fatalf("unexpected events: %+v", result.Events)
+	}
+	if len(result.Services) != 1 || result.Services[0].Name != "api" || len(result.Endpoints) != 1 {
+		t.Fatalf("unexpected service/endpoint: services=%+v endpoints=%+v", result.Services, result.Endpoints)
+	}
+	if len(result.Logs) != 2 {
+		t.Fatalf("expected current and previous logs, got %+v", result.Logs)
+	}
+	for _, log := range result.Logs {
+		if log.Lines > 2 || log.Bytes > 14 || !log.Truncated {
+			t.Fatalf("log limit not enforced: %+v", log)
+		}
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(payload), "top-secret") || strings.Contains(string(payload), "db-password") {
+		t.Fatalf("diagnosis leaked secret data: %s", string(payload))
+	}
+	for _, action := range client.Actions() {
+		if action.GetResource().Resource == "secrets" {
+			t.Fatalf("diagnosis should not read secrets, got action %+v", action)
+		}
+	}
+}
+
 func newTestService(t *testing.T, objects ...runtime.Object) (*Service, *fake.Clientset) {
 	t.Helper()
 	client := fake.NewSimpleClientset(objects...)
@@ -103,6 +207,14 @@ type testClientFactory struct {
 
 func (f testClientFactory) ClientFor(context.Context, *model.DataSource, Config, Credential) (kubernetes.Interface, error) {
 	return f.client, nil
+}
+
+type testLogReader struct {
+	content string
+}
+
+func (r testLogReader) ReadPodLog(context.Context, kubernetes.Interface, string, string, string, bool, int64, int64) (string, error) {
+	return r.content, nil
 }
 
 func testDataSource(t *testing.T, config Config) *model.DataSource {

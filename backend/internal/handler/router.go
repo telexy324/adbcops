@@ -117,6 +117,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		if dependencies.K8sHandler != nil {
 			analysisRoutes.POST("/k8s/test", dependencies.K8sHandler.Test)
 			analysisRoutes.POST("/k8s/resources", dependencies.K8sHandler.Resources)
+			analysisRoutes.POST("/k8s/pod-diagnose", dependencies.K8sHandler.DiagnosePod)
 		}
 	}
 	return router

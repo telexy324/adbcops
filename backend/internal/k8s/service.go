@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,9 @@ import (
 	"aiops-platform/backend/internal/model"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -40,10 +43,15 @@ type ClientFactory interface {
 	ClientFor(ctx context.Context, dataSource *model.DataSource, config Config, credential Credential) (kubernetes.Interface, error)
 }
 
+type PodLogReader interface {
+	ReadPodLog(ctx context.Context, client kubernetes.Interface, namespace, podName, container string, previous bool, tailLines int64, maxBytes int64) (string, error)
+}
+
 type Service struct {
 	repository Repository
 	secrets    SecretManager
 	factory    ClientFactory
+	logReader  PodLogReader
 }
 
 type Config struct {
@@ -88,11 +96,115 @@ type ResourceItem struct {
 	Raw       json.RawMessage `json:"raw"`
 }
 
+type PodDiagnosisInput struct {
+	DataSourceID        int64
+	Namespace           string
+	PodName             string
+	IncludeNode         bool
+	LogTailLines        int
+	LogMaxBytes         int
+	IncludePreviousLogs bool
+}
+
+type PodDiagnosisResult struct {
+	DataSourceID int64                 `json:"dataSourceId"`
+	Namespace    string                `json:"namespace"`
+	Pod          PodSummary            `json:"pod"`
+	Owner        []OwnerSummary        `json:"owner"`
+	Events       []EventSummary        `json:"events"`
+	Logs         []PodLogSummary       `json:"logs"`
+	Services     []ServiceSummary      `json:"services"`
+	Endpoints    []EndpointSummary     `json:"endpoints"`
+	Node         *NodeSummary          `json:"node,omitempty"`
+	Limits       PodDiagnosisLogLimits `json:"limits"`
+}
+
+type PodDiagnosisLogLimits struct {
+	TailLines int `json:"tailLines"`
+	MaxBytes  int `json:"maxBytes"`
+}
+
+type PodSummary struct {
+	Name              string             `json:"name"`
+	Namespace         string             `json:"namespace"`
+	Phase             string             `json:"phase"`
+	NodeName          string             `json:"nodeName,omitempty"`
+	PodIP             string             `json:"podIp,omitempty"`
+	HostIP            string             `json:"hostIp,omitempty"`
+	Labels            map[string]string  `json:"labels,omitempty"`
+	RestartPolicy     string             `json:"restartPolicy,omitempty"`
+	Containers        []ContainerSummary `json:"containers"`
+	InitContainers    []ContainerSummary `json:"initContainers,omitempty"`
+	Conditions        []ConditionSummary `json:"conditions,omitempty"`
+	CreationTimestamp string             `json:"creationTimestamp,omitempty"`
+}
+
+type ContainerSummary struct {
+	Name         string `json:"name"`
+	Image        string `json:"image,omitempty"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restartCount"`
+	State        string `json:"state,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Message      string `json:"message,omitempty"`
+	ExitCode     int32  `json:"exitCode,omitempty"`
+}
+
+type ConditionSummary struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type OwnerSummary struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	UID  string `json:"uid,omitempty"`
+}
+
+type EventSummary struct {
+	Type           string `json:"type,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Message        string `json:"message,omitempty"`
+	Count          int32  `json:"count,omitempty"`
+	FirstTimestamp string `json:"firstTimestamp,omitempty"`
+	LastTimestamp  string `json:"lastTimestamp,omitempty"`
+}
+
+type PodLogSummary struct {
+	Container string `json:"container"`
+	Previous  bool   `json:"previous"`
+	Lines     int    `json:"lines"`
+	Bytes     int    `json:"bytes"`
+	Truncated bool   `json:"truncated"`
+	Content   string `json:"content"`
+}
+
+type ServiceSummary struct {
+	Name      string            `json:"name"`
+	Type      string            `json:"type,omitempty"`
+	Selector  map[string]string `json:"selector,omitempty"`
+	ClusterIP string            `json:"clusterIp,omitempty"`
+	Ports     []string          `json:"ports,omitempty"`
+}
+
+type EndpointSummary struct {
+	Name      string   `json:"name"`
+	Addresses []string `json:"addresses,omitempty"`
+	Ports     []string `json:"ports,omitempty"`
+}
+
+type NodeSummary struct {
+	Name       string             `json:"name"`
+	Conditions []ConditionSummary `json:"conditions,omitempty"`
+}
+
 func NewService(repository Repository, secrets SecretManager, factory ClientFactory) *Service {
 	if factory == nil {
 		factory = realClientFactory{}
 	}
-	return &Service{repository: repository, secrets: secrets, factory: factory}
+	return &Service{repository: repository, secrets: secrets, factory: factory, logReader: clientPodLogReader{}}
 }
 
 func (s *Service) Test(ctx context.Context, actor *model.AppUser, dataSourceID int64) (*TestResult, error) {
@@ -144,6 +256,60 @@ func (s *Service) Resources(ctx context.Context, actor *model.AppUser, input Res
 		return nil, err
 	}
 	return &ResourceResult{DataSourceID: dataSource.ID, Resource: resource, Namespace: namespace, Items: items}, nil
+}
+
+func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input PodDiagnosisInput) (*PodDiagnosisResult, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	namespace := strings.TrimSpace(input.Namespace)
+	podName := strings.TrimSpace(input.PodName)
+	if namespace == "" || podName == "" {
+		return nil, ErrInvalidInput
+	}
+	dataSource, config, credential, err := s.load(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	if !namespaceAllowed(namespace, config.AllowedNamespaces) {
+		return nil, ErrNamespaceNotAllowed
+	}
+	client, err := s.factory.ClientFor(ctx, dataSource, config, credential)
+	if err != nil {
+		return nil, fmt.Errorf("create kubernetes client: %w", err)
+	}
+	pod, err := client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	tailLines, maxBytes := normalizeLogLimits(input.LogTailLines, input.LogMaxBytes)
+	result := &PodDiagnosisResult{
+		DataSourceID: dataSource.ID,
+		Namespace:    namespace,
+		Pod:          summarizePod(pod),
+		Owner:        summarizeOwners(pod.OwnerReferences),
+		Limits:       PodDiagnosisLogLimits{TailLines: tailLines, MaxBytes: maxBytes},
+	}
+	result.Events, err = collectPodEvents(ctx, client, pod)
+	if err != nil {
+		return nil, err
+	}
+	result.Services, result.Endpoints, err = collectPodServicesAndEndpoints(ctx, client, pod)
+	if err != nil {
+		return nil, err
+	}
+	result.Logs, err = s.collectPodLogs(ctx, client, pod, input.IncludePreviousLogs, int64(tailLines), int64(maxBytes))
+	if err != nil {
+		return nil, err
+	}
+	if input.IncludeNode && pod.Spec.NodeName != "" {
+		node, err := client.CoreV1().Nodes().Get(ctx, pod.Spec.NodeName, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+		result.Node = summarizeNode(node)
+	}
+	return result, nil
 }
 
 func (s *Service) load(ctx context.Context, dataSourceID int64) (*model.DataSource, Config, Credential, error) {
@@ -281,6 +447,249 @@ func readResources(ctx context.Context, client kubernetes.Interface, resource, n
 	}
 }
 
+func normalizeLogLimits(tailLines, maxBytes int) (int, int) {
+	if tailLines <= 0 || tailLines > 2000 {
+		tailLines = 200
+	}
+	if maxBytes <= 0 || maxBytes > 1024*1024 {
+		maxBytes = 64 * 1024
+	}
+	return tailLines, maxBytes
+}
+
+func summarizePod(pod *corev1.Pod) PodSummary {
+	summary := PodSummary{
+		Name:              pod.Name,
+		Namespace:         pod.Namespace,
+		Phase:             string(pod.Status.Phase),
+		NodeName:          pod.Spec.NodeName,
+		PodIP:             pod.Status.PodIP,
+		HostIP:            pod.Status.HostIP,
+		Labels:            copyStringMap(pod.Labels),
+		RestartPolicy:     string(pod.Spec.RestartPolicy),
+		Containers:        summarizeContainers(pod.Spec.Containers, pod.Status.ContainerStatuses),
+		InitContainers:    summarizeContainers(pod.Spec.InitContainers, pod.Status.InitContainerStatuses),
+		Conditions:        summarizePodConditions(pod.Status.Conditions),
+		CreationTimestamp: pod.CreationTimestamp.Time.Format(time.RFC3339),
+	}
+	return summary
+}
+
+func summarizeContainers(containers []corev1.Container, statuses []corev1.ContainerStatus) []ContainerSummary {
+	statusByName := make(map[string]corev1.ContainerStatus, len(statuses))
+	for _, status := range statuses {
+		statusByName[status.Name] = status
+	}
+	result := make([]ContainerSummary, 0, len(containers))
+	for _, container := range containers {
+		item := ContainerSummary{Name: container.Name, Image: container.Image}
+		if status, ok := statusByName[container.Name]; ok {
+			item.Ready = status.Ready
+			item.RestartCount = status.RestartCount
+			item.State, item.Reason, item.Message, item.ExitCode = summarizeContainerState(status.State)
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func summarizeContainerState(state corev1.ContainerState) (string, string, string, int32) {
+	switch {
+	case state.Waiting != nil:
+		return "waiting", state.Waiting.Reason, state.Waiting.Message, 0
+	case state.Running != nil:
+		return "running", "", "", 0
+	case state.Terminated != nil:
+		return "terminated", state.Terminated.Reason, state.Terminated.Message, state.Terminated.ExitCode
+	default:
+		return "", "", "", 0
+	}
+}
+
+func summarizePodConditions(conditions []corev1.PodCondition) []ConditionSummary {
+	result := make([]ConditionSummary, 0, len(conditions))
+	for _, condition := range conditions {
+		result = append(result, ConditionSummary{
+			Type:    string(condition.Type),
+			Status:  string(condition.Status),
+			Reason:  condition.Reason,
+			Message: condition.Message,
+		})
+	}
+	return result
+}
+
+func summarizeOwners(references []metav1.OwnerReference) []OwnerSummary {
+	result := make([]OwnerSummary, 0, len(references))
+	for _, reference := range references {
+		result = append(result, OwnerSummary{Kind: reference.Kind, Name: reference.Name, UID: string(reference.UID)})
+	}
+	return result
+}
+
+func collectPodEvents(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod) ([]EventSummary, error) {
+	list, err := client.CoreV1().Events(pod.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]EventSummary, 0, len(list.Items))
+	for _, event := range list.Items {
+		if event.InvolvedObject.Kind != "Pod" || event.InvolvedObject.Name != pod.Name || event.InvolvedObject.Namespace != pod.Namespace {
+			continue
+		}
+		result = append(result, EventSummary{
+			Type:           event.Type,
+			Reason:         event.Reason,
+			Message:        event.Message,
+			Count:          event.Count,
+			FirstTimestamp: event.FirstTimestamp.Time.Format(time.RFC3339),
+			LastTimestamp:  event.LastTimestamp.Time.Format(time.RFC3339),
+		})
+	}
+	return result, nil
+}
+
+func collectPodServicesAndEndpoints(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod) ([]ServiceSummary, []EndpointSummary, error) {
+	services, err := client.CoreV1().Services(pod.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	serviceSummaries := make([]ServiceSummary, 0)
+	endpointSummaries := make([]EndpointSummary, 0)
+	for index := range services.Items {
+		service := &services.Items[index]
+		if len(service.Spec.Selector) == 0 || !labels.SelectorFromSet(service.Spec.Selector).Matches(labels.Set(pod.Labels)) {
+			continue
+		}
+		serviceSummaries = append(serviceSummaries, summarizeService(service))
+		endpoints, err := client.CoreV1().Endpoints(pod.Namespace).Get(ctx, service.Name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, nil, err
+		}
+		endpointSummaries = append(endpointSummaries, summarizeEndpoint(endpoints))
+	}
+	return serviceSummaries, endpointSummaries, nil
+}
+
+func summarizeService(service *corev1.Service) ServiceSummary {
+	ports := make([]string, 0, len(service.Spec.Ports))
+	for _, port := range service.Spec.Ports {
+		ports = append(ports, fmt.Sprintf("%s:%d/%s", port.Name, port.Port, port.Protocol))
+	}
+	return ServiceSummary{
+		Name:      service.Name,
+		Type:      string(service.Spec.Type),
+		Selector:  copyStringMap(service.Spec.Selector),
+		ClusterIP: service.Spec.ClusterIP,
+		Ports:     ports,
+	}
+}
+
+func summarizeEndpoint(endpoint *corev1.Endpoints) EndpointSummary {
+	summary := EndpointSummary{Name: endpoint.Name}
+	for _, subset := range endpoint.Subsets {
+		for _, address := range subset.Addresses {
+			summary.Addresses = append(summary.Addresses, address.IP)
+		}
+		for _, port := range subset.Ports {
+			summary.Ports = append(summary.Ports, fmt.Sprintf("%s:%d/%s", port.Name, port.Port, port.Protocol))
+		}
+	}
+	return summary
+}
+
+func (s *Service) collectPodLogs(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, includePrevious bool, tailLines, maxBytes int64) ([]PodLogSummary, error) {
+	result := make([]PodLogSummary, 0, len(pod.Spec.Containers)*2)
+	for _, container := range pod.Spec.Containers {
+		current, err := s.readLimitedPodLog(ctx, client, pod.Namespace, pod.Name, container.Name, false, tailLines, maxBytes)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, current)
+		if includePrevious {
+			previous, err := s.readLimitedPodLog(ctx, client, pod.Namespace, pod.Name, container.Name, true, tailLines, maxBytes)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, previous)
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) readLimitedPodLog(ctx context.Context, client kubernetes.Interface, namespace, podName, container string, previous bool, tailLines, maxBytes int64) (PodLogSummary, error) {
+	content, err := s.logReader.ReadPodLog(ctx, client, namespace, podName, container, previous, tailLines, maxBytes)
+	if err != nil {
+		return PodLogSummary{}, err
+	}
+	limited, truncated := limitLogContent(content, int(tailLines), int(maxBytes))
+	return PodLogSummary{
+		Container: container,
+		Previous:  previous,
+		Lines:     countLogLines(limited),
+		Bytes:     len([]byte(limited)),
+		Truncated: truncated,
+		Content:   limited,
+	}, nil
+}
+
+func limitLogContent(content string, tailLines, maxBytes int) (string, bool) {
+	truncated := false
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if tailLines > 0 && len(lines) > tailLines {
+		lines = lines[len(lines)-tailLines:]
+		truncated = true
+	}
+	limited := strings.Join(lines, "\n")
+	if content != "" && strings.HasSuffix(content, "\n") {
+		limited += "\n"
+	}
+	raw := []byte(limited)
+	if maxBytes > 0 && len(raw) > maxBytes {
+		raw = raw[len(raw)-maxBytes:]
+		truncated = true
+	}
+	return string(raw), truncated
+}
+
+func countLogLines(content string) int {
+	content = strings.TrimSuffix(content, "\n")
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
+}
+
+func summarizeNode(node *corev1.Node) *NodeSummary {
+	summary := &NodeSummary{Name: node.Name}
+	for _, condition := range node.Status.Conditions {
+		summary.Conditions = append(summary.Conditions, ConditionSummary{
+			Type:    string(condition.Type),
+			Status:  string(condition.Status),
+			Reason:  condition.Reason,
+			Message: condition.Message,
+		})
+	}
+	return summary
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
+}
+
 func podItem(pod *corev1.Pod) ResourceItem {
 	return objectItem("Pod", pod, string(pod.Status.Phase))
 }
@@ -310,6 +719,23 @@ func namespaceAllowed(namespace string, allowed []string) bool {
 }
 
 type realClientFactory struct{}
+
+type clientPodLogReader struct{}
+
+func (clientPodLogReader) ReadPodLog(ctx context.Context, client kubernetes.Interface, namespace, podName, container string, previous bool, tailLines int64, maxBytes int64) (string, error) {
+	options := &corev1.PodLogOptions{Container: container, Previous: previous}
+	if tailLines > 0 {
+		options.TailLines = &tailLines
+	}
+	raw, err := client.CoreV1().Pods(namespace).GetLogs(podName, options).DoRaw(ctx)
+	if err != nil {
+		return "", err
+	}
+	if maxBytes > 0 && int64(len(raw)) > maxBytes {
+		raw = raw[int64(len(raw))-maxBytes:]
+	}
+	return string(bytes.TrimRight(raw, "\x00")), nil
+}
 
 func (realClientFactory) ClientFor(_ context.Context, _ *model.DataSource, config Config, credential Credential) (kubernetes.Interface, error) {
 	var restConfig *rest.Config
