@@ -6,6 +6,7 @@ import (
 	"time"
 
 	logssvc "aiops-platform/backend/internal/logs"
+	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +30,11 @@ type queryLogsRequest struct {
 	Size            int    `json:"size"`
 	TimeoutMs       int    `json:"timeoutMs"`
 	AllowLargeRange bool   `json:"allowLargeRange"`
+}
+
+type preprocessLogsRequest struct {
+	Items         []model.LogItem `json:"items" binding:"required"`
+	StackMaxLines int             `json:"stackMaxLines"`
 }
 
 func (h *AnalysisHandler) QueryLogs(c *gin.Context) {
@@ -67,6 +73,18 @@ func (h *AnalysisHandler) QueryLogs(c *gin.Context) {
 		return
 	}
 	success(c, result)
+}
+
+func (h *AnalysisHandler) PreprocessLogs(c *gin.Context) {
+	var request preprocessLogsRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	success(c, logssvc.Preprocess(logssvc.PreprocessInput{
+		Items:         request.Items,
+		StackMaxLines: request.StackMaxLines,
+	}))
 }
 
 func handleAnalysisError(c *gin.Context, err error, fallback string) bool {

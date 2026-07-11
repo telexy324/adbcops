@@ -391,6 +391,27 @@ Content-Type: application/json
 
 默认不允许查询超过 24 小时的时间范围，超过会返回明确错误；如确需大范围查询，需要显式传入 `allowLargeRange: true`。返回统一 `LogItem` 列表，字段包含 `timestamp`、`level`、`message`、`source`、`systemName`、`component`、`environment`、`host`、`cluster`、`namespace`、`pod`、`container`、`traceId`、`requestId`、`errorCode` 和 `raw`。
 
+### 日志预处理
+
+```http
+POST /api/analysis/logs/preprocess
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "timestamp": "2026-07-11T01:00:00Z",
+      "level": "error",
+      "message": "request 123 failed password=secret",
+      "pod": "payment-0"
+    }
+  ],
+  "stackMaxLines": 40
+}
+```
+
+预处理按顺序执行字段/时间标准化、敏感信息脱敏、去重、模板聚类、错误计数、时间桶统计和堆栈截断。脱敏覆盖手机号、身份证、银行卡号、token、password 等；结果返回 `items`、`clusters`、`timeStats`、`errorCount` 和 `redactionCount`。
+
 ### SFTP 文件读取
 
 SFTP 工具要求 `ssh` 类型数据源，且只提供只读文件读取，不提供 Shell 执行能力。数据源 `config` 示例：
