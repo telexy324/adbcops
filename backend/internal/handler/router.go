@@ -13,6 +13,7 @@ type RouterDependencies struct {
 	ConversationHandler *ConversationHandler
 	LLMHandler          *LLMHandler
 	DocumentHandler     *DocumentHandler
+	RAGHandler          *RAGHandler
 	Authenticate        gin.HandlerFunc
 	RequireAdmin        gin.HandlerFunc
 }
@@ -84,6 +85,9 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		knowledgeRoutes := router.Group("/api/knowledge")
 		knowledgeRoutes.Use(dependencies.Authenticate)
 		knowledgeRoutes.POST("/search", dependencies.DocumentHandler.Search)
+		if dependencies.RAGHandler != nil {
+			knowledgeRoutes.POST("/ask", dependencies.RAGHandler.Ask)
+		}
 	}
 	return router
 }

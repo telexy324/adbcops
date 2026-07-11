@@ -43,3 +43,20 @@ type Message struct {
 func (Message) TableName() string {
 	return "conversation_message"
 }
+
+type QARecord struct {
+	ID             int64     `gorm:"column:id;primaryKey" json:"id"`
+	ConversationID *int64    `gorm:"column:conversation_id" json:"conversationId,omitempty"`
+	UserID         int64     `gorm:"column:user_id;not null" json:"userId"`
+	Question       string    `gorm:"column:question;not null" json:"question"`
+	RewrittenQuery string    `gorm:"column:rewritten_query;not null" json:"rewrittenQuery"`
+	Answer         string    `gorm:"column:answer;not null" json:"answer"`
+	Citations      []byte    `gorm:"column:citations;type:jsonb" json:"citations,omitempty"`
+	RecallCount    int       `gorm:"column:recall_count;not null" json:"recallCount"`
+	LLMConfigID    *int64    `gorm:"column:llm_config_id" json:"llmConfigId,omitempty"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+}
+
+func (QARecord) TableName() string {
+	return "qa_record"
+}

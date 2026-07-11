@@ -313,3 +313,18 @@ Content-Type: application/json
 ```
 
 当前使用 `kb_chunk.search_text` 与 `content` 进行 pg_trgm 召回并返回 chunk 列表；只有 `published` 文档的 chunk 会参与正式检索。
+
+### RAG 问答
+
+```http
+POST /api/knowledge/ask
+Content-Type: application/json
+
+{
+  "conversationId": 1,
+  "question": "数据库连接池耗尽时如何排查？",
+  "limit": 5
+}
+```
+
+`conversationId` 可选；不传时会自动创建会话。接口会执行 query rewrite、召回、rerank、回答生成，并返回 `citations`。引用只来自已发布文档的真实 chunk，同时会写入用户消息、助手消息和 `qa_record`。如果没有已发布知识可支撑回答，会明确返回“未找到可依据的已发布知识，无法基于知识库回答该问题。”
