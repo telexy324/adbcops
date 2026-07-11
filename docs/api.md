@@ -328,3 +328,43 @@ Content-Type: application/json
 ```
 
 `conversationId` 可选；不传时会自动创建会话。接口会执行 query rewrite、召回、rerank、回答生成，并返回 `citations`。引用只来自已发布文档的真实 chunk，同时会写入用户消息、助手消息和 `qa_record`。如果没有已发布知识可支撑回答，会明确返回“未找到可依据的已发布知识，无法基于知识库回答该问题。”
+
+## Data Source
+
+数据源接口要求登录。普通用户只能查看脱敏后的启用数据源；创建、更新、删除和测试连接均要求 `admin`。
+
+```http
+GET    /api/data-sources
+POST   /api/data-sources
+GET    /api/data-sources/{id}
+PUT    /api/data-sources/{id}
+DELETE /api/data-sources/{id}
+POST   /api/data-sources/{id}/test
+```
+
+创建示例：
+
+```http
+POST /api/data-sources
+Content-Type: application/json
+
+{
+  "name": "prod-es",
+  "sourceType": "elasticsearch",
+  "environment": "prod",
+  "systemName": "payment",
+  "componentName": "payment-api",
+  "config": {
+    "baseUrl": "https://es.example",
+    "index": "logs-*"
+  },
+  "credential": {
+    "username": "elastic",
+    "password": "..."
+  },
+  "enabled": true,
+  "readOnly": true
+}
+```
+
+`config` 只能保存非敏感连接配置；包含 `password`、`token`、`secret`、`apiKey`、`privateKey` 等字段会被拒绝。`credential` 会加密保存到 `credential_secret`，响应只返回 `credentialConfigured`，不会返回明文或密文。

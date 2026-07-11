@@ -12,11 +12,13 @@
 - `000006_create_kb_chunks`
 - `000007_create_kb_document_reviews`
 - `000008_create_qa_records`
+- `000009_create_data_sources`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
 `kb_document_review` 保存管理员审核动作、流转前后状态和审核备注。
 `qa_record` 保存 RAG 问答审计记录、改写 query、引用和召回数量。
+`credential_secret` 保存加密后的数据源凭据；`data_source.config` 只保存非敏感配置。
 
 ## 迁移规则
 
@@ -35,3 +37,4 @@
 - `000006`：创建知识切片表及 pg_trgm 检索索引；
 - `000007`：创建知识文档审核记录表。
 - `000008`：创建 RAG 问答记录表。
+- `000009`：创建统一数据源与加密凭据表。

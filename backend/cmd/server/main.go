@@ -16,6 +16,7 @@ import (
 	conversationsvc "aiops-platform/backend/internal/conversation"
 	"aiops-platform/backend/internal/credential"
 	"aiops-platform/backend/internal/database"
+	datasourcesvc "aiops-platform/backend/internal/datasource"
 	documentsvc "aiops-platform/backend/internal/document"
 	"aiops-platform/backend/internal/handler"
 	llmsvc "aiops-platform/backend/internal/llm"
@@ -68,6 +69,7 @@ func run() error {
 	conversationRepository := repository.NewConversationRepository(databaseConnection.GORM)
 	llmRepository := repository.NewLLMRepository(databaseConnection.GORM)
 	ragRepository := repository.NewRAGRepository(databaseConnection.GORM)
+	dataSourceRepository := repository.NewDataSourceRepository(databaseConnection.GORM)
 	credentialManager, err := credential.NewManager(cfg.Credential.MasterKey, cfg.Credential.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("initialize credential manager: %w", err)
@@ -87,6 +89,7 @@ func run() error {
 	conversationService := conversationsvc.NewService(conversationRepository)
 	llmService := llmsvc.NewService(llmRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	ragService := ragsvc.NewService(ragRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
+	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
@@ -108,6 +111,7 @@ func run() error {
 	llmHandler := handler.NewLLMHandler(llmService)
 	documentHandler := handler.NewDocumentHandler(documentService, cfg.FileStorage.MaxUploadBytes)
 	ragHandler := handler.NewRAGHandler(ragService)
+	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 
 	server := &http.Server{
 		Addr: cfg.Address(),
@@ -118,6 +122,7 @@ func run() error {
 			LLMHandler:          llmHandler,
 			DocumentHandler:     documentHandler,
 			RAGHandler:          ragHandler,
+			DataSourceHandler:   dataSourceHandler,
 			Authenticate:        appmiddleware.Authenticate(authService),
 			RequireAdmin:        appmiddleware.RequireAdmin(),
 		}),

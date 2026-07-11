@@ -14,6 +14,7 @@ type RouterDependencies struct {
 	LLMHandler          *LLMHandler
 	DocumentHandler     *DocumentHandler
 	RAGHandler          *RAGHandler
+	DataSourceHandler   *DataSourceHandler
 	Authenticate        gin.HandlerFunc
 	RequireAdmin        gin.HandlerFunc
 }
@@ -88,6 +89,16 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		if dependencies.RAGHandler != nil {
 			knowledgeRoutes.POST("/ask", dependencies.RAGHandler.Ask)
 		}
+	}
+	if dependencies.DataSourceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		dataSourceRoutes := router.Group("/api/data-sources")
+		dataSourceRoutes.Use(dependencies.Authenticate)
+		dataSourceRoutes.GET("", dependencies.DataSourceHandler.List)
+		dataSourceRoutes.GET("/:id", dependencies.DataSourceHandler.Get)
+		dataSourceRoutes.POST("", dependencies.RequireAdmin, dependencies.DataSourceHandler.Create)
+		dataSourceRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Update)
+		dataSourceRoutes.DELETE("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Delete)
+		dataSourceRoutes.POST("/:id/test", dependencies.RequireAdmin, dependencies.DataSourceHandler.Test)
 	}
 	return router
 }
