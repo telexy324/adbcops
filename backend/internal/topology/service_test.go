@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	k8ssvc "aiops-platform/backend/internal/k8s"
@@ -68,6 +69,99 @@ func TestSyncK8sGeneratesDeploymentPodServiceIngressRelations(t *testing.T) {
 	}
 }
 
+func TestTopologyTraversalDetectsCycleAndHonorsHops(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b", "svc:c"},
+		[][3]string{
+			{"svc:a", "svc:b", model.TopologyEdgeTypeDependsOn},
+			{"svc:b", "svc:c", model.TopologyEdgeTypeDependsOn},
+			{"svc:c", "svc:a", model.TopologyEdgeTypeDependsOn},
+		},
+	)
+	service := NewService(repo, nil)
+
+	result, err := service.Downstream(context.Background(), TraversalQuery{NodeKey: "svc:a", Hops: 2, MaxNodes: 10})
+	if err != nil {
+		t.Fatalf("query downstream: %v", err)
+	}
+	if len(result.Nodes) != 3 || len(result.Edges) != 2 {
+		t.Fatalf("expected 2-hop subgraph, got %+v", result)
+	}
+	if !result.CycleDetected {
+		t.Fatalf("expected cycle detection, got %+v", result)
+	}
+}
+
+func TestTopologyTraversalEnforcesMaxNodes(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b", "svc:c"},
+		[][3]string{
+			{"svc:a", "svc:b", model.TopologyEdgeTypeDependsOn},
+			{"svc:b", "svc:c", model.TopologyEdgeTypeDependsOn},
+		},
+	)
+	service := NewService(repo, nil)
+
+	_, err := service.Downstream(context.Background(), TraversalQuery{NodeKey: "svc:a", Hops: 2, MaxNodes: 2})
+	if !errors.Is(err, ErrNodeLimitExceeded) {
+		t.Fatalf("expected max node limit error, got %v", err)
+	}
+}
+
+func TestCommonDependencies(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b", "svc:shared", "svc:only-a"},
+		[][3]string{
+			{"svc:a", "svc:shared", model.TopologyEdgeTypeDependsOn},
+			{"svc:b", "svc:shared", model.TopologyEdgeTypeDependsOn},
+			{"svc:a", "svc:only-a", model.TopologyEdgeTypeDependsOn},
+		},
+	)
+	service := NewService(repo, nil)
+
+	result, err := service.CommonDependencies(context.Background(), CommonDependencyQuery{
+		NodeKeys: []string{"svc:a", "svc:b"},
+		Hops:     1,
+		MaxNodes: 10,
+	})
+	if err != nil {
+		t.Fatalf("query common dependencies: %v", err)
+	}
+	if len(result.CommonNodes) != 1 || result.CommonNodes[0].NodeKey != "svc:shared" {
+		t.Fatalf("unexpected common dependencies: %+v", result)
+	}
+}
+
+func TestUpstreamAndBlastRadius(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:frontend", "svc:api", "svc:db"},
+		[][3]string{
+			{"svc:frontend", "svc:api", model.TopologyEdgeTypeDependsOn},
+			{"svc:api", "svc:db", model.TopologyEdgeTypeDependsOn},
+		},
+	)
+	service := NewService(repo, nil)
+
+	upstream, err := service.Upstream(context.Background(), TraversalQuery{NodeKey: "svc:db", Hops: 2, MaxNodes: 10})
+	if err != nil {
+		t.Fatalf("query upstream: %v", err)
+	}
+	if len(upstream.Nodes) != 3 {
+		t.Fatalf("expected frontend/api/db upstream graph, got %+v", upstream)
+	}
+	blastRadius, err := service.BlastRadius(context.Background(), TraversalQuery{NodeKey: "svc:frontend", Hops: 2, MaxNodes: 10})
+	if err != nil {
+		t.Fatalf("query blast radius: %v", err)
+	}
+	if blastRadius.Direction != "blast_radius" || len(blastRadius.Nodes) != 3 {
+		t.Fatalf("unexpected blast radius: %+v", blastRadius)
+	}
+}
+
 func rawK8sItem(t *testing.T, kind string, value any) k8ssvc.ResourceItem {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -120,6 +214,24 @@ func ingressFixture() *networkingv1.Ingress {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+func seedManualGraph(t *testing.T, repo *memoryTopologyRepository, nodeKeys []string, edges [][3]string) {
+	t.Helper()
+	for _, nodeKey := range nodeKeys {
+		repo.nodes[nodeKey] = model.TopologyNode{NodeKey: nodeKey, Kind: "service", Name: nodeKey, SourceType: model.TopologySourceManual}
+	}
+	for _, edge := range edges {
+		input, err := normalizeEdge(EdgeInput{
+			FromNodeKey: edge[0],
+			ToNodeKey:   edge[1],
+			EdgeType:    edge[2],
+		})
+		if err != nil {
+			t.Fatalf("normalize edge: %v", err)
+		}
+		repo.edges[input.EdgeKey] = *input
+	}
 }
 
 type fakeK8sReader struct {

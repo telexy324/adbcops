@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"aiops-platform/backend/internal/repository"
 	topologysvc "aiops-platform/backend/internal/topology"
@@ -31,6 +32,48 @@ func (h *TopologyHandler) Graph(c *gin.Context) {
 		return
 	}
 	success(c, graph)
+}
+
+func (h *TopologyHandler) Upstream(c *gin.Context) {
+	result, err := h.service.Upstream(c.Request.Context(), traversalQueryFromRequest(c))
+	if handleTopologyError(c, err, "query upstream topology failed") {
+		return
+	}
+	success(c, result)
+}
+
+func (h *TopologyHandler) Downstream(c *gin.Context) {
+	result, err := h.service.Downstream(c.Request.Context(), traversalQueryFromRequest(c))
+	if handleTopologyError(c, err, "query downstream topology failed") {
+		return
+	}
+	success(c, result)
+}
+
+func (h *TopologyHandler) BlastRadius(c *gin.Context) {
+	result, err := h.service.BlastRadius(c.Request.Context(), traversalQueryFromRequest(c))
+	if handleTopologyError(c, err, "query topology blast radius failed") {
+		return
+	}
+	success(c, result)
+}
+
+func (h *TopologyHandler) CommonDependencies(c *gin.Context) {
+	hops, _ := strconv.Atoi(c.Query("hops"))
+	maxNodes, _ := strconv.Atoi(c.Query("maxNodes"))
+	nodeKeys := strings.Split(c.Query("nodeKeys"), ",")
+	result, err := h.service.CommonDependencies(c.Request.Context(), topologysvc.CommonDependencyQuery{
+		NodeKeys:    nodeKeys,
+		Hops:        hops,
+		MaxNodes:    maxNodes,
+		Environment: c.Query("environment"),
+		Cluster:     c.Query("cluster"),
+		Namespace:   c.Query("namespace"),
+	})
+	if handleTopologyError(c, err, "query common topology dependencies failed") {
+		return
+	}
+	success(c, result)
 }
 
 func (h *TopologyHandler) UpsertNode(c *gin.Context) {
@@ -76,6 +119,19 @@ func (h *TopologyHandler) SyncK8s(c *gin.Context) {
 	success(c, result)
 }
 
+func traversalQueryFromRequest(c *gin.Context) topologysvc.TraversalQuery {
+	hops, _ := strconv.Atoi(c.Query("hops"))
+	maxNodes, _ := strconv.Atoi(c.Query("maxNodes"))
+	return topologysvc.TraversalQuery{
+		NodeKey:     c.Query("nodeKey"),
+		Hops:        hops,
+		MaxNodes:    maxNodes,
+		Environment: c.Query("environment"),
+		Cluster:     c.Query("cluster"),
+		Namespace:   c.Query("namespace"),
+	}
+}
+
 func handleTopologyError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
@@ -85,8 +141,10 @@ func handleTopologyError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, topologysvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40301, "forbidden")
-	case errors.Is(err, repository.ErrNotFound):
-		failure(c, http.StatusNotFound, 40401, "not found")
+	case errors.Is(err, topologysvc.ErrNodeLimitExceeded):
+		failure(c, http.StatusBadRequest, 40002, "topology node limit exceeded")
+	case errors.Is(err, topologysvc.ErrTopologyNodeAbsent), errors.Is(err, repository.ErrNotFound):
+		failure(c, http.StatusNotFound, 40401, "topology node not found")
 	default:
 		failure(c, http.StatusInternalServerError, 50096, fallback)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	k8ssvc "aiops-platform/backend/internal/k8s"
@@ -18,8 +19,10 @@ import (
 )
 
 var (
-	ErrInvalidInput = errors.New("invalid input")
-	ErrForbidden    = errors.New("topology access forbidden")
+	ErrInvalidInput       = errors.New("invalid input")
+	ErrForbidden          = errors.New("topology access forbidden")
+	ErrNodeLimitExceeded  = errors.New("topology node limit exceeded")
+	ErrTopologyNodeAbsent = errors.New("topology node not found")
 )
 
 type Repository interface {
@@ -74,6 +77,41 @@ type Query struct {
 type Graph struct {
 	Nodes []model.TopologyNode `json:"nodes"`
 	Edges []model.TopologyEdge `json:"edges"`
+}
+
+type TraversalQuery struct {
+	NodeKey     string
+	Hops        int
+	MaxNodes    int
+	Environment string
+	Cluster     string
+	Namespace   string
+}
+
+type TraversalResult struct {
+	RootKey       string               `json:"rootKey"`
+	Direction     string               `json:"direction"`
+	Hops          int                  `json:"hops"`
+	Nodes         []model.TopologyNode `json:"nodes"`
+	Edges         []model.TopologyEdge `json:"edges"`
+	CycleDetected bool                 `json:"cycleDetected"`
+}
+
+type CommonDependencyQuery struct {
+	NodeKeys    []string
+	Hops        int
+	MaxNodes    int
+	Environment string
+	Cluster     string
+	Namespace   string
+}
+
+type CommonDependencyResult struct {
+	NodeKeys        []string             `json:"nodeKeys"`
+	Hops            int                  `json:"hops"`
+	CommonNodes     []model.TopologyNode `json:"commonNodes"`
+	SupportingEdges []model.TopologyEdge `json:"supportingEdges"`
+	CycleDetected   bool                 `json:"cycleDetected"`
 }
 
 type SyncK8sInput struct {
@@ -132,6 +170,120 @@ func (s *Service) Graph(ctx context.Context, query Query) (*Graph, error) {
 		return nil, err
 	}
 	return &Graph{Nodes: nodes, Edges: edges}, nil
+}
+
+func (s *Service) Upstream(ctx context.Context, query TraversalQuery) (*TraversalResult, error) {
+	return s.traverse(ctx, query, "upstream")
+}
+
+func (s *Service) Downstream(ctx context.Context, query TraversalQuery) (*TraversalResult, error) {
+	return s.traverse(ctx, query, "downstream")
+}
+
+func (s *Service) BlastRadius(ctx context.Context, query TraversalQuery) (*TraversalResult, error) {
+	result, err := s.traverse(ctx, query, "downstream")
+	if result != nil {
+		result.Direction = "blast_radius"
+	}
+	return result, err
+}
+
+func (s *Service) CommonDependencies(ctx context.Context, query CommonDependencyQuery) (*CommonDependencyResult, error) {
+	nodeKeys := normalizeNodeKeys(query.NodeKeys)
+	if len(nodeKeys) < 2 {
+		return nil, ErrInvalidInput
+	}
+	maxNodes := normalizeMaxNodes(query.MaxNodes)
+	hops := normalizeHops(query.Hops)
+	graph, err := s.Graph(ctx, Query{
+		Environment: query.Environment,
+		Cluster:     query.Cluster,
+		Namespace:   query.Namespace,
+		Limit:       maxNodes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	index := newGraphIndex(graph)
+	for _, key := range nodeKeys {
+		if _, ok := index.nodes[key]; !ok {
+			return nil, ErrTopologyNodeAbsent
+		}
+	}
+
+	var intersection map[string]struct{}
+	supportingEdges := map[string]model.TopologyEdge{}
+	cycleDetected := false
+	for _, key := range nodeKeys {
+		reachable, edges, cycle, err := traverseIndex(index, key, "downstream", hops, maxNodes)
+		if err != nil {
+			return nil, err
+		}
+		delete(reachable, key)
+		if intersection == nil {
+			intersection = reachable
+		} else {
+			for candidate := range intersection {
+				if _, ok := reachable[candidate]; !ok {
+					delete(intersection, candidate)
+				}
+			}
+		}
+		for _, edge := range edges {
+			supportingEdges[edge.EdgeKey] = edge
+		}
+		cycleDetected = cycleDetected || cycle
+	}
+	nodes := make([]model.TopologyNode, 0, len(intersection))
+	for key := range intersection {
+		nodes = append(nodes, index.nodes[key])
+	}
+	sortTopologyNodes(nodes)
+	edges := make([]model.TopologyEdge, 0, len(supportingEdges))
+	for _, edge := range supportingEdges {
+		if _, fromOK := intersection[edge.FromNodeKey]; fromOK {
+			edges = append(edges, edge)
+			continue
+		}
+		if _, toOK := intersection[edge.ToNodeKey]; toOK {
+			edges = append(edges, edge)
+		}
+	}
+	sortTopologyEdges(edges)
+	return &CommonDependencyResult{NodeKeys: nodeKeys, Hops: hops, CommonNodes: nodes, SupportingEdges: edges, CycleDetected: cycleDetected}, nil
+}
+
+func (s *Service) traverse(ctx context.Context, query TraversalQuery, direction string) (*TraversalResult, error) {
+	root := strings.TrimSpace(query.NodeKey)
+	if root == "" {
+		return nil, ErrInvalidInput
+	}
+	maxNodes := normalizeMaxNodes(query.MaxNodes)
+	hops := normalizeHops(query.Hops)
+	graph, err := s.Graph(ctx, Query{
+		Environment: query.Environment,
+		Cluster:     query.Cluster,
+		Namespace:   query.Namespace,
+		Limit:       maxNodes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	index := newGraphIndex(graph)
+	if _, ok := index.nodes[root]; !ok {
+		return nil, ErrTopologyNodeAbsent
+	}
+	reachable, edges, cycleDetected, err := traverseIndex(index, root, direction, hops, maxNodes)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]model.TopologyNode, 0, len(reachable))
+	for key := range reachable {
+		nodes = append(nodes, index.nodes[key])
+	}
+	sortTopologyNodes(nodes)
+	sortTopologyEdges(edges)
+	return &TraversalResult{RootKey: root, Direction: direction, Hops: hops, Nodes: nodes, Edges: edges, CycleDetected: cycleDetected}, nil
 }
 
 func (s *Service) SyncK8s(ctx context.Context, actor *model.AppUser, input SyncK8sInput) (*SyncResult, error) {
@@ -214,6 +366,176 @@ func (s *Service) readK8sResource(ctx context.Context, actor *model.AppUser, dat
 		Namespace:    namespace,
 		Resource:     resource,
 		Limit:        limit,
+	})
+}
+
+type graphIndex struct {
+	nodes    map[string]model.TopologyNode
+	outgoing map[string][]model.TopologyEdge
+	incoming map[string][]model.TopologyEdge
+}
+
+func newGraphIndex(graph *Graph) graphIndex {
+	index := graphIndex{
+		nodes:    map[string]model.TopologyNode{},
+		outgoing: map[string][]model.TopologyEdge{},
+		incoming: map[string][]model.TopologyEdge{},
+	}
+	if graph == nil {
+		return index
+	}
+	for _, node := range graph.Nodes {
+		index.nodes[node.NodeKey] = node
+	}
+	for _, edge := range graph.Edges {
+		if _, ok := index.nodes[edge.FromNodeKey]; !ok {
+			continue
+		}
+		if _, ok := index.nodes[edge.ToNodeKey]; !ok {
+			continue
+		}
+		index.outgoing[edge.FromNodeKey] = append(index.outgoing[edge.FromNodeKey], edge)
+		index.incoming[edge.ToNodeKey] = append(index.incoming[edge.ToNodeKey], edge)
+	}
+	return index
+}
+
+func traverseIndex(index graphIndex, root, direction string, hops, maxNodes int) (map[string]struct{}, []model.TopologyEdge, bool, error) {
+	if direction != "upstream" && direction != "downstream" {
+		return nil, nil, false, ErrInvalidInput
+	}
+	type queueItem struct {
+		key   string
+		depth int
+	}
+	visited := map[string]struct{}{root: {}}
+	edgeSeen := map[string]model.TopologyEdge{}
+	queue := []queueItem{{key: root, depth: 0}}
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+		if item.depth >= hops {
+			continue
+		}
+		for _, edge := range directionalEdges(index, item.key, direction) {
+			next := edge.ToNodeKey
+			if direction == "upstream" {
+				next = edge.FromNodeKey
+			}
+			if _, ok := index.nodes[next]; !ok {
+				continue
+			}
+			edgeSeen[edge.EdgeKey] = edge
+			if _, seen := visited[next]; seen {
+				continue
+			}
+			if len(visited)+1 > maxNodes {
+				return nil, nil, false, ErrNodeLimitExceeded
+			}
+			visited[next] = struct{}{}
+			queue = append(queue, queueItem{key: next, depth: item.depth + 1})
+		}
+	}
+
+	edges := make([]model.TopologyEdge, 0, len(edgeSeen))
+	for _, edge := range edgeSeen {
+		edges = append(edges, edge)
+	}
+	cycleDetected := hasDirectedCycle(index, visited, direction)
+	return visited, edges, cycleDetected, nil
+}
+
+func directionalEdges(index graphIndex, key, direction string) []model.TopologyEdge {
+	if direction == "upstream" {
+		return index.incoming[key]
+	}
+	return index.outgoing[key]
+}
+
+func hasDirectedCycle(index graphIndex, nodeKeys map[string]struct{}, direction string) bool {
+	color := map[string]int{}
+	var visit func(string) bool
+	visit = func(key string) bool {
+		color[key] = 1
+		for _, edge := range directionalEdges(index, key, direction) {
+			next := edge.ToNodeKey
+			if direction == "upstream" {
+				next = edge.FromNodeKey
+			}
+			if _, ok := nodeKeys[next]; !ok {
+				continue
+			}
+			if color[next] == 1 {
+				return true
+			}
+			if color[next] == 0 && visit(next) {
+				return true
+			}
+		}
+		color[key] = 2
+		return false
+	}
+	for key := range nodeKeys {
+		if color[key] == 0 && visit(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeHops(hops int) int {
+	if hops <= 0 {
+		return 1
+	}
+	if hops > 10 {
+		return 10
+	}
+	return hops
+}
+
+func normalizeMaxNodes(maxNodes int) int {
+	if maxNodes <= 0 {
+		return 200
+	}
+	if maxNodes > 1000 {
+		return 1000
+	}
+	return maxNodes
+}
+
+func normalizeNodeKeys(keys []string) []string {
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, key)
+	}
+	return result
+}
+
+func sortTopologyNodes(nodes []model.TopologyNode) {
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Kind == nodes[j].Kind {
+			return nodes[i].NodeKey < nodes[j].NodeKey
+		}
+		return nodes[i].Kind < nodes[j].Kind
+	})
+}
+
+func sortTopologyEdges(edges []model.TopologyEdge) {
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].EdgeType == edges[j].EdgeType {
+			return edges[i].EdgeKey < edges[j].EdgeKey
+		}
+		return edges[i].EdgeType < edges[j].EdgeType
 	})
 }
 
