@@ -6,6 +6,7 @@ import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
 import { NotFoundPage } from "@/pages/not-found-page";
+import { WorkflowPage } from "@/pages/workflow-page";
 
 export const router = createBrowserRouter([
   {
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: "dashboard", element: <DashboardPage /> },
       { path: "analysis", element: <AnalysisPage /> },
       { path: "knowledge", element: <KnowledgePage /> },
+      { path: "workflows", element: <WorkflowPage /> },
     ],
   },
   {

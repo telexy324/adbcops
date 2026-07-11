@@ -25,7 +25,7 @@ const navigation = [
   { label: "智能分析", icon: Bot, to: "/analysis", enabled: true },
   { label: "知识中心", icon: BookOpenText, to: "/knowledge", enabled: true },
   { label: "告警中心", icon: BellRing, enabled: false },
-  { label: "工作流", icon: Workflow, enabled: false },
+  { label: "工作流", icon: Workflow, to: "/workflows", enabled: true },
   { label: "拓扑视图", icon: Network, enabled: false },
   { label: "故障中心", icon: Siren, enabled: false },
 ];

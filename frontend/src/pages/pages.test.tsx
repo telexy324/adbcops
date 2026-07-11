@@ -8,6 +8,7 @@ import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
+import { WorkflowPage } from "@/pages/workflow-page";
 
 vi.mock("@/api/auth", () => ({
   login: vi.fn().mockRejectedValue(new Error("bad credentials")),
@@ -31,6 +32,50 @@ vi.mock("@/api/analysis", () => ({
   runGeneralAnalysis: vi.fn(),
   sendAlertmanagerWebhook: vi.fn(),
   toAPIErrorMessage: vi.fn(() => "请求失败"),
+}));
+
+vi.mock("@/api/workflows", () => ({
+  createWorkflow: vi.fn(),
+  listWorkflowRuns: vi.fn().mockResolvedValue([
+    {
+      id: 10,
+      workflowId: 1,
+      status: "success",
+      createdAt: "2026-07-12T10:00:00Z",
+      nodeRuns: [
+        {
+          id: 1,
+          nodeId: "start",
+          nodeType: "start",
+          status: "success",
+          attempt: 1,
+        },
+      ],
+    },
+  ]),
+  listWorkflows: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      name: "knowledge_qa_workflow",
+      version: "v1",
+      enabled: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+      definition: {
+        name: "knowledge_qa_workflow",
+        version: "v1",
+        nodes: [],
+        edges: [],
+      },
+    },
+  ]),
+  runWorkflow: vi.fn(),
+  toAPIErrorMessage: vi.fn(() => "请求失败"),
+  validateWorkflow: vi.fn().mockResolvedValue({
+    valid: false,
+    errors: ["agent node knowledge references unknown agent: missing_agent"],
+    warnings: [],
+  }),
 }));
 
 function renderWithQueryClient(element: ReactElement) {
@@ -125,6 +170,27 @@ describe("AnalysisPage", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText("普通用户只会看到自己的分析任务。", { exact: false }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("WorkflowPage", () => {
+  it("renders builder, runs and backend validation errors", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<WorkflowPage />);
+
+    expect(screen.getByRole("heading", { name: "工作流" })).toBeInTheDocument();
+    expect(screen.getByText("Builder")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "运行记录" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /后端校验/ }));
+
+    expect(
+      await screen.findByText(
+        "agent node knowledge references unknown agent: missing_agent",
+      ),
     ).toBeInTheDocument();
   });
 });
