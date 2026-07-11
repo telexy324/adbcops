@@ -28,6 +28,7 @@ import (
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	ragsvc "aiops-platform/backend/internal/rag"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/skillframework"
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
 	"aiops-platform/backend/internal/toolregistry"
 	usersvc "aiops-platform/backend/internal/user"
@@ -79,6 +80,7 @@ func run() error {
 	dataSourceRepository := repository.NewDataSourceRepository(databaseConnection.GORM)
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
+	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
 	credentialManager, err := credential.NewManager(cfg.Credential.MasterKey, cfg.Credential.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("initialize credential manager: %w", err)
@@ -105,6 +107,10 @@ func run() error {
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
+	skillRegistry, err := skillframework.NewRegistry(toolRegistry, skillRunRepository, skillframework.BuiltinSkills()...)
+	if err != nil {
+		return fmt.Errorf("initialize skill registry: %w", err)
+	}
 	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
@@ -131,6 +137,7 @@ func run() error {
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
+	skillHandler := handler.NewSkillHandler(skillRegistry)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 	k8sHandler := handler.NewK8sHandler(k8sService)
 	metricsHandler := handler.NewMetricsHandler(metricsService)
@@ -148,6 +155,7 @@ func run() error {
 			AnalysisHandler:     analysisHandler,
 			EventHandler:        eventHandler,
 			ToolHandler:         toolHandler,
+			SkillHandler:        skillHandler,
 			SFTPHandler:         sftpHandler,
 			K8sHandler:          k8sHandler,
 			MetricsHandler:      metricsHandler,

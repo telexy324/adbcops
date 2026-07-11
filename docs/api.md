@@ -634,3 +634,38 @@ POST /api/tools/{name}/disable
 - `alertmanager`
 
 `GET` 接口要求登录；`test`、`enable`、`disable` 要求管理员。禁用 Tool 后，后续 Skill Framework 会通过 Registry 拒绝依赖该 Tool 的 Skill 执行。
+
+## Skill Framework
+
+Skill 是受控业务能力边界，包含输入 Schema、输出 Schema、风险等级、只读标记和依赖 Tool。v1 仅允许 `safe_read` 与 `sensitive_read`，不允许写操作 Skill。
+
+```http
+GET  /api/skills
+GET  /api/skills/{name}
+POST /api/skills/{name}/execute
+POST /api/skills/{name}/enable
+POST /api/skills/{name}/disable
+GET  /api/skill-runs
+```
+
+`GET /api/skills` 与 `GET /api/skills/{name}` 要求登录；`execute`、`enable`、`disable` 和 `skill-runs` 要求管理员。执行 Skill 时会：
+
+- 校验 JSON Schema；
+- 校验 Skill 是否启用；
+- 校验风险等级；
+- `sensitive_read` 要求管理员；
+- 校验依赖 Tool 是否存在且启用；
+- 写入 `skill_run` 审计记录。
+
+执行示例：
+
+```http
+POST /api/skills/echo_safe/execute
+Content-Type: application/json
+
+{
+  "input": {
+    "message": "hello"
+  }
+}
+```

@@ -18,6 +18,7 @@ type RouterDependencies struct {
 	AnalysisHandler     *AnalysisHandler
 	EventHandler        *EventHandler
 	ToolHandler         *ToolHandler
+	SkillHandler        *SkillHandler
 	SFTPHandler         *SFTPHandler
 	K8sHandler          *K8sHandler
 	MetricsHandler      *MetricsHandler
@@ -118,6 +119,19 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		toolRoutes.POST("/:name/test", dependencies.RequireAdmin, dependencies.ToolHandler.Test)
 		toolRoutes.POST("/:name/enable", dependencies.RequireAdmin, dependencies.ToolHandler.Enable)
 		toolRoutes.POST("/:name/disable", dependencies.RequireAdmin, dependencies.ToolHandler.Disable)
+	}
+	if dependencies.SkillHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		skillRoutes := router.Group("/api/skills")
+		skillRoutes.Use(dependencies.Authenticate)
+		skillRoutes.GET("", dependencies.SkillHandler.List)
+		skillRoutes.GET("/:name", dependencies.SkillHandler.Get)
+		skillRoutes.POST("/:name/execute", dependencies.RequireAdmin, dependencies.SkillHandler.Execute)
+		skillRoutes.POST("/:name/enable", dependencies.RequireAdmin, dependencies.SkillHandler.Enable)
+		skillRoutes.POST("/:name/disable", dependencies.RequireAdmin, dependencies.SkillHandler.Disable)
+
+		skillRunRoutes := router.Group("/api/skill-runs")
+		skillRunRoutes.Use(dependencies.Authenticate, dependencies.RequireAdmin)
+		skillRunRoutes.GET("", dependencies.SkillHandler.ListRuns)
 	}
 	if dependencies.AnalysisHandler != nil && dependencies.Authenticate != nil {
 		analysisRoutes := router.Group("/api/analysis")
