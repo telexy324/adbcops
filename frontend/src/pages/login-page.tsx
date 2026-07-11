@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Activity,
   ArrowRight,
@@ -8,6 +9,7 @@ import {
   Sparkles,
 } from "lucide-react";
 
+import { login } from "@/api/auth";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,10 +23,25 @@ import { Label } from "@/components/ui/label";
 
 export function LoginPage() {
   const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setNotice("认证能力将在 Task 1.1 接入；当前页面仅用于前端基础验收。");
+    setLoading(true);
+    setNotice("");
+    const form = new FormData(event.currentTarget);
+    try {
+      await login({
+        username: String(form.get("username") ?? ""),
+        password: String(form.get("password") ?? ""),
+      });
+      navigate("/knowledge");
+    } catch {
+      setNotice("登录失败，请检查用户名、密码或账号状态。");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -139,8 +156,13 @@ export function LoginPage() {
                     required
                   />
                 </div>
-                <Button type="submit" size="lg" className="w-full">
-                  登录平台
+                <Button
+                  type="submit"
+                  size="lg"
+                  className="w-full"
+                  disabled={loading}
+                >
+                  {loading ? "登录中..." : "登录平台"}
                   <ArrowRight className="size-4" aria-hidden="true" />
                 </Button>
                 {notice ? (

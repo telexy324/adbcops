@@ -1,0 +1,660 @@
+import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Archive,
+  Bot,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  MessageSquareText,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  UploadCloud,
+  XCircle,
+} from "lucide-react";
+
+import {
+  askKnowledge,
+  getDocumentChunks,
+  listDocuments,
+  reprocessDocument,
+  reviewAction,
+  reviewQuality,
+  toAPIErrorMessage,
+  uploadDocument,
+  type AskResponse,
+  type KnowledgeDocument,
+  type QualityResult,
+} from "@/api/knowledge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+
+const defaultQualityJSON = JSON.stringify(
+  {
+    score: 85,
+    summary: "结构清晰，排障步骤完整。",
+    findings: ["包含系统范围", "包含处置步骤"],
+    suggestions: ["补充负责人或维护人"],
+  },
+  null,
+  2,
+);
+
+const statusTone: Record<string, string> = {
+  draft: "bg-slate-100 text-slate-600",
+  reviewing: "bg-amber-100 text-amber-700",
+  published: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-rose-100 text-rose-700",
+  archived: "bg-slate-200 text-slate-600",
+  deprecated: "bg-violet-100 text-violet-700",
+};
+
+export function KnowledgePage() {
+  const queryClient = useQueryClient();
+  const [selectedID, setSelectedID] = useState<number | null>(null);
+  const [uploadForm, setUploadForm] = useState({
+    title: "",
+    systemName: "",
+    componentName: "",
+    environment: "prod",
+    docType: "runbook",
+    version: "v1.0",
+    tags: '["runbook"]',
+  });
+  const [file, setFile] = useState<File | null>(null);
+  const [qualityJSON, setQualityJSON] = useState(defaultQualityJSON);
+  const [comment, setComment] = useState("质量达标，允许进入正式知识库。");
+  const [question, setQuestion] = useState("数据库连接池耗尽时如何排查？");
+  const [conversationID, setConversationID] = useState<number | undefined>();
+  const [lastAnswer, setLastAnswer] = useState<AskResponse | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const documentsQuery = useQuery({
+    queryKey: ["knowledge", "documents"],
+    queryFn: listDocuments,
+  });
+
+  const documents = documentsQuery.data ?? [];
+  const selectedDocument = useMemo(
+    () => documents.find((document) => document.id === selectedID) ?? null,
+    [documents, selectedID],
+  );
+
+  const chunksQuery = useQuery({
+    queryKey: ["knowledge", "chunks", selectedID],
+    queryFn: () => getDocumentChunks(selectedID!),
+    enabled: selectedID !== null,
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: uploadDocument,
+    onSuccess: (document) => {
+      setSelectedID(document.id);
+      setNotice("上传成功，下一步可以解析切片。");
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const reprocessMutation = useMutation({
+    mutationFn: reprocessDocument,
+    onSuccess: () => {
+      setNotice("解析切片完成。");
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "chunks", selectedID] });
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const qualityMutation = useMutation({
+    mutationFn: ({ id, result }: { id: number; result: QualityResult }) =>
+      reviewQuality(id, result),
+    onSuccess: (response) => {
+      setSelectedID(response.document.id);
+      setNotice(`质检完成，状态：${response.document.status}`);
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: ({
+      id,
+      action,
+      reviewComment,
+    }: {
+      id: number;
+      action: "publish" | "reject" | "archive" | "deprecate";
+      reviewComment: string;
+    }) => reviewAction(id, action, reviewComment),
+    onSuccess: (response) => {
+      setSelectedID(response.document.id);
+      setNotice(`审核动作已提交：${response.document.status}`);
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const askMutation = useMutation({
+    mutationFn: askKnowledge,
+    onSuccess: (response) => {
+      setLastAnswer(response);
+      setConversationID(response.conversation.id);
+      setNotice("问答完成，已写入会话与 QA 记录。");
+      setError(null);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  function submitUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file) {
+      setError("请选择 .md 或 .txt 文件。");
+      return;
+    }
+    uploadMutation.mutate({ file, ...uploadForm });
+  }
+
+  function submitQuality(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedDocument) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(qualityJSON) as QualityResult;
+      qualityMutation.mutate({ id: selectedDocument.id, result: parsed });
+    } catch {
+      setError("质检 JSON 格式不正确。");
+    }
+  }
+
+  function submitAsk(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    askMutation.mutate({ conversationId: conversationID, question, limit: 5 });
+  }
+
+  return (
+    <div className="mx-auto max-w-[1600px] space-y-6">
+      <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
+        <div>
+          <p className="text-sm font-medium text-cyan-700">Knowledge Center</p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">
+            知识中心
+          </h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+            覆盖上传、解析、质检、审核发布与 RAG 问答。只有 published 文档会进入正式问答召回。
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <StatusPill label="上传" active />
+          <StatusPill label="切片" active />
+          <StatusPill label="质检" active />
+          <StatusPill label="审核" active />
+          <StatusPill label="Chat" active />
+        </div>
+      </section>
+
+      {(notice || error) && (
+        <div
+          role="status"
+          className={cn(
+            "rounded-xl border px-4 py-3 text-sm",
+            error
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700",
+          )}
+        >
+          {error ?? notice}
+        </div>
+      )}
+
+      <section className="grid gap-6 xl:grid-cols-[0.9fr_1.15fr_1fr]">
+        <Card className="border-slate-200/80 shadow-none">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="size-5 text-cyan-600" />
+              文档列表
+            </CardTitle>
+            <CardDescription>上传后会以 draft 状态进入知识库。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <form className="space-y-3" onSubmit={submitUpload}>
+              <Field label="标题">
+                <Input
+                  value={uploadForm.title}
+                  placeholder="支付系统排障手册"
+                  onChange={(event) =>
+                    setUploadForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="系统">
+                  <Input
+                    value={uploadForm.systemName}
+                    placeholder="payment"
+                    onChange={(event) =>
+                      setUploadForm((current) => ({
+                        ...current,
+                        systemName: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+                <Field label="环境">
+                  <Input
+                    value={uploadForm.environment}
+                    onChange={(event) =>
+                      setUploadForm((current) => ({
+                        ...current,
+                        environment: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="组件">
+                  <Input
+                    value={uploadForm.componentName}
+                    placeholder="payment-api"
+                    onChange={(event) =>
+                      setUploadForm((current) => ({
+                        ...current,
+                        componentName: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+                <Field label="类型">
+                  <Input
+                    value={uploadForm.docType}
+                    onChange={(event) =>
+                      setUploadForm((current) => ({
+                        ...current,
+                        docType: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+              </div>
+              <Field label="标签 JSON">
+                <Input
+                  value={uploadForm.tags}
+                  onChange={(event) =>
+                    setUploadForm((current) => ({
+                      ...current,
+                      tags: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+              <Field label="选择文件">
+                <Input
+                  type="file"
+                  accept=".md,.txt,text/plain,text/markdown"
+                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                />
+              </Field>
+              <Button className="w-full" disabled={uploadMutation.isPending}>
+                {uploadMutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <UploadCloud className="size-4" />
+                )}
+                上传文档
+              </Button>
+            </form>
+
+            <div className="space-y-2">
+              {documentsQuery.isLoading && (
+                <p className="text-sm text-slate-400">正在加载文档...</p>
+              )}
+              {documents.length === 0 && !documentsQuery.isLoading && (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-400">
+                  暂无文档。上传一份 Markdown 或 TXT 后开始流程。
+                </p>
+              )}
+              {documents.map((document) => (
+                <button
+                  key={document.id}
+                  type="button"
+                  onClick={() => setSelectedID(document.id)}
+                  className={cn(
+                    "w-full rounded-xl border p-3 text-left transition-colors",
+                    selectedID === document.id
+                      ? "border-cyan-300 bg-cyan-50"
+                      : "border-slate-200 bg-white hover:bg-slate-50",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-800">
+                        {document.title}
+                      </p>
+                      <p className="mt-1 truncate text-xs text-slate-400">
+                        {document.fileName}
+                      </p>
+                    </div>
+                    <Badge status={document.status} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    质量分：{document.qualityScore}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200/80 shadow-none">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="size-5 text-emerald-600" />
+              详情 / 质检 / 审核
+            </CardTitle>
+            <CardDescription>
+              先解析切片，再提交质检 JSON，通过后发布。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {!selectedDocument ? (
+              <div className="grid min-h-72 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-400">
+                请选择左侧文档。
+              </div>
+            ) : (
+              <>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-semibold text-slate-900">
+                        {selectedDocument.title}
+                      </h2>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {selectedDocument.fileName} · {selectedDocument.version}
+                      </p>
+                    </div>
+                    <Badge status={selectedDocument.status} />
+                  </div>
+                  <div className="mt-4 grid gap-3 text-xs text-slate-500 sm:grid-cols-2">
+                    <Info label="系统" value={selectedDocument.systemName} />
+                    <Info label="组件" value={selectedDocument.componentName} />
+                    <Info label="环境" value={selectedDocument.environment} />
+                    <Info label="质量分" value={String(selectedDocument.qualityScore)} />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => reprocessMutation.mutate(selectedDocument.id)}
+                    disabled={reprocessMutation.isPending}
+                  >
+                    <RefreshCw
+                      className={cn(
+                        "size-4",
+                        reprocessMutation.isPending && "animate-spin",
+                      )}
+                    />
+                    解析切片
+                  </Button>
+                  <ReviewButton
+                    icon={<CheckCircle2 className="size-4" />}
+                    label="发布"
+                    action={() =>
+                      actionMutation.mutate({
+                        id: selectedDocument.id,
+                        action: "publish",
+                        reviewComment: comment,
+                      })
+                    }
+                    disabled={actionMutation.isPending}
+                  />
+                  <ReviewButton
+                    icon={<XCircle className="size-4" />}
+                    label="驳回"
+                    action={() =>
+                      actionMutation.mutate({
+                        id: selectedDocument.id,
+                        action: "reject",
+                        reviewComment: comment,
+                      })
+                    }
+                    disabled={actionMutation.isPending}
+                  />
+                  <ReviewButton
+                    icon={<Archive className="size-4" />}
+                    label="归档"
+                    action={() =>
+                      actionMutation.mutate({
+                        id: selectedDocument.id,
+                        action: "archive",
+                        reviewComment: comment,
+                      })
+                    }
+                    disabled={actionMutation.isPending}
+                  />
+                </div>
+
+                <Field label="审核备注">
+                  <Input
+                    value={comment}
+                    onChange={(event) => setComment(event.target.value)}
+                  />
+                </Field>
+
+                <form className="space-y-3" onSubmit={submitQuality}>
+                  <Field label="质检 JSON">
+                    <textarea
+                      value={qualityJSON}
+                      onChange={(event) => setQualityJSON(event.target.value)}
+                      className="min-h-44 w-full rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </Field>
+                  <Button disabled={qualityMutation.isPending}>
+                    {qualityMutation.isPending && (
+                      <Loader2 className="size-4 animate-spin" />
+                    )}
+                    提交质检
+                  </Button>
+                </form>
+
+                <div className="rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                    <p className="text-sm font-semibold text-slate-700">
+                      Chunk 预览
+                    </p>
+                    <span className="text-xs text-slate-400">
+                      {chunksQuery.data?.chunkCount ?? 0} chunks
+                    </span>
+                  </div>
+                  <div className="max-h-72 space-y-2 overflow-y-auto p-3">
+                    {(chunksQuery.data?.chunks ?? []).slice(0, 5).map((chunk) => (
+                      <div
+                        key={chunk.id}
+                        className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"
+                      >
+                        <p className="mb-1 font-semibold text-slate-700">
+                          #{chunk.chunkIndex} {chunk.sourceSection ?? ""}
+                        </p>
+                        {chunk.content}
+                      </div>
+                    ))}
+                    {selectedID && !chunksQuery.isLoading && !chunksQuery.data?.chunkCount && (
+                      <p className="p-3 text-sm text-slate-400">
+                        暂无 chunk，点击“解析切片”生成。
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200/80 shadow-none">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MessageSquareText className="size-5 text-violet-600" />
+              Chat
+            </CardTitle>
+            <CardDescription>
+              向已发布知识库提问，并查看引用依据。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <form className="space-y-3" onSubmit={submitAsk}>
+              <Field label="问题">
+                <textarea
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  className="min-h-28 w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </Field>
+              <Button className="w-full" disabled={askMutation.isPending}>
+                {askMutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Send className="size-4" />
+                )}
+                发送问题
+              </Button>
+            </form>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <Bot className="size-4 text-violet-600" />
+                回答
+              </div>
+              {lastAnswer ? (
+                <div className="mt-3 space-y-4">
+                  <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                    {lastAnswer.answer}
+                  </p>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Citations
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      {lastAnswer.citations.length === 0 && (
+                        <p className="text-xs text-slate-400">
+                          无引用，系统已明确说明无依据。
+                        </p>
+                      )}
+                      {lastAnswer.citations.map((citation) => (
+                        <div
+                          key={`${citation.documentId}-${citation.chunkId}`}
+                          className="rounded-lg bg-white p-3 text-xs text-slate-600 ring-1 ring-slate-200"
+                        >
+                          <p className="font-semibold text-slate-700">
+                            doc #{citation.documentId} · chunk #
+                            {citation.chunkIndex}
+                          </p>
+                          <p className="mt-1 leading-5">{citation.snippet}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    会话 #{lastAnswer.conversation.id} · QA #
+                    {lastAnswer.qaRecordId} · 召回 {lastAnswer.recallCount}
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-3 text-sm leading-6 text-slate-400">
+                  发送一个问题后，这里会展示 answer、citations 与 QA 记录编号。
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function Badge({ status }: { status: string }) {
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+        statusTone[status] ?? "bg-slate-100 text-slate-600",
+      )}
+    >
+      {status}
+    </span>
+  );
+}
+
+function Info({ label, value }: { label: string; value?: string }) {
+  return (
+    <div>
+      <p className="text-slate-400">{label}</p>
+      <p className="mt-1 font-medium text-slate-700">{value || "--"}</p>
+    </div>
+  );
+}
+
+function StatusPill({ label, active }: { label: string; active: boolean }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-3 py-1 text-xs font-medium",
+        active ? "bg-cyan-50 text-cyan-700" : "bg-slate-100 text-slate-400",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function ReviewButton({
+  icon,
+  label,
+  action,
+  disabled,
+}: {
+  icon: ReactNode;
+  label: string;
+  action: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <Button type="button" variant="outline" onClick={action} disabled={disabled}>
+      {icon}
+      {label}
+    </Button>
+  );
+}
