@@ -29,6 +29,7 @@ import (
 	ragsvc "aiops-platform/backend/internal/rag"
 	"aiops-platform/backend/internal/repository"
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
+	"aiops-platform/backend/internal/toolregistry"
 	usersvc "aiops-platform/backend/internal/user"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -103,6 +104,7 @@ func run() error {
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
+	toolRegistry := toolregistry.NewBuiltinRegistry()
 	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
@@ -128,6 +130,7 @@ func run() error {
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
+	toolHandler := handler.NewToolHandler(toolRegistry)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 	k8sHandler := handler.NewK8sHandler(k8sService)
 	metricsHandler := handler.NewMetricsHandler(metricsService)
@@ -144,6 +147,7 @@ func run() error {
 			DataSourceHandler:   dataSourceHandler,
 			AnalysisHandler:     analysisHandler,
 			EventHandler:        eventHandler,
+			ToolHandler:         toolHandler,
 			SFTPHandler:         sftpHandler,
 			K8sHandler:          k8sHandler,
 			MetricsHandler:      metricsHandler,

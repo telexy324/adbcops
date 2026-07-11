@@ -12,6 +12,7 @@ import (
 
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/toolregistry"
 	"github.com/gin-gonic/gin"
 )
 
@@ -102,6 +103,40 @@ func TestUserAccessingAdminAPIIsForbidden(t *testing.T) {
 
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
+
+func TestToolRoutesExposeManagementButNotGenericInvoke(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	admin := &model.AppUser{ID: 1, Username: "admin", Role: model.RoleAdmin, Enabled: true}
+	router := NewRouter(discardLogger(), RouterDependencies{
+		ToolHandler:  NewToolHandler(toolregistry.NewBuiltinRegistry()),
+		Authenticate: appmiddleware.Authenticate(&routerFakeAuthenticator{user: admin}),
+		RequireAdmin: appmiddleware.RequireAdmin(),
+	})
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/tools", nil)
+	listRequest.Header.Set("Authorization", "Bearer valid-token")
+	listResponse := httptest.NewRecorder()
+	router.ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d", listResponse.Code, http.StatusOK)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/tools/kubernetes", nil)
+	getRequest.Header.Set("Authorization", "Bearer valid-token")
+	getResponse := httptest.NewRecorder()
+	router.ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d", getResponse.Code, http.StatusOK)
+	}
+
+	invokeRequest := httptest.NewRequest(http.MethodPost, "/api/tools/kubernetes/invoke", strings.NewReader(`{}`))
+	invokeRequest.Header.Set("Authorization", "Bearer valid-token")
+	invokeResponse := httptest.NewRecorder()
+	router.ServeHTTP(invokeResponse, invokeRequest)
+	if invokeResponse.Code != http.StatusNotFound {
+		t.Fatalf("invoke status = %d, want %d", invokeResponse.Code, http.StatusNotFound)
 	}
 }
 

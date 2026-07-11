@@ -612,3 +612,25 @@ Content-Type: application/json
 ```
 
 若 Alertmanager 未提供 `fingerprint`，平台会使用 `alertname + environment + system + component + resource_identity` 生成稳定指纹。响应返回写入或归并后的事件摘要：`id`、`fingerprint`、`status`、`severity`、`summary`、`occurrenceCount` 和可选 `resolvedAt`。
+
+## Tool Registry
+
+Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。
+
+```http
+GET  /api/tools
+GET  /api/tools/{name}
+POST /api/tools/{name}/test
+POST /api/tools/{name}/enable
+POST /api/tools/{name}/disable
+```
+
+已注册内置 Tool：
+
+- `elasticsearch`
+- `ssh_sftp`
+- `kubernetes`
+- `prometheus`
+- `alertmanager`
+
+`GET` 接口要求登录；`test`、`enable`、`disable` 要求管理员。禁用 Tool 后，后续 Skill Framework 会通过 Registry 拒绝依赖该 Tool 的 Skill 执行。

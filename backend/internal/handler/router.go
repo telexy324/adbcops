@@ -17,6 +17,7 @@ type RouterDependencies struct {
 	DataSourceHandler   *DataSourceHandler
 	AnalysisHandler     *AnalysisHandler
 	EventHandler        *EventHandler
+	ToolHandler         *ToolHandler
 	SFTPHandler         *SFTPHandler
 	K8sHandler          *K8sHandler
 	MetricsHandler      *MetricsHandler
@@ -108,6 +109,15 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		dataSourceRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Update)
 		dataSourceRoutes.DELETE("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Delete)
 		dataSourceRoutes.POST("/:id/test", dependencies.RequireAdmin, dependencies.DataSourceHandler.Test)
+	}
+	if dependencies.ToolHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		toolRoutes := router.Group("/api/tools")
+		toolRoutes.Use(dependencies.Authenticate)
+		toolRoutes.GET("", dependencies.ToolHandler.List)
+		toolRoutes.GET("/:name", dependencies.ToolHandler.Get)
+		toolRoutes.POST("/:name/test", dependencies.RequireAdmin, dependencies.ToolHandler.Test)
+		toolRoutes.POST("/:name/enable", dependencies.RequireAdmin, dependencies.ToolHandler.Enable)
+		toolRoutes.POST("/:name/disable", dependencies.RequireAdmin, dependencies.ToolHandler.Disable)
 	}
 	if dependencies.AnalysisHandler != nil && dependencies.Authenticate != nil {
 		analysisRoutes := router.Group("/api/analysis")
