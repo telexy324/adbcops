@@ -613,6 +613,39 @@ Content-Type: application/json
 
 若 Alertmanager 未提供 `fingerprint`，平台会使用 `alertname + environment + system + component + resource_identity` 生成稳定指纹。响应返回写入或归并后的事件摘要：`id`、`fingerprint`、`status`、`severity`、`summary`、`occurrenceCount` 和可选 `resolvedAt`。
 
+### Event Center API
+
+```http
+POST /api/events/manual
+GET  /api/events
+GET  /api/events/{id}
+```
+
+`/api/events/alertmanager` 用于外部 webhook，不要求登录；其他 Event API 要求登录。`manual` 接口用于把日志异常、K8s Event、人工备注等统一写入 `ops_event`：
+
+```json
+{
+  "sourceType": "log_anomaly",
+  "eventType": "error_spike",
+  "severity": "warning",
+  "status": "observed",
+  "environment": "prod",
+  "systemName": "payment",
+  "componentName": "payment-api",
+  "namespace": "prod",
+  "resourceKind": "Pod",
+  "resourceName": "payment-api-0",
+  "summary": "payment api error logs spiked",
+  "payload": {
+    "errorCount": 42
+  }
+}
+```
+
+支持的 `sourceType` 包括：`alert`、`alertmanager`、`log_anomaly`、`metric_anomaly`、`k8s_event`、`release`、`config_change`、`git_change`、`database_change`、`manual_note`。未传 `fingerprint` 时，平台会基于 `sourceType + eventType + environment + system + component + namespace + resource` 生成稳定指纹并做归并。
+
+列表查询支持 `limit`、`sourceType`、`status`、`environment`、`systemName`、`componentName`、`namespace`、`resourceName`、`from`、`to`。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/repository"
 )
 
 const (
@@ -24,6 +25,8 @@ var (
 
 type Repository interface {
 	UpsertOpsEvent(ctx context.Context, event *model.OpsEvent) (*model.OpsEvent, error)
+	FindOpsEventByID(ctx context.Context, id int64) (*model.OpsEvent, error)
+	ListOpsEvents(ctx context.Context, filters repository.EventFilters) ([]model.OpsEvent, error)
 }
 
 type Service struct {
@@ -68,6 +71,40 @@ type OpsEventSummary struct {
 	ResolvedAt      *time.Time `json:"resolvedAt,omitempty"`
 }
 
+type NormalizedEventInput struct {
+	EventTime     *time.Time     `json:"eventTime"`
+	SourceType    string         `json:"sourceType"`
+	SourceID      string         `json:"sourceId"`
+	EventType     string         `json:"eventType"`
+	Severity      string         `json:"severity"`
+	Status        string         `json:"status"`
+	Environment   string         `json:"environment"`
+	SystemName    string         `json:"systemName"`
+	ComponentName string         `json:"componentName"`
+	Cluster       string         `json:"cluster"`
+	Namespace     string         `json:"namespace"`
+	ResourceKind  string         `json:"resourceKind"`
+	ResourceName  string         `json:"resourceName"`
+	Host          string         `json:"host"`
+	TraceID       string         `json:"traceId"`
+	Fingerprint   string         `json:"fingerprint"`
+	Summary       string         `json:"summary"`
+	Payload       map[string]any `json:"payload"`
+}
+
+type EventQuery struct {
+	Limit         int
+	SourceType    string
+	Status        string
+	Environment   string
+	SystemName    string
+	ComponentName string
+	Namespace     string
+	ResourceName  string
+	From          *time.Time
+	To            *time.Time
+}
+
 func NewService(repository Repository) *Service {
 	return &Service{repository: repository}
 }
@@ -89,6 +126,86 @@ func (s *Service) ReceiveAlertmanager(ctx context.Context, webhook AlertmanagerW
 		result.Events = append(result.Events, toSummary(saved))
 	}
 	return result, nil
+}
+
+func (s *Service) CreateManualEvent(ctx context.Context, input NormalizedEventInput) (*model.OpsEvent, error) {
+	event, err := NormalizeEvent(input)
+	if err != nil {
+		return nil, err
+	}
+	return s.repository.UpsertOpsEvent(ctx, event)
+}
+
+func (s *Service) ListEvents(ctx context.Context, query EventQuery) ([]model.OpsEvent, error) {
+	return s.repository.ListOpsEvents(ctx, repository.EventFilters{
+		Limit:         query.Limit,
+		SourceType:    strings.TrimSpace(query.SourceType),
+		Status:        strings.TrimSpace(query.Status),
+		Environment:   strings.TrimSpace(query.Environment),
+		SystemName:    strings.TrimSpace(query.SystemName),
+		ComponentName: strings.TrimSpace(query.ComponentName),
+		Namespace:     strings.TrimSpace(query.Namespace),
+		ResourceName:  strings.TrimSpace(query.ResourceName),
+		From:          query.From,
+		To:            query.To,
+	})
+}
+
+func (s *Service) GetEvent(ctx context.Context, id int64) (*model.OpsEvent, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.FindOpsEventByID(ctx, id)
+}
+
+func NormalizeEvent(input NormalizedEventInput) (*model.OpsEvent, error) {
+	sourceType := normalizeString(input.SourceType)
+	eventType := normalizeString(input.EventType)
+	summary := normalizeString(input.Summary)
+	if !validSourceType(sourceType) || eventType == "" || summary == "" {
+		return nil, ErrInvalidInput
+	}
+	status := normalizeEventStatus(input.Status)
+	if status == "" {
+		return nil, ErrInvalidInput
+	}
+	eventTime := time.Now().UTC()
+	if input.EventTime != nil && !input.EventTime.IsZero() {
+		eventTime = input.EventTime.UTC()
+	}
+	payload, err := json.Marshal(input.Payload)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+	fingerprint := strings.TrimSpace(input.Fingerprint)
+	if fingerprint == "" {
+		fingerprint = generatedEventFingerprint(sourceType, eventType, input)
+	}
+	var resolvedAt *time.Time
+	if status == model.EventStatusResolved {
+		resolvedAt = &eventTime
+	}
+	return &model.OpsEvent{
+		EventTime:     eventTime,
+		SourceType:    sourceType,
+		SourceID:      stringPtr(input.SourceID),
+		EventType:     eventType,
+		Severity:      stringPtr(input.Severity),
+		Status:        status,
+		Environment:   stringPtr(input.Environment),
+		SystemName:    stringPtr(input.SystemName),
+		ComponentName: stringPtr(input.ComponentName),
+		Cluster:       stringPtr(input.Cluster),
+		Namespace:     stringPtr(input.Namespace),
+		ResourceKind:  stringPtr(input.ResourceKind),
+		ResourceName:  stringPtr(input.ResourceName),
+		Host:          stringPtr(input.Host),
+		TraceID:       stringPtr(input.TraceID),
+		Fingerprint:   stringPtr(fingerprint),
+		Summary:       summary,
+		Payload:       payload,
+		ResolvedAt:    resolvedAt,
+	}, nil
 }
 
 func buildOpsEvent(webhook AlertmanagerWebhook, alert AlertmanagerAlert) (*model.OpsEvent, error) {
@@ -178,6 +295,23 @@ func generatedFingerprint(labels map[string]string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func generatedEventFingerprint(sourceType, eventType string, input NormalizedEventInput) string {
+	resourceIdentity := firstNonEmpty(input.ResourceName, input.Host, input.Namespace, input.SourceID)
+	joined := strings.Join([]string{
+		sourceType,
+		eventType,
+		input.Environment,
+		input.SystemName,
+		input.ComponentName,
+		input.Cluster,
+		input.Namespace,
+		input.ResourceKind,
+		resourceIdentity,
+	}, "|")
+	sum := sha256.Sum256([]byte(strings.ToLower(joined)))
+	return hex.EncodeToString(sum[:])
+}
+
 func mergeLabels(base, override map[string]string) map[string]string {
 	merged := make(map[string]string, len(base)+len(override))
 	for key, value := range base {
@@ -197,6 +331,37 @@ func normalizeStatus(value string) string {
 		return model.EventStatusResolved
 	default:
 		return ""
+	}
+}
+
+func normalizeEventStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", model.EventStatusObserved:
+		return model.EventStatusObserved
+	case model.EventStatusFiring:
+		return model.EventStatusFiring
+	case model.EventStatusResolved:
+		return model.EventStatusResolved
+	default:
+		return ""
+	}
+}
+
+func validSourceType(value string) bool {
+	switch value {
+	case model.EventSourceAlert,
+		model.EventSourceAlertmanager,
+		model.EventSourceLogAnomaly,
+		model.EventSourceMetricAnomaly,
+		model.EventSourceK8sEvent,
+		model.EventSourceRelease,
+		model.EventSourceConfigChange,
+		model.EventSourceGitChange,
+		model.EventSourceDBChange,
+		model.EventSourceManualNote:
+		return true
+	default:
+		return false
 	}
 }
 

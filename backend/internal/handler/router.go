@@ -42,6 +42,13 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 	if dependencies.EventHandler != nil {
 		eventRoutes := router.Group("/api/events")
 		eventRoutes.POST("/alertmanager", dependencies.EventHandler.Alertmanager)
+		if dependencies.Authenticate != nil {
+			protectedEventRoutes := eventRoutes.Group("")
+			protectedEventRoutes.Use(dependencies.Authenticate)
+			protectedEventRoutes.POST("/manual", dependencies.EventHandler.Manual)
+			protectedEventRoutes.GET("", dependencies.EventHandler.List)
+			protectedEventRoutes.GET("/:id", dependencies.EventHandler.Get)
+		}
 	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")

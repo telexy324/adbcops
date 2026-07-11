@@ -3,10 +3,20 @@ package model
 import "time"
 
 const (
-	EventSourceAlertmanager = "alertmanager"
+	EventSourceAlertmanager  = "alertmanager"
+	EventSourceAlert         = "alert"
+	EventSourceLogAnomaly    = "log_anomaly"
+	EventSourceMetricAnomaly = "metric_anomaly"
+	EventSourceK8sEvent      = "k8s_event"
+	EventSourceRelease       = "release"
+	EventSourceConfigChange  = "config_change"
+	EventSourceGitChange     = "git_change"
+	EventSourceDBChange      = "database_change"
+	EventSourceManualNote    = "manual_note"
 
 	EventStatusFiring   = "firing"
 	EventStatusResolved = "resolved"
+	EventStatusObserved = "observed"
 )
 
 type OpsEvent struct {
