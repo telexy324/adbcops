@@ -27,6 +27,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Address() != ":8080" {
 		t.Fatalf("Address() = %q, want %q", cfg.Address(), ":8080")
 	}
+	if cfg.FileStorage.LocalFileDir != defaultLocalFileDir || cfg.FileStorage.MaxUploadBytes != defaultMaxUploadBytes {
+		t.Fatalf("FileStorage = %+v", cfg.FileStorage)
+	}
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
@@ -39,7 +42,10 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("DB_PASSWORD", "p@ss:/?#[]")
 	t.Setenv("DB_NAME", "aiops-test")
 	t.Setenv("DB_SSLMODE", "require")
+	t.Setenv("LOCAL_FILE_DIR", "/tmp/adbcops-test-uploads")
+	t.Setenv("MAX_UPLOAD_BYTES", "1024")
 	setAuthEnv(t)
+	setCredentialEnv(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -58,6 +64,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if parsedDSN.Host != "db.internal:5433" || parsedDSN.Path != "/aiops-test" {
 		t.Fatalf("database DSN target = %q%q", parsedDSN.Host, parsedDSN.Path)
+	}
+	if cfg.FileStorage.LocalFileDir != "/tmp/adbcops-test-uploads" || cfg.FileStorage.MaxUploadBytes != 1024 {
+		t.Fatalf("FileStorage = %+v", cfg.FileStorage)
 	}
 }
 
@@ -154,4 +163,11 @@ func setAuthEnv(t *testing.T) {
 	t.Setenv("JWT_EXPIRE_HOURS", "")
 	t.Setenv("INITIAL_ADMIN_USERNAME", "admin")
 	t.Setenv("INITIAL_ADMIN_PASSWORD", "test-admin-password")
+	setCredentialEnv(t)
+}
+
+func setCredentialEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("CREDENTIAL_MASTER_KEY", "test-credential-master-key-32-bytes")
+	t.Setenv("CREDENTIAL_KEY_VERSION", "v1")
 }

@@ -2,6 +2,16 @@
 
 数据模型基线见 [`features.md`](../features.md)。
 
+当前已落地迁移：
+
+- `000001_enable_pg_trgm`
+- `000002_create_users`
+- `000003_create_conversations`
+- `000004_create_llm_configs`
+- `000005_create_kb_documents`
+
+`kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
+
 ## 迁移规则
 
 - SQL 迁移位于 `backend/migrations`，使用递增版本号和 `.up.sql`、`.down.sql` 文件。

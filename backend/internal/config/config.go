@@ -11,15 +11,17 @@ import (
 )
 
 const (
-	defaultEnvironment = "dev"
-	defaultPort        = 8080
-	defaultTimezone    = "Asia/Shanghai"
-	defaultDBHost      = "127.0.0.1"
-	defaultDBPort      = 5432
-	defaultDBUser      = "postgres"
-	defaultDBName      = "aiops"
-	defaultDBSSLMode   = "disable"
-	defaultJWTExpiry   = 12
+	defaultEnvironment    = "dev"
+	defaultPort           = 8080
+	defaultTimezone       = "Asia/Shanghai"
+	defaultDBHost         = "127.0.0.1"
+	defaultDBPort         = 5432
+	defaultDBUser         = "postgres"
+	defaultDBName         = "aiops"
+	defaultDBSSLMode      = "disable"
+	defaultJWTExpiry      = 12
+	defaultLocalFileDir   = "./data/uploads"
+	defaultMaxUploadBytes = 52428800
 )
 
 var allowedSSLMode = map[string]struct{}{
@@ -51,6 +53,17 @@ type AuthConfig struct {
 	InitialAdminPassword string
 }
 
+// CredentialConfig contains encryption settings for persisted secrets.
+type CredentialConfig struct {
+	MasterKey  string
+	KeyVersion string
+}
+
+type FileStorageConfig struct {
+	LocalFileDir   string
+	MaxUploadBytes int64
+}
+
 // DSN returns a PostgreSQL URL. The returned value contains the database
 // password and must only be passed directly to database drivers.
 func (c DatabaseConfig) DSN() string {
@@ -73,6 +86,8 @@ type Config struct {
 	Timezone    string
 	Database    DatabaseConfig
 	Auth        AuthConfig
+	Credential  CredentialConfig
+	FileStorage FileStorageConfig
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -94,6 +109,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	credential, err := loadCredentialConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	fileStorage, err := loadFileStorageConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment: valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
@@ -101,6 +124,8 @@ func Load() (Config, error) {
 		Timezone:    timezone,
 		Database:    database,
 		Auth:        auth,
+		Credential:  credential,
+		FileStorage: fileStorage,
 	}, nil
 }
 
@@ -134,6 +159,34 @@ func loadAuthConfig() (AuthConfig, error) {
 		InitialAdminUsername: username,
 		InitialAdminPassword: password,
 	}, nil
+}
+
+func loadCredentialConfig() (CredentialConfig, error) {
+	masterKey := os.Getenv("CREDENTIAL_MASTER_KEY")
+	if len(masterKey) < 32 {
+		return CredentialConfig{}, fmt.Errorf("CREDENTIAL_MASTER_KEY must contain at least 32 characters")
+	}
+	keyVersion := strings.TrimSpace(os.Getenv("CREDENTIAL_KEY_VERSION"))
+	if keyVersion == "" || len(keyVersion) > 50 {
+		return CredentialConfig{}, fmt.Errorf("CREDENTIAL_KEY_VERSION is required and must not exceed 50 characters")
+	}
+	return CredentialConfig{MasterKey: masterKey, KeyVersion: keyVersion}, nil
+}
+
+func loadFileStorageConfig() (FileStorageConfig, error) {
+	localFileDir := strings.TrimSpace(os.Getenv("LOCAL_FILE_DIR"))
+	if localFileDir == "" {
+		localFileDir = defaultLocalFileDir
+	}
+	maxUploadBytes := int64(defaultMaxUploadBytes)
+	if raw := strings.TrimSpace(os.Getenv("MAX_UPLOAD_BYTES")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 1 || parsed > defaultMaxUploadBytes {
+			return FileStorageConfig{}, fmt.Errorf("invalid MAX_UPLOAD_BYTES %q: must be from 1 to %d", raw, defaultMaxUploadBytes)
+		}
+		maxUploadBytes = parsed
+	}
+	return FileStorageConfig{LocalFileDir: localFileDir, MaxUploadBytes: maxUploadBytes}, nil
 }
 
 // Address returns the TCP listen address for the HTTP server.

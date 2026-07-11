@@ -45,6 +45,26 @@ func AuthenticatedUser(c *gin.Context) (*model.AppUser, bool) {
 	return user, ok
 }
 
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, ok := AuthenticatedUser(c)
+		if !ok {
+			abortUnauthorized(c)
+			return
+		}
+		if user.Role != model.RoleAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"code":      40301,
+				"message":   "admin role required",
+				"data":      nil,
+				"requestId": GetRequestID(c),
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
 func abortUnauthorized(c *gin.Context) {
 	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 		"code":      40101,

@@ -50,6 +50,23 @@ func TestAuthenticateStoresCurrentUser(t *testing.T) {
 	}
 }
 
+func TestRequireAdminRejectsNormalUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	normalUser := &model.AppUser{ID: 8, Username: "operator", Role: model.RoleUser, Enabled: true}
+	router := gin.New()
+	router.Use(RequestID(), Authenticate(&fakeAuthenticator{user: normalUser}), RequireAdmin())
+	router.GET("/admin", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	request := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
+
 type fakeAuthenticator struct {
 	user *model.AppUser
 }

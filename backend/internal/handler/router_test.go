@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	appmiddleware "aiops-platform/backend/internal/middleware"
+	"aiops-platform/backend/internal/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -84,6 +86,36 @@ func TestRecoveryIncludesRequestID(t *testing.T) {
 	}
 }
 
+func TestUserAccessingAdminAPIIsForbidden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	normalUser := &model.AppUser{ID: 11, Username: "operator", Role: model.RoleUser, Enabled: true}
+	router := NewRouter(discardLogger(), RouterDependencies{
+		UserHandler:  &UserHandler{},
+		Authenticate: appmiddleware.Authenticate(&routerFakeAuthenticator{user: normalUser}),
+		RequireAdmin: appmiddleware.RequireAdmin(),
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+}
+
+type routerFakeAuthenticator struct {
+	user *model.AppUser
+}
+
+func (f *routerFakeAuthenticator) Authenticate(_ context.Context, token string) (*model.AppUser, error) {
+	if token != "valid-token" || f.user == nil {
+		return nil, http.ErrNoCookie
+	}
+	return f.user, nil
 }

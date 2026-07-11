@@ -8,9 +8,13 @@ import (
 
 	"aiops-platform/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-var ErrNotFound = errors.New("record not found")
+var (
+	ErrNotFound  = errors.New("record not found")
+	ErrLastAdmin = errors.New("cannot disable or demote the last enabled admin")
+)
 
 // UserRepository owns database access for users and login audits.
 type UserRepository interface {
@@ -19,6 +23,12 @@ type UserRepository interface {
 	CreateUser(ctx context.Context, user *model.AppUser) error
 	RecordLogin(ctx context.Context, audit *model.LoginAudit, lastLoginAt *time.Time) error
 	UpdatePassword(ctx context.Context, userID int64, passwordHash string, changedAt time.Time) error
+}
+
+type UserUpdates struct {
+	DisplayName    *string
+	DisplayNameSet bool
+	Role           *string
 }
 
 type GORMUserRepository struct {
@@ -50,6 +60,79 @@ func (r *GORMUserRepository) CreateUser(ctx context.Context, user *model.AppUser
 		return fmt.Errorf("create user: %w", err)
 	}
 	return nil
+}
+
+func (r *GORMUserRepository) ListUsers(ctx context.Context) ([]model.AppUser, error) {
+	var users []model.AppUser
+	if err := r.db.WithContext(ctx).Order("id ASC").Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	return users, nil
+}
+
+func (r *GORMUserRepository) UpdateUser(ctx context.Context, userID int64, updates UserUpdates) (*model.AppUser, error) {
+	var updated model.AppUser
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user model.AppUser
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, userID).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		if updates.Role != nil && user.Role == model.RoleAdmin && *updates.Role != model.RoleAdmin && user.Enabled {
+			if err := ensureMoreThanOneEnabledAdmin(tx); err != nil {
+				return err
+			}
+		}
+
+		values := map[string]any{"updated_at": time.Now().UTC()}
+		if updates.DisplayNameSet {
+			values["display_name"] = updates.DisplayName
+		}
+		if updates.Role != nil {
+			values["role"] = *updates.Role
+		}
+		if len(values) > 1 {
+			if err := tx.Model(&model.AppUser{}).Where("id = ?", userID).Updates(values).Error; err != nil {
+				return fmt.Errorf("update user: %w", err)
+			}
+		}
+		if err := tx.First(&updated, userID).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (r *GORMUserRepository) SetUserEnabled(ctx context.Context, userID int64, enabled bool) (*model.AppUser, error) {
+	var updated model.AppUser
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user model.AppUser
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, userID).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		if !enabled && user.Enabled && user.Role == model.RoleAdmin {
+			if err := ensureMoreThanOneEnabledAdmin(tx); err != nil {
+				return err
+			}
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&model.AppUser{}).
+			Where("id = ?", userID).
+			Updates(map[string]any{"enabled": enabled, "updated_at": now}).Error; err != nil {
+			return fmt.Errorf("set user enabled: %w", err)
+		}
+		if err := tx.First(&updated, userID).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
 }
 
 func (r *GORMUserRepository) RecordLogin(ctx context.Context, audit *model.LoginAudit, lastLoginAt *time.Time) error {
@@ -85,6 +168,19 @@ func (r *GORMUserRepository) UpdatePassword(ctx context.Context, userID int64, p
 	}
 	if result.RowsAffected != 1 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+func ensureMoreThanOneEnabledAdmin(tx *gorm.DB) error {
+	var admins []model.AppUser
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("role = ? AND enabled = ?", model.RoleAdmin, true).
+		Find(&admins).Error; err != nil {
+		return fmt.Errorf("count enabled admins: %w", err)
+	}
+	if len(admins) <= 1 {
+		return ErrLastAdmin
 	}
 	return nil
 }
