@@ -84,7 +84,7 @@ func run() error {
 	}
 	conversationService := conversationsvc.NewService(conversationRepository)
 	llmService := llmsvc.NewService(llmRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
-	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes)
+	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
 	}

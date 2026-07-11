@@ -11,17 +11,19 @@ import (
 )
 
 const (
-	defaultEnvironment    = "dev"
-	defaultPort           = 8080
-	defaultTimezone       = "Asia/Shanghai"
-	defaultDBHost         = "127.0.0.1"
-	defaultDBPort         = 5432
-	defaultDBUser         = "postgres"
-	defaultDBName         = "aiops"
-	defaultDBSSLMode      = "disable"
-	defaultJWTExpiry      = 12
-	defaultLocalFileDir   = "./data/uploads"
-	defaultMaxUploadBytes = 52428800
+	defaultEnvironment     = "dev"
+	defaultPort            = 8080
+	defaultTimezone        = "Asia/Shanghai"
+	defaultDBHost          = "127.0.0.1"
+	defaultDBPort          = 5432
+	defaultDBUser          = "postgres"
+	defaultDBName          = "aiops"
+	defaultDBSSLMode       = "disable"
+	defaultJWTExpiry       = 12
+	defaultLocalFileDir    = "./data/uploads"
+	defaultMaxUploadBytes  = 52428800
+	defaultRAGChunkSize    = 800
+	defaultRAGChunkOverlap = 100
 )
 
 var allowedSSLMode = map[string]struct{}{
@@ -64,6 +66,11 @@ type FileStorageConfig struct {
 	MaxUploadBytes int64
 }
 
+type RAGConfig struct {
+	ChunkSize    int
+	ChunkOverlap int
+}
+
 // DSN returns a PostgreSQL URL. The returned value contains the database
 // password and must only be passed directly to database drivers.
 func (c DatabaseConfig) DSN() string {
@@ -88,6 +95,7 @@ type Config struct {
 	Auth        AuthConfig
 	Credential  CredentialConfig
 	FileStorage FileStorageConfig
+	RAG         RAGConfig
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -117,6 +125,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	rag, err := loadRAGConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment: valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
@@ -126,6 +138,7 @@ func Load() (Config, error) {
 		Auth:        auth,
 		Credential:  credential,
 		FileStorage: fileStorage,
+		RAG:         rag,
 	}, nil
 }
 
@@ -187,6 +200,26 @@ func loadFileStorageConfig() (FileStorageConfig, error) {
 		maxUploadBytes = parsed
 	}
 	return FileStorageConfig{LocalFileDir: localFileDir, MaxUploadBytes: maxUploadBytes}, nil
+}
+
+func loadRAGConfig() (RAGConfig, error) {
+	chunkSize := defaultRAGChunkSize
+	if raw := strings.TrimSpace(os.Getenv("RAG_CHUNK_SIZE")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 50 || parsed > 10000 {
+			return RAGConfig{}, fmt.Errorf("invalid RAG_CHUNK_SIZE %q: must be from 50 to 10000", raw)
+		}
+		chunkSize = parsed
+	}
+	chunkOverlap := defaultRAGChunkOverlap
+	if raw := strings.TrimSpace(os.Getenv("RAG_CHUNK_OVERLAP")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 || parsed >= chunkSize {
+			return RAGConfig{}, fmt.Errorf("invalid RAG_CHUNK_OVERLAP %q: must be from 0 to less than RAG_CHUNK_SIZE", raw)
+		}
+		chunkOverlap = parsed
+	}
+	return RAGConfig{ChunkSize: chunkSize, ChunkOverlap: chunkOverlap}, nil
 }
 
 // Address returns the TCP listen address for the HTTP server.

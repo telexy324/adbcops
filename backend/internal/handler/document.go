@@ -41,6 +41,21 @@ type documentResponse struct {
 	UpdatedAt     string          `json:"updatedAt"`
 }
 
+type chunkResponse struct {
+	ID            int64   `json:"id"`
+	DocumentID    int64   `json:"documentId"`
+	ChunkIndex    int     `json:"chunkIndex"`
+	Content       string  `json:"content"`
+	SourceTitle   *string `json:"sourceTitle,omitempty"`
+	SourceSection *string `json:"sourceSection,omitempty"`
+	TokenCount    int     `json:"tokenCount"`
+	CreatedAt     string  `json:"createdAt"`
+}
+
+type reviewDocumentRequest struct {
+	Result json.RawMessage `json:"result" binding:"required"`
+}
+
 func (h *DocumentHandler) Upload(c *gin.Context) {
 	actor, ok := currentUser(c)
 	if !ok {
@@ -100,6 +115,72 @@ func (h *DocumentHandler) Get(c *gin.Context) {
 	success(c, toDocumentResponse(document))
 }
 
+func (h *DocumentHandler) Reprocess(c *gin.Context) {
+	actor, documentID, ok := currentUserAndDocumentID(c)
+	if !ok {
+		return
+	}
+	chunks, err := h.service.Reprocess(c.Request.Context(), actor, documentID)
+	if handleDocumentError(c, err, "reprocess document failed") {
+		return
+	}
+	success(c, gin.H{
+		"documentId": documentID,
+		"chunkCount": len(chunks),
+		"chunks":     toChunkResponses(chunks),
+	})
+}
+
+func (h *DocumentHandler) Chunks(c *gin.Context) {
+	actor, documentID, ok := currentUserAndDocumentID(c)
+	if !ok {
+		return
+	}
+	chunks, err := h.service.ListChunks(c.Request.Context(), actor, documentID)
+	if handleDocumentError(c, err, "list document chunks failed") {
+		return
+	}
+	success(c, gin.H{
+		"documentId": documentID,
+		"chunkCount": len(chunks),
+		"chunks":     toChunkResponses(chunks),
+	})
+}
+
+func (h *DocumentHandler) Review(c *gin.Context) {
+	actor, documentID, ok := currentUserAndDocumentID(c)
+	if !ok {
+		return
+	}
+	var request reviewDocumentRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid JSON request")
+		return
+	}
+	document, result, err := h.service.ReviewQuality(c.Request.Context(), actor, documentID, request.Result)
+	if handleDocumentError(c, err, "review document failed") {
+		return
+	}
+	success(c, gin.H{
+		"document":      toDocumentResponse(document),
+		"qualityResult": result,
+		"canPublish":    documentsvc.CanPublish(document),
+	})
+}
+
+func currentUserAndDocumentID(c *gin.Context) (*model.AppUser, int64, bool) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return nil, 0, false
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return nil, 0, false
+	}
+	return actor, id, true
+}
+
 func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
@@ -113,6 +194,8 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40004, "file path is not allowed")
 	case errors.Is(err, documentsvc.ErrInvalidFile), errors.Is(err, documentsvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
+	case errors.Is(err, documentsvc.ErrInvalidQualityJSON):
+		failure(c, http.StatusBadRequest, 40005, err.Error())
 	case errors.Is(err, documentsvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40303, "document access forbidden")
 	case errors.Is(err, repository.ErrNotFound):
@@ -141,5 +224,26 @@ func toDocumentResponse(document *model.KBDocument) documentResponse {
 		CreatedBy:     document.CreatedBy,
 		CreatedAt:     document.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:     document.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func toChunkResponses(chunks []model.KBChunk) []chunkResponse {
+	response := make([]chunkResponse, 0, len(chunks))
+	for index := range chunks {
+		response = append(response, toChunkResponse(&chunks[index]))
+	}
+	return response
+}
+
+func toChunkResponse(chunk *model.KBChunk) chunkResponse {
+	return chunkResponse{
+		ID:            chunk.ID,
+		DocumentID:    chunk.DocumentID,
+		ChunkIndex:    chunk.ChunkIndex,
+		Content:       chunk.Content,
+		SourceTitle:   chunk.SourceTitle,
+		SourceSection: chunk.SourceSection,
+		TokenCount:    chunk.TokenCount,
+		CreatedAt:     chunk.CreatedAt.Format(time.RFC3339),
 	}
 }

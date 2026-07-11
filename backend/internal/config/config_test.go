@@ -30,6 +30,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.FileStorage.LocalFileDir != defaultLocalFileDir || cfg.FileStorage.MaxUploadBytes != defaultMaxUploadBytes {
 		t.Fatalf("FileStorage = %+v", cfg.FileStorage)
 	}
+	if cfg.RAG.ChunkSize != defaultRAGChunkSize || cfg.RAG.ChunkOverlap != defaultRAGChunkOverlap {
+		t.Fatalf("RAG = %+v", cfg.RAG)
+	}
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
@@ -44,6 +47,8 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("DB_SSLMODE", "require")
 	t.Setenv("LOCAL_FILE_DIR", "/tmp/adbcops-test-uploads")
 	t.Setenv("MAX_UPLOAD_BYTES", "1024")
+	t.Setenv("RAG_CHUNK_SIZE", "120")
+	t.Setenv("RAG_CHUNK_OVERLAP", "20")
 	setAuthEnv(t)
 	setCredentialEnv(t)
 
@@ -67,6 +72,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.FileStorage.LocalFileDir != "/tmp/adbcops-test-uploads" || cfg.FileStorage.MaxUploadBytes != 1024 {
 		t.Fatalf("FileStorage = %+v", cfg.FileStorage)
+	}
+	if cfg.RAG.ChunkSize != 120 || cfg.RAG.ChunkOverlap != 20 {
+		t.Fatalf("RAG = %+v", cfg.RAG)
 	}
 }
 

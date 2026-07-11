@@ -3,7 +3,10 @@ package model
 import "time"
 
 const (
-	DocumentStatusDraft = "draft"
+	DocumentStatusDraft     = "draft"
+	DocumentStatusReviewing = "reviewing"
+	DocumentStatusRejected  = "rejected"
+	DocumentStatusPublished = "published"
 
 	DocumentFileTypeMarkdown = "md"
 	DocumentFileTypeText     = "txt"
@@ -36,4 +39,24 @@ type KBDocument struct {
 
 func (KBDocument) TableName() string {
 	return "kb_document"
+}
+
+type KBChunk struct {
+	ID                int64     `gorm:"column:id;primaryKey" json:"id"`
+	DocumentID        int64     `gorm:"column:document_id;not null" json:"documentId"`
+	ChunkIndex        int       `gorm:"column:chunk_index;not null" json:"chunkIndex"`
+	Content           string    `gorm:"column:content;not null" json:"content"`
+	SourceTitle       *string   `gorm:"column:source_title;size:255" json:"sourceTitle,omitempty"`
+	SourceSection     *string   `gorm:"column:source_section;size:255" json:"sourceSection,omitempty"`
+	SourcePage        *int      `gorm:"column:source_page" json:"sourcePage,omitempty"`
+	TokenCount        int       `gorm:"column:token_count" json:"tokenCount"`
+	Summary           *string   `gorm:"column:summary" json:"summary,omitempty"`
+	SearchText        *string   `gorm:"column:search_text" json:"searchText,omitempty"`
+	Keywords          []byte    `gorm:"column:keywords;type:jsonb" json:"keywords,omitempty"`
+	PossibleQuestions []byte    `gorm:"column:possible_questions;type:jsonb" json:"possibleQuestions,omitempty"`
+	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+}
+
+func (KBChunk) TableName() string {
+	return "kb_chunk"
 }

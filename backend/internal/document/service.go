@@ -39,12 +39,17 @@ type Repository interface {
 	CreateDocument(ctx context.Context, document *model.KBDocument) error
 	ListDocuments(ctx context.Context, userID *int64) ([]model.KBDocument, error)
 	FindDocumentByID(ctx context.Context, id int64) (*model.KBDocument, error)
+	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
+	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
+	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
 }
 
 type Service struct {
 	documents      Repository
 	localFileDir   string
 	maxUploadBytes int64
+	chunkSize      int
+	chunkOverlap   int
 }
 
 type UploadMetadata struct {
@@ -57,14 +62,17 @@ type UploadMetadata struct {
 	Tags          json.RawMessage
 }
 
-func NewService(documents Repository, localFileDir string, maxUploadBytes int64) (*Service, error) {
+func NewService(documents Repository, localFileDir string, maxUploadBytes int64, chunkSize, chunkOverlap int) (*Service, error) {
 	if strings.TrimSpace(localFileDir) == "" {
 		return nil, fmt.Errorf("local file dir is required")
 	}
 	if maxUploadBytes <= 0 {
 		return nil, fmt.Errorf("max upload bytes must be positive")
 	}
-	return &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes}, nil
+	if chunkSize <= 0 || chunkOverlap < 0 || chunkOverlap >= chunkSize {
+		return nil, fmt.Errorf("invalid chunk settings")
+	}
+	return &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap}, nil
 }
 
 func (s *Service) Upload(ctx context.Context, actor *model.AppUser, fileHeader *multipart.FileHeader, metadata UploadMetadata) (*model.KBDocument, error) {
@@ -177,6 +185,50 @@ func (s *Service) Get(ctx context.Context, actor *model.AppUser, id int64) (*mod
 		return nil, ErrForbidden
 	}
 	return document, nil
+}
+
+func (s *Service) Reprocess(ctx context.Context, actor *model.AppUser, id int64) ([]model.KBChunk, error) {
+	document, err := s.Get(ctx, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	content, err := os.ReadFile(document.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read document file: %w", err)
+	}
+	chunks := BuildChunks(document, string(content), s.chunkSize, s.chunkOverlap)
+	if len(chunks) == 0 {
+		return nil, ErrInvalidFile
+	}
+	if err := s.documents.ReplaceDocumentChunks(ctx, document.ID, chunks); err != nil {
+		return nil, fmt.Errorf("replace document chunks: %w", err)
+	}
+	return s.documents.ListDocumentChunks(ctx, document.ID)
+}
+
+func (s *Service) ListChunks(ctx context.Context, actor *model.AppUser, id int64) ([]model.KBChunk, error) {
+	document, err := s.Get(ctx, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.documents.ListDocumentChunks(ctx, document.ID)
+}
+
+func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id int64, rawResult json.RawMessage) (*model.KBDocument, QualityResult, error) {
+	document, err := s.Get(ctx, actor, id)
+	if err != nil {
+		return nil, QualityResult{}, err
+	}
+	result, normalized, err := ParseQualityResult(rawResult)
+	if err != nil {
+		return nil, QualityResult{}, err
+	}
+	status := StatusAfterQualityScore(result.Score)
+	updated, err := s.documents.UpdateDocumentQuality(ctx, document.ID, result.Score, normalized, status)
+	if err != nil {
+		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
+	}
+	return updated, result, nil
 }
 
 func normalizeFileName(name string) (string, error) {

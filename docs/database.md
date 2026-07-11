@@ -9,8 +9,10 @@
 - `000003_create_conversations`
 - `000004_create_llm_configs`
 - `000005_create_kb_documents`
+- `000006_create_kb_chunks`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
+`kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
 
 ## 迁移规则
 

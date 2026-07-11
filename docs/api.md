@@ -235,6 +235,9 @@ Content-Type: application/json
 POST /api/documents/upload
 GET  /api/documents
 GET  /api/documents/{id}
+GET  /api/documents/{id}/chunks
+POST /api/documents/{id}/review
+POST /api/documents/{id}/reprocess
 ```
 
 ### 上传文档
@@ -254,3 +257,30 @@ tags=["payment","runbook"]
 ```
 
 服务端只使用原始文件名作为元数据，实际存储文件名由服务端随机生成；非法扩展名、路径穿越文件名和超限文件会被拒绝。响应不返回服务器本地 `file_path`。
+
+### 解析与切片
+
+```http
+POST /api/documents/{id}/reprocess
+GET  /api/documents/{id}/chunks
+```
+
+`reprocess` 会读取已上传原文，按 Markdown 标题、空行段落和固定长度规则生成 `kb_chunk`。默认 `RAG_CHUNK_SIZE=800`、`RAG_CHUNK_OVERLAP=100`，返回的 `chunkIndex` 从 0 开始连续递增，空白 chunk 会被丢弃。
+
+### 文档质检
+
+```http
+POST /api/documents/{id}/review
+Content-Type: application/json
+
+{
+  "result": {
+    "score": 85,
+    "summary": "结构清晰，排障步骤完整。",
+    "findings": ["包含系统范围", "包含处置步骤"],
+    "suggestions": ["补充负责人"]
+  }
+}
+```
+
+`result` 必须符合本地 JSON schema：`score` 为 0～100，且 `summary`、`findings`、`suggestions` 不能为空。`score >= 70` 会进入 `reviewing`，`score < 70` 会进入 `rejected`，不可发布。
