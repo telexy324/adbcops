@@ -16,6 +16,7 @@ type RouterDependencies struct {
 	RAGHandler          *RAGHandler
 	DataSourceHandler   *DataSourceHandler
 	AnalysisHandler     *AnalysisHandler
+	EventHandler        *EventHandler
 	SFTPHandler         *SFTPHandler
 	K8sHandler          *K8sHandler
 	MetricsHandler      *MetricsHandler
@@ -34,6 +35,10 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 	)
 
 	router.GET("/api/health", health)
+	if dependencies.EventHandler != nil {
+		eventRoutes := router.Group("/api/events")
+		eventRoutes.POST("/alertmanager", dependencies.EventHandler.Alertmanager)
+	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")
 		authRoutes.POST("/login", dependencies.AuthHandler.Login)

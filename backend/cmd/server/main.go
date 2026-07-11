@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	alertsvc "aiops-platform/backend/internal/alert"
 	analysissvc "aiops-platform/backend/internal/analysis"
 	"aiops-platform/backend/internal/auth"
 	"aiops-platform/backend/internal/config"
@@ -76,6 +77,7 @@ func run() error {
 	ragRepository := repository.NewRAGRepository(databaseConnection.GORM)
 	dataSourceRepository := repository.NewDataSourceRepository(databaseConnection.GORM)
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
+	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	credentialManager, err := credential.NewManager(cfg.Credential.MasterKey, cfg.Credential.KeyVersion)
 	if err != nil {
 		return fmt.Errorf("initialize credential manager: %w", err)
@@ -100,6 +102,7 @@ func run() error {
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
+	alertService := alertsvc.NewService(eventRepository)
 	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
@@ -124,6 +127,7 @@ func run() error {
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
+	eventHandler := handler.NewEventHandler(alertService)
 	sftpHandler := handler.NewSFTPHandler(sftpService)
 	k8sHandler := handler.NewK8sHandler(k8sService)
 	metricsHandler := handler.NewMetricsHandler(metricsService)
@@ -139,6 +143,7 @@ func run() error {
 			RAGHandler:          ragHandler,
 			DataSourceHandler:   dataSourceHandler,
 			AnalysisHandler:     analysisHandler,
+			EventHandler:        eventHandler,
 			SFTPHandler:         sftpHandler,
 			K8sHandler:          k8sHandler,
 			MetricsHandler:      metricsHandler,

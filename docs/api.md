@@ -575,3 +575,40 @@ Content-Type: application/json
 ```
 
 `range=false` 时调用 `/api/v1/query`，`range=true` 时调用 `/api/v1/query_range`。响应统一为 `series[].metric` 和 `series[].points[]`，每个点包含 `timestamp`、`value` 和 `rawValue`。`maxSeries` 最大 100，默认 20；`maxPoints` 最大 2000，默认 500，服务端会强制截断超限返回。
+
+## Events
+
+### Alertmanager Webhook
+
+Alertmanager Webhook 会把告警转换为统一 `ops_event`。重复告警按 `fingerprint` 归并，`resolved` 告警会更新同一事件状态并记录 `resolvedAt`。
+
+```http
+POST /api/events/alertmanager
+Content-Type: application/json
+
+{
+  "receiver": "default",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HighErrorRate",
+        "severity": "critical",
+        "environment": "prod",
+        "system": "payment",
+        "service": "payment-api",
+        "namespace": "prod",
+        "pod": "payment-api-0"
+      },
+      "annotations": {
+        "summary": "payment api error rate is high"
+      },
+      "startsAt": "2026-07-12T10:00:00Z",
+      "fingerprint": "alertmanager-fingerprint"
+    }
+  ]
+}
+```
+
+若 Alertmanager 未提供 `fingerprint`，平台会使用 `alertname + environment + system + component + resource_identity` 生成稳定指纹。响应返回写入或归并后的事件摘要：`id`、`fingerprint`、`status`、`severity`、`summary`、`occurrenceCount` 和可选 `resolvedAt`。
