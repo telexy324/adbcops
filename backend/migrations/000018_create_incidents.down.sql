@@ -1,0 +1,12 @@
+DROP INDEX IF EXISTS idx_incident_activity_incident_created;
+DROP INDEX IF EXISTS idx_incident_root_cause_incident;
+DROP INDEX IF EXISTS idx_incident_evidence_key;
+DROP INDEX IF EXISTS idx_incident_event_event;
+DROP INDEX IF EXISTS idx_incident_analysis_task;
+DROP INDEX IF EXISTS idx_incident_scope;
+DROP INDEX IF EXISTS idx_incident_status;
+DROP TABLE IF EXISTS incident_activity;
+DROP TABLE IF EXISTS incident_root_cause_candidate;
+DROP TABLE IF EXISTS incident_evidence;
+DROP TABLE IF EXISTS incident_event;
+DROP TABLE IF EXISTS incident;

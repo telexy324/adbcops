@@ -841,6 +841,58 @@ Change 模块通过只读 Generic HTTP datasource 查询近期变更，覆盖 re
 
 也支持直接返回数组。Skill 名称为 `query_recent_changes`，Agent 名称为 `change_agent`。未显式传 `from/to` 时默认查询最近 2 小时。三类来源独立查询，单个来源失败会返回 `partial=true` 和对应 `sources[].error`，不会阻断其他来源结果。
 
+## Incident Center
+
+Incident Center 管理故障生命周期、关联事件/Evidence、root cause candidates 和活动审计。
+
+```http
+GET  /api/incidents
+POST /api/incidents
+POST /api/incidents/promote-analysis
+GET  /api/incidents/{id}
+PUT  /api/incidents/{id}
+POST /api/incidents/{id}/root-causes/{candidateId}/confirm
+```
+
+创建 Incident：
+
+```json
+{
+  "title": "payment api latency high",
+  "severity": "critical",
+  "status": "open",
+  "environment": "prod",
+  "systemName": "payment",
+  "componentName": "payment-api",
+  "summary": "latency increased after release",
+  "eventIds": [101, 102],
+  "evidenceKeys": ["ev_log", "ev_metric"],
+  "rootCauses": [
+    {
+      "summary": "release changed upstream timeout",
+      "score": 0.82,
+      "details": {
+        "source": "correlation"
+      }
+    }
+  ]
+}
+```
+
+分析任务升级 Incident：
+
+```json
+{
+  "analysisTaskId": 12,
+  "title": "payment api incident",
+  "severity": "warning",
+  "eventIds": [101],
+  "evidenceKeys": ["ev_metric"]
+}
+```
+
+`status` 支持 `open`、`mitigating`、`resolved`、`closed`；`severity` 支持 `critical`、`warning`、`info`。确认 root cause 会取消其他候选的 confirmed 状态，并写入 `incident_activity`，用于审计“谁在什么时候确认了哪个候选根因”。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。

@@ -25,6 +25,7 @@ import (
 	documentsvc "aiops-platform/backend/internal/document"
 	evidencesvc "aiops-platform/backend/internal/evidence"
 	"aiops-platform/backend/internal/handler"
+	incidentsvc "aiops-platform/backend/internal/incident"
 	k8ssvc "aiops-platform/backend/internal/k8s"
 	llmsvc "aiops-platform/backend/internal/llm"
 	logssvc "aiops-platform/backend/internal/logs"
@@ -89,6 +90,7 @@ func run() error {
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	evidenceRepository := repository.NewEvidenceRepository(databaseConnection.GORM)
 	topologyRepository := repository.NewTopologyRepository(databaseConnection.GORM)
+	incidentRepository := repository.NewIncidentRepository(databaseConnection.GORM)
 	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
 	agentRunRepository := repository.NewAgentRunRepository(databaseConnection.GORM)
 	workflowRepository := repository.NewWorkflowRepository(databaseConnection.GORM)
@@ -122,6 +124,7 @@ func run() error {
 	topologyService := topologysvc.NewService(topologyRepository, k8sService)
 	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
 	correlationService := correlationsvc.NewService(eventRepository, topologyRepository)
+	incidentService := incidentsvc.NewService(incidentRepository, analysisRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
@@ -170,6 +173,7 @@ func run() error {
 	topologyHandler := handler.NewTopologyHandler(topologyService)
 	timelineHandler := handler.NewTimelineHandler(timelineService)
 	correlationHandler := handler.NewCorrelationHandler(correlationService)
+	incidentHandler := handler.NewIncidentHandler(incidentService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
@@ -195,6 +199,7 @@ func run() error {
 			TopologyHandler:     topologyHandler,
 			TimelineHandler:     timelineHandler,
 			CorrelationHandler:  correlationHandler,
+			IncidentHandler:     incidentHandler,
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
 			AgentHandler:        agentHandler,

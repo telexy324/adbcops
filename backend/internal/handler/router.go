@@ -21,6 +21,7 @@ type RouterDependencies struct {
 	TopologyHandler     *TopologyHandler
 	TimelineHandler     *TimelineHandler
 	CorrelationHandler  *CorrelationHandler
+	IncidentHandler     *IncidentHandler
 	ToolHandler         *ToolHandler
 	SkillHandler        *SkillHandler
 	AgentHandler        *AgentHandler
@@ -83,6 +84,16 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		correlationRoutes := router.Group("/api/correlation")
 		correlationRoutes.Use(dependencies.Authenticate)
 		correlationRoutes.POST("/analyze", dependencies.RequireAdmin, dependencies.CorrelationHandler.Analyze)
+	}
+	if dependencies.IncidentHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		incidentRoutes := router.Group("/api/incidents")
+		incidentRoutes.Use(dependencies.Authenticate)
+		incidentRoutes.GET("", dependencies.IncidentHandler.List)
+		incidentRoutes.POST("", dependencies.RequireAdmin, dependencies.IncidentHandler.Create)
+		incidentRoutes.POST("/promote-analysis", dependencies.RequireAdmin, dependencies.IncidentHandler.PromoteAnalysis)
+		incidentRoutes.GET("/:id", dependencies.IncidentHandler.Get)
+		incidentRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.IncidentHandler.Update)
+		incidentRoutes.POST("/:id/root-causes/:candidateId/confirm", dependencies.RequireAdmin, dependencies.IncidentHandler.ConfirmRootCause)
 	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")
