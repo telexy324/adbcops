@@ -20,6 +20,7 @@ type RouterDependencies struct {
 	EvidenceHandler     *EvidenceHandler
 	TopologyHandler     *TopologyHandler
 	TimelineHandler     *TimelineHandler
+	CorrelationHandler  *CorrelationHandler
 	ToolHandler         *ToolHandler
 	SkillHandler        *SkillHandler
 	AgentHandler        *AgentHandler
@@ -77,6 +78,11 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		timelineRoutes := router.Group("/api/timeline")
 		timelineRoutes.Use(dependencies.Authenticate)
 		timelineRoutes.GET("", dependencies.TimelineHandler.Build)
+	}
+	if dependencies.CorrelationHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		correlationRoutes := router.Group("/api/correlation")
+		correlationRoutes.Use(dependencies.Authenticate)
+		correlationRoutes.POST("/analyze", dependencies.RequireAdmin, dependencies.CorrelationHandler.Analyze)
 	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")

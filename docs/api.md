@@ -780,6 +780,33 @@ GET /api/timeline?anchorEventId=123&beforeMinutes=30&afterMinutes=30&includeEvid
 
 查询参数支持 `limit`、`sourceType`、`environment`、`systemName`、`componentName`、`namespace`、`resourceName`、`maxEvidencePerEvent`。响应中的 `time`、`from`、`to` 统一为 UTC；同时间事件使用 `sourceType + eventType + id` 稳定排序。Evidence 关联会读取事件 `payload.evidenceKeys`、`payload.evidenceKey` 或 `payload.evidence_refs`。
 
+## Correlation
+
+Correlation Engine 用于围绕目标事件寻找候选原因，并输出可解释评分明细。
+
+```http
+POST /api/correlation/analyze
+Content-Type: application/json
+
+{
+  "targetEventId": 123,
+  "beforeMinutes": 120,
+  "afterMinutes": 30,
+  "includeTopology": true,
+  "limit": 200
+}
+```
+
+评分由五部分组成：
+
+- `identifier`：环境、系统、组件、命名空间、资源、Trace 等标识匹配；
+- `temporal`：候选事件与目标事件的时间接近度；
+- `topology`：候选事件与目标事件映射的拓扑节点距离；
+- `semantic`：摘要和事件类型的轻量语义重叠；
+- `evidence`：是否存在 Evidence 引用，是否与目标事件共享 Evidence。
+
+每个候选结果都包含 `scoreDetails`，展示每项分数、权重、加权分和解释。没有 Evidence 引用的候选会被限制在非高置信区间，避免“无证据高置信根因”。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。

@@ -17,6 +17,7 @@ import (
 	"aiops-platform/backend/internal/auth"
 	"aiops-platform/backend/internal/config"
 	conversationsvc "aiops-platform/backend/internal/conversation"
+	correlationsvc "aiops-platform/backend/internal/correlation"
 	"aiops-platform/backend/internal/credential"
 	"aiops-platform/backend/internal/database"
 	datasourcesvc "aiops-platform/backend/internal/datasource"
@@ -118,6 +119,7 @@ func run() error {
 	evidenceService := evidencesvc.NewService(evidenceRepository)
 	topologyService := topologysvc.NewService(topologyRepository, k8sService)
 	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
+	correlationService := correlationsvc.NewService(eventRepository, topologyRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
@@ -164,6 +166,7 @@ func run() error {
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
 	topologyHandler := handler.NewTopologyHandler(topologyService)
 	timelineHandler := handler.NewTimelineHandler(timelineService)
+	correlationHandler := handler.NewCorrelationHandler(correlationService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
@@ -188,6 +191,7 @@ func run() error {
 			EvidenceHandler:     evidenceHandler,
 			TopologyHandler:     topologyHandler,
 			TimelineHandler:     timelineHandler,
+			CorrelationHandler:  correlationHandler,
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
 			AgentHandler:        agentHandler,
