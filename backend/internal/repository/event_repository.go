@@ -78,11 +78,12 @@ func (r *GORMEventRepository) UpsertOpsEvent(ctx context.Context, event *model.O
 		"last_seen_at":     now,
 		"updated_at":       now,
 		"occurrence_count": gorm.Expr("ops_event.occurrence_count + 1"),
-		"resolved_at":      event.ResolvedAt,
 	})
-	if event.Status != model.EventStatusResolved {
-		assignments = append(assignments, clause.Assignment{Column: clause.Column{Name: "resolved_at"}, Value: nil})
+	resolvedAt := any(nil)
+	if event.Status == model.EventStatusResolved {
+		resolvedAt = event.ResolvedAt
 	}
+	assignments = append(assignments, clause.Assignment{Column: clause.Column{Name: "resolved_at"}, Value: resolvedAt})
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "fingerprint"}},
 		DoUpdates: assignments,

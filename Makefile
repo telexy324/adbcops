@@ -9,7 +9,7 @@ endif
 
 export APP_ENV APP_PORT APP_TIMEZONE DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME DB_SSLMODE JWT_SECRET JWT_EXPIRE_HOURS INITIAL_ADMIN_USERNAME INITIAL_ADMIN_PASSWORD
 
-.PHONY: help env-check compose-config compose-up compose-down compose-logs backend-run backend-test backend-vet backend-build backend-check migration-up migration-down migration-status frontend-dev frontend-test frontend-build frontend-format frontend-check
+.PHONY: help env-check compose-config compose-up compose-down compose-logs backend-run backend-test backend-vet backend-build backend-check migration-up migration-down migration-status e2e frontend-dev frontend-test frontend-build frontend-format frontend-check
 
 help: ## 显示可用命令
 	@awk 'BEGIN {FS = ":.*## "; printf "AI Native AIOps Platform\n\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -51,6 +51,9 @@ migration-down: env-check ## 回滚一个迁移（生产环境拒绝）
 
 migration-status: env-check ## 查看当前数据库迁移版本
 	cd backend && go run ./cmd/migrate status
+
+e2e: ## 运行最终端到端验收脚本
+	node scripts/e2e.mjs
 
 frontend-dev: ## 启动前端开发服务
 	cd frontend && pnpm dev
