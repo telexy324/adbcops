@@ -161,6 +161,7 @@ func BuiltinAgents() []Agent {
 		MetricsAgent{},
 		KubernetesAgent{},
 		ChangeAgent{},
+		IncidentAgent{},
 	}
 }
 

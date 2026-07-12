@@ -893,6 +893,37 @@ POST /api/incidents/{id}/root-causes/{candidateId}/confirm
 
 `status` 支持 `open`、`mitigating`、`resolved`、`closed`；`severity` 支持 `critical`、`warning`、`info`。确认 root cause 会取消其他候选的 confirmed 状态，并写入 `incident_activity`，用于审计“谁在什么时候确认了哪个候选根因”。
 
+### Incident Agent
+
+Incident Agent 名称为 `incident_agent`，通过两个只读 Skill 生成证据化报告：
+
+- `build_incident_timeline`
+- `correlate_incident_events`
+
+Agent 输入示例：
+
+```json
+{
+  "query": "payment api latency incident",
+  "variables": {
+    "targetEventId": 101,
+    "beforeMinutes": 120,
+    "afterMinutes": 30,
+    "includeTopology": true
+  }
+}
+```
+
+结构化报告包含：
+
+- `rootCauseCandidates`：候选根因排序；
+- `evidenceKeys`：报告引用的 Evidence；
+- `counterEvidenceKeys`：反证或未支持首选候选的其他 Evidence；
+- `missingEvidence`：时间线或候选中缺失的 Evidence 引用；
+- `confidence`：综合置信度。
+
+报告中的事实必须引用 `EvidenceRefs` 中存在的 Evidence key；存在 missing evidence 时会降低置信度，避免证据不足时输出高置信结论。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。

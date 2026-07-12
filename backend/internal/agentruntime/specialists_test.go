@@ -20,7 +20,7 @@ func TestBuiltinAgentsIncludeSpecialists(t *testing.T) {
 	for _, definition := range runtime.List() {
 		names[definition.Name] = true
 	}
-	for _, name := range []string{"knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "change_agent"} {
+	for _, name := range []string{"knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "change_agent", "incident_agent"} {
 		if !names[name] {
 			t.Fatalf("missing builtin agent %s in %+v", name, names)
 		}
@@ -119,6 +119,86 @@ func TestChangeAgentCallsRecentChangesSkillWithScope(t *testing.T) {
 	assertEvidenceBacked(t, output.Result)
 	if output.Skills != 1 {
 		t.Fatalf("skills = %d, want 1", output.Skills)
+	}
+}
+
+func TestIncidentAgentBuildsEvidenceReferencedReport(t *testing.T) {
+	runtime := newSpecialistRuntime(t, IncidentAgent{},
+		namedOutputSkill{
+			name: "build_incident_timeline",
+			output: json.RawMessage(`{
+				"partial": false,
+				"timeline": {
+					"items": [
+						{"eventId":1,"summary":"alert","evidenceKeys":["ev_alert"]},
+						{"eventId":2,"summary":"release","evidenceKeys":["ev_release"]}
+					],
+					"evidenceMissing": ["ev_missing"]
+				}
+			}`),
+		},
+		namedOutputSkill{
+			name: "correlate_incident_events",
+			output: json.RawMessage(`{
+				"partial": false,
+				"correlation": {
+					"candidates": [
+						{
+							"score": 0.82,
+							"reason": "score led by temporal with evidence available",
+							"evidenceKeys": ["ev_release"],
+							"event": {"summary":"release changed upstream timeout"}
+						}
+					]
+				}
+			}`),
+		},
+	)
+
+	output, err := runtime.Run(context.Background(), RunInput{
+		Actor: adminActor(),
+		Name:  "incident_agent",
+		Context: AgentContext{
+			UserID: 1,
+			Query:  "payment api latency incident",
+			Variables: map[string]any{
+				"targetEventId": float64(1),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run incident agent: %v", err)
+	}
+	if output.Skills != 2 {
+		t.Fatalf("skills = %d, want 2", output.Skills)
+	}
+	assertEvidenceBacked(t, output.Result)
+	var report struct {
+		EvidenceKeys        []string `json:"evidenceKeys"`
+		CounterEvidenceKeys []string `json:"counterEvidenceKeys"`
+		MissingEvidence     []string `json:"missingEvidence"`
+		RootCauseCandidates []struct {
+			EvidenceKeys        []string `json:"evidenceKeys"`
+			CounterEvidenceKeys []string `json:"counterEvidenceKeys"`
+		} `json:"rootCauseCandidates"`
+	}
+	if err := json.Unmarshal(output.Result.Structured, &report); err != nil {
+		t.Fatalf("unmarshal structured report: %v", err)
+	}
+	if len(report.EvidenceKeys) == 0 || report.EvidenceKeys[0] != "ev_alert" {
+		t.Fatalf("expected report evidence keys, got %+v", report)
+	}
+	if len(report.RootCauseCandidates) != 1 || len(report.RootCauseCandidates[0].EvidenceKeys) != 1 {
+		t.Fatalf("expected candidate evidence keys, got %+v", report.RootCauseCandidates)
+	}
+	if len(report.CounterEvidenceKeys) == 0 || report.CounterEvidenceKeys[0] != "ev_alert" {
+		t.Fatalf("expected counter evidence key ev_alert, got %+v", report.CounterEvidenceKeys)
+	}
+	if len(report.MissingEvidence) != 1 || report.MissingEvidence[0] != "ev_missing" {
+		t.Fatalf("expected missing evidence, got %+v", report.MissingEvidence)
+	}
+	if output.Result.Confidence > 0.65 {
+		t.Fatalf("missing evidence should cap confidence, got %+v", output.Result.Confidence)
 	}
 }
 

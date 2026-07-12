@@ -185,6 +185,277 @@ func (ChangeAgent) Analyze(ctx context.Context, input AgentContext, runtime *Run
 	return skillResult("change_agent", "query_recent_changes", result, "recent changes query completed", 0.62), nil
 }
 
+type IncidentAgent struct{}
+
+func (IncidentAgent) Name() string {
+	return "incident_agent"
+}
+
+func (IncidentAgent) Description() string {
+	return "Builds an evidence-referenced incident report from timeline and correlation results."
+}
+
+func (IncidentAgent) Analyze(ctx context.Context, input AgentContext, runtime *RunContext) (*AgentResult, error) {
+	targetEventID, ok := int64Variable(input, "targetEventId")
+	if !ok {
+		return needsScopeResult("incident_agent", "missing incident scope: targetEventId"), nil
+	}
+	basePayload := map[string]any{
+		"targetEventId": targetEventID,
+	}
+	copyOptional(input, basePayload, "from", "to", "beforeMinutes", "afterMinutes", "environment", "systemName", "componentName", "namespace", "resourceName", "limit")
+	if err := runtime.Step("build incident timeline"); err != nil {
+		return nil, err
+	}
+	timelinePayload := copyMap(basePayload)
+	timelinePayload["anchorEventId"] = targetEventID
+	timelinePayload["includeEvidence"] = true
+	timelineResult, err := executeJSONSkill(ctx, runtime, "build_incident_timeline", timelinePayload)
+	if err != nil {
+		return nil, err
+	}
+	if err := runtime.Step("correlate incident events"); err != nil {
+		return nil, err
+	}
+	correlationPayload := copyMap(basePayload)
+	if _, exists := correlationPayload["includeTopology"]; !exists {
+		correlationPayload["includeTopology"] = true
+	}
+	copyOptional(input, correlationPayload, "includeTopology")
+	correlationResult, err := executeJSONSkill(ctx, runtime, "correlate_incident_events", correlationPayload)
+	if err != nil {
+		return nil, err
+	}
+	report := buildIncidentReport(input, timelineResult.Output, correlationResult.Output)
+	structured, _ := json.Marshal(report)
+	evidenceRefs := uniqueStringsForAgent(report.EvidenceKeys)
+	facts := []Fact{}
+	for _, key := range firstN(evidenceRefs, 3) {
+		facts = append(facts, Fact{Summary: "incident report references evidence " + key, EvidenceKey: key})
+	}
+	if len(facts) == 0 {
+		facts = append(facts, Fact{Summary: "incident report has missing evidence and requires additional collection"})
+	}
+	confidence := report.Confidence
+	return &AgentResult{
+		Summary:      report.Summary,
+		Facts:        facts,
+		Hypotheses:   report.Hypotheses,
+		EvidenceRefs: evidenceRefs,
+		Structured:   structured,
+		Confidence:   confidence,
+	}, nil
+}
+
+type incidentReport struct {
+	Summary             string                    `json:"summary"`
+	TimelineSummary     string                    `json:"timelineSummary"`
+	RootCauseCandidates []incidentReportCandidate `json:"rootCauseCandidates"`
+	EvidenceKeys        []string                  `json:"evidenceKeys"`
+	CounterEvidenceKeys []string                  `json:"counterEvidenceKeys"`
+	MissingEvidence     []string                  `json:"missingEvidence"`
+	Hypotheses          []Hypothesis              `json:"hypotheses"`
+	Confidence          float64                   `json:"confidence"`
+}
+
+type incidentReportCandidate struct {
+	Summary             string   `json:"summary"`
+	Score               float64  `json:"score"`
+	EvidenceKeys        []string `json:"evidenceKeys"`
+	CounterEvidenceKeys []string `json:"counterEvidenceKeys"`
+	Reason              string   `json:"reason"`
+}
+
+func buildIncidentReport(input AgentContext, timelineOutput json.RawMessage, correlationOutput json.RawMessage) incidentReport {
+	timelineEvidence := evidenceKeysFromSkillOutput(timelineOutput)
+	missingEvidence := missingEvidenceFromSkillOutput(timelineOutput)
+	candidates := candidatesFromCorrelation(correlationOutput, timelineEvidence)
+	evidenceKeys := append([]string{}, timelineEvidence...)
+	for _, candidate := range candidates {
+		evidenceKeys = append(evidenceKeys, candidate.EvidenceKeys...)
+	}
+	evidenceKeys = uniqueStringsForAgent(evidenceKeys)
+	counterEvidence := []string{}
+	for _, candidate := range candidates {
+		counterEvidence = append(counterEvidence, candidate.CounterEvidenceKeys...)
+	}
+	counterEvidence = uniqueStringsForAgent(counterEvidence)
+	confidence := incidentConfidence(candidates, missingEvidence, evidenceKeys)
+	summary := firstNonEmpty(strings.TrimSpace(input.Query), "incident analysis report")
+	if len(candidates) > 0 {
+		summary = "Most likely root cause: " + candidates[0].Summary
+	}
+	hypotheses := make([]Hypothesis, 0, len(candidates))
+	for _, candidate := range candidates {
+		hypotheses = append(hypotheses, Hypothesis{Summary: candidate.Summary + " (" + candidate.Reason + ")", Confidence: candidate.Score})
+	}
+	if len(hypotheses) == 0 {
+		hypotheses = append(hypotheses, Hypothesis{Summary: "insufficient evidence to rank root cause candidates", Confidence: 0.2})
+	}
+	return incidentReport{
+		Summary:             summary,
+		TimelineSummary:     timelineSummaryFromSkillOutput(timelineOutput),
+		RootCauseCandidates: candidates,
+		EvidenceKeys:        evidenceKeys,
+		CounterEvidenceKeys: counterEvidence,
+		MissingEvidence:     uniqueStringsForAgent(missingEvidence),
+		Hypotheses:          hypotheses,
+		Confidence:          confidence,
+	}
+}
+
+func evidenceKeysFromSkillOutput(raw json.RawMessage) []string {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	return uniqueStringsForAgent(collectStringsByKey(value, map[string]bool{"evidenceKeys": true, "evidenceKey": true, "evidence_refs": true}))
+}
+
+func missingEvidenceFromSkillOutput(raw json.RawMessage) []string {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	return uniqueStringsForAgent(collectStringsByKey(value, map[string]bool{"evidenceMissing": true, "missingEvidence": true}))
+}
+
+func candidatesFromCorrelation(raw json.RawMessage, timelineEvidence []string) []incidentReportCandidate {
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil
+	}
+	correlation, _ := body["correlation"].(map[string]any)
+	rawCandidates, _ := correlation["candidates"].([]any)
+	result := []incidentReportCandidate{}
+	for _, rawCandidate := range rawCandidates {
+		candidateMap, _ := rawCandidate.(map[string]any)
+		eventMap, _ := candidateMap["event"].(map[string]any)
+		summary, _ := eventMap["summary"].(string)
+		if summary == "" {
+			summary, _ = candidateMap["reason"].(string)
+		}
+		score, _ := numericValue(candidateMap["score"])
+		reason, _ := candidateMap["reason"].(string)
+		evidenceKeys := uniqueStringsForAgent(collectStringsByKey(candidateMap, map[string]bool{"evidenceKeys": true, "evidenceKey": true, "evidence_refs": true}))
+		counter := counterEvidenceForCandidate(timelineEvidence, evidenceKeys)
+		result = append(result, incidentReportCandidate{Summary: summary, Score: score, Reason: reason, EvidenceKeys: evidenceKeys, CounterEvidenceKeys: counter})
+	}
+	return result
+}
+
+func counterEvidenceForCandidate(timelineEvidence []string, candidateEvidence []string) []string {
+	candidateSet := map[string]struct{}{}
+	for _, key := range candidateEvidence {
+		candidateSet[key] = struct{}{}
+	}
+	result := []string{}
+	for _, key := range timelineEvidence {
+		if _, ok := candidateSet[key]; !ok {
+			result = append(result, key)
+		}
+	}
+	if len(result) > 5 {
+		result = result[:5]
+	}
+	return uniqueStringsForAgent(result)
+}
+
+func timelineSummaryFromSkillOutput(raw json.RawMessage) string {
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return "timeline unavailable"
+	}
+	timeline, _ := body["timeline"].(map[string]any)
+	items, _ := timeline["items"].([]any)
+	return fmt.Sprintf("timeline contains %d event(s)", len(items))
+}
+
+func collectStringsByKey(value any, names map[string]bool) []string {
+	result := []string{}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if names[key] {
+				result = append(result, stringsFromAny(child)...)
+				continue
+			}
+			result = append(result, collectStringsByKey(child, names)...)
+		}
+	case []any:
+		for _, child := range typed {
+			result = append(result, collectStringsByKey(child, names)...)
+		}
+	}
+	return result
+}
+
+func stringsFromAny(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		return []string{strings.TrimSpace(typed)}
+	case []any:
+		result := []string{}
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				result = append(result, strings.TrimSpace(text))
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func incidentConfidence(candidates []incidentReportCandidate, missingEvidence []string, evidenceKeys []string) float64 {
+	if len(candidates) == 0 || len(evidenceKeys) == 0 {
+		return 0.3
+	}
+	confidence := candidates[0].Score
+	if len(missingEvidence) > 0 && confidence > 0.65 {
+		confidence = 0.65
+	}
+	if confidence > 0.9 {
+		confidence = 0.9
+	}
+	if confidence < 0.1 {
+		confidence = 0.1
+	}
+	return confidence
+}
+
+func copyMap(input map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, value := range input {
+		result[key] = value
+	}
+	return result
+}
+
+func firstN(values []string, n int) []string {
+	if len(values) <= n {
+		return values
+	}
+	return values[:n]
+}
+
+func uniqueStringsForAgent(values []string) []string {
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
 type skillEvidence struct {
 	Skill  string
 	Result *skillExecutionOutput
