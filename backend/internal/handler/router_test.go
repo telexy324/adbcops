@@ -87,6 +87,32 @@ func TestRecoveryIncludesRequestID(t *testing.T) {
 	}
 }
 
+func TestAuditMiddlewareRecordsRequestIDAndRedactsQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := &routerAuditRecorder{}
+	router := NewRouter(discardLogger(), RouterDependencies{AuditRecorder: recorder})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/health?password=plain-secret&source=alert", nil)
+	request.Header.Set(appmiddleware.RequestIDHeader, "req-audit-http")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if len(recorder.logs) != 1 {
+		t.Fatalf("audit log count = %d, want 1", len(recorder.logs))
+	}
+	log := recorder.logs[0]
+	if log.RequestID != "req-audit-http" || log.Method != http.MethodGet || log.Resource != "health" {
+		t.Fatalf("unexpected audit log: %+v", log)
+	}
+	metadata := string(log.Metadata)
+	if strings.Contains(metadata, "plain-secret") {
+		t.Fatalf("sensitive value leaked in metadata: %s", metadata)
+	}
+	if !strings.Contains(metadata, "[REDACTED]") {
+		t.Fatalf("metadata did not redact sensitive query: %s", metadata)
+	}
+}
+
 func TestUserAccessingAdminAPIIsForbidden(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	normalUser := &model.AppUser{ID: 11, Username: "operator", Role: model.RoleUser, Enabled: true}
@@ -153,4 +179,14 @@ func (f *routerFakeAuthenticator) Authenticate(_ context.Context, token string) 
 		return nil, http.ErrNoCookie
 	}
 	return f.user, nil
+}
+
+type routerAuditRecorder struct {
+	logs []model.AuditLog
+}
+
+func (r *routerAuditRecorder) CreateAuditLog(_ context.Context, log *model.AuditLog) error {
+	copied := *log
+	r.logs = append(r.logs, copied)
+	return nil
 }

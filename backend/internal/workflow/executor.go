@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"aiops-platform/backend/internal/agentruntime"
+	"aiops-platform/backend/internal/auditutil"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/skillframework"
@@ -110,13 +112,15 @@ func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.Workflo
 	now := e.now()
 	workflowID := definitionRecord.ID
 	userID := input.Actor.ID
+	requestID := appmiddleware.GetRequestIDFromContext(ctx)
 	run := &model.WorkflowRun{
 		WorkflowID:     &workflowID,
 		UserID:         &userID,
+		RequestID:      stringPtrOrNil(requestID),
 		ConversationID: input.ConversationID,
 		IncidentID:     input.IncidentID,
 		Status:         model.WorkflowRunStatusRunning,
-		Input:          normalizedJSON(input.Input),
+		Input:          auditutil.SanitizeJSON(normalizedJSON(input.Input), 8192),
 		StartedAt:      &now,
 	}
 	if err := e.runs.CreateWorkflowRun(ctx, run); err != nil {
@@ -138,7 +142,7 @@ func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.Workflo
 	outputRaw, _ := json.Marshal(output)
 	updated, updateErr := e.runs.UpdateWorkflowRun(ctx, run.ID, repository.WorkflowRunUpdates{
 		Status:       status,
-		Output:       outputRaw,
+		Output:       auditutil.SanitizeJSON(outputRaw, 8192),
 		ErrorMessage: message,
 		FinishedAt:   &finishedAt,
 	})
@@ -149,6 +153,13 @@ func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.Workflo
 		return updated, executeErr
 	}
 	return updated, nil
+}
+
+func stringPtrOrNil(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func (e *Executor) execute(ctx context.Context, workflowRunID int64, actor *model.AppUser, definition Definition, input json.RawMessage) (map[string]any, error) {
@@ -215,7 +226,7 @@ func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *
 		NodeID:        node.ID,
 		NodeType:      node.Type,
 		Status:        model.WorkflowRunStatusRunning,
-		Input:         nodeInput,
+		Input:         auditutil.SanitizeJSON(nodeInput, 8192),
 		Attempt:       1,
 		StartedAt:     &startedAt,
 	}
@@ -233,7 +244,7 @@ func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *
 	}
 	if _, err := e.runs.UpdateWorkflowNodeRun(ctx, nodeRun.ID, repository.WorkflowNodeRunUpdates{
 		Status:       status,
-		Output:       output,
+		Output:       auditutil.SanitizeJSON(output, 8192),
 		ErrorMessage: message,
 		FinishedAt:   &finishedAt,
 	}); err != nil {

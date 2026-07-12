@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"aiops-platform/backend/internal/auditutil"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/toolregistry"
@@ -166,9 +168,11 @@ func (r *Registry) Execute(ctx context.Context, input ExecuteInput) (*ExecuteRes
 		}
 	}
 	startedAt := r.now()
+	requestID := appmiddleware.GetRequestIDFromContext(ctx)
 	run := &model.SkillRun{
 		WorkflowRunID: input.WorkflowRunID,
 		NodeRunID:     input.NodeRunID,
+		RequestID:     stringPtrOrNil(requestID),
 		SkillName:     normalized,
 		ToolName:      firstTool(definition.RequiredTools),
 		InputSummary:  summarizeJSON(input.Payload),
@@ -315,19 +319,14 @@ func firstTool(tools []string) *string {
 	return &tools[0]
 }
 
-func summarizeJSON(value json.RawMessage) []byte {
-	if len(value) == 0 || !json.Valid(value) {
+func stringPtrOrNil(value string) *string {
+	if value == "" {
 		return nil
 	}
+	return &value
+}
+
+func summarizeJSON(value json.RawMessage) []byte {
 	const maxBytes = 4096
-	if len(value) <= maxBytes {
-		return append([]byte(nil), value...)
-	}
-	var envelope = map[string]any{
-		"truncated": true,
-		"bytes":     len(value),
-		"preview":   string(value[:maxBytes]),
-	}
-	raw, _ := json.Marshal(envelope)
-	return raw
+	return auditutil.SanitizeJSON(value, maxBytes)
 }

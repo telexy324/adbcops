@@ -11,6 +11,7 @@ const (
 type AgentRun struct {
 	ID            int64      `gorm:"column:id;primaryKey" json:"id"`
 	WorkflowRunID *int64     `gorm:"column:workflow_run_id" json:"workflowRunId,omitempty"`
+	RequestID     *string    `gorm:"column:request_id;size:160" json:"requestId,omitempty"`
 	AgentName     string     `gorm:"column:agent_name;size:120;not null" json:"agentName"`
 	InputSummary  *string    `gorm:"column:input_summary" json:"inputSummary,omitempty"`
 	Output        []byte     `gorm:"column:output;type:jsonb" json:"output,omitempty"`

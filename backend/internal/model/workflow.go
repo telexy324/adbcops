@@ -32,6 +32,7 @@ type WorkflowRun struct {
 	ID             int64               `gorm:"column:id;primaryKey" json:"id"`
 	WorkflowID     *int64              `gorm:"column:workflow_id" json:"workflowId,omitempty"`
 	UserID         *int64              `gorm:"column:user_id" json:"userId,omitempty"`
+	RequestID      *string             `gorm:"column:request_id;size:160" json:"requestId,omitempty"`
 	ConversationID *int64              `gorm:"column:conversation_id" json:"conversationId,omitempty"`
 	IncidentID     *int64              `gorm:"column:incident_id" json:"incidentId,omitempty"`
 	Status         string              `gorm:"column:status;size:30;not null" json:"status"`

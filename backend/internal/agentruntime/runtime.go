@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"aiops-platform/backend/internal/auditutil"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/skillframework"
@@ -214,8 +216,10 @@ func (r *Runtime) Run(ctx context.Context, input RunInput) (*RunOutput, error) {
 	}
 	startedAt := r.now()
 	inputSummary := summarizeContext(input.Context)
+	requestID := appmiddleware.GetRequestIDFromContext(ctx)
 	run := &model.AgentRun{
 		WorkflowRunID: input.WorkflowRunID,
+		RequestID:     stringPtrOrNil(requestID),
 		AgentName:     name,
 		InputSummary:  &inputSummary,
 		Status:        model.AgentRunStatusRunning,
@@ -248,6 +252,7 @@ func (r *Runtime) Run(ctx context.Context, input RunInput) (*RunOutput, error) {
 		errorMessage = &message
 	} else {
 		output, _ = json.Marshal(result)
+		output = auditutil.SanitizeJSON(output, 8192)
 	}
 	if r.audit != nil && run.ID > 0 {
 		_, _ = r.audit.UpdateAgentRun(ctx, run.ID, repository.AgentRunUpdates{
@@ -261,6 +266,13 @@ func (r *Runtime) Run(ctx context.Context, input RunInput) (*RunOutput, error) {
 		return nil, runErr
 	}
 	return &RunOutput{RunID: run.ID, Result: result, Steps: runCtx.steps, Skills: runCtx.skillCalls}, nil
+}
+
+func stringPtrOrNil(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func (r *Runtime) ListRuns(ctx context.Context, limit int) ([]model.AgentRun, error) {
@@ -368,6 +380,9 @@ func validateAgentResult(input AgentContext, result *AgentResult) error {
 
 func summarizeContext(input AgentContext) string {
 	query := strings.TrimSpace(input.Query)
+	if auditutil.ContainsSensitiveToken(query) {
+		return auditutil.RedactedValue
+	}
 	if len([]rune(query)) > 200 {
 		query = string([]rune(query)[:200])
 	}

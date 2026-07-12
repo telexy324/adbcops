@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 )
 
 var fallbackRequestIDCounter atomic.Uint64
+
+type requestIDContextKey struct{}
 
 const (
 	RequestIDHeader = "X-Request-ID"
@@ -30,6 +33,7 @@ func RequestID() gin.HandlerFunc {
 
 		c.Set(RequestIDKey, requestID)
 		c.Header(RequestIDHeader, requestID)
+		c.Request = c.Request.WithContext(ContextWithRequestID(c.Request.Context(), requestID))
 		c.Next()
 	}
 }
@@ -38,6 +42,18 @@ func RequestID() gin.HandlerFunc {
 func GetRequestID(c *gin.Context) string {
 	requestID, _ := c.Get(RequestIDKey)
 	value, _ := requestID.(string)
+	return value
+}
+
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	if requestID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+func GetRequestIDFromContext(ctx context.Context) string {
+	value, _ := ctx.Value(requestIDContextKey{}).(string)
 	return value
 }
 

@@ -8,6 +8,8 @@ import (
 )
 
 type RouterDependencies struct {
+	AuditHandler        *AuditHandler
+	AuditRecorder       appmiddleware.AuditRecorder
 	AuthHandler         *AuthHandler
 	UserHandler         *UserHandler
 	ConversationHandler *ConversationHandler
@@ -40,10 +42,16 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 	router.Use(
 		appmiddleware.RequestID(),
 		appmiddleware.Logger(logger),
+		appmiddleware.Audit(dependencies.AuditRecorder, logger),
 		appmiddleware.Recovery(logger),
 	)
 
 	router.GET("/api/health", health)
+	if dependencies.AuditHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		auditRoutes := router.Group("/api/audit-logs")
+		auditRoutes.Use(dependencies.Authenticate, dependencies.RequireAdmin)
+		auditRoutes.GET("", dependencies.AuditHandler.List)
+	}
 	if dependencies.EventHandler != nil {
 		eventRoutes := router.Group("/api/events")
 		eventRoutes.POST("/alertmanager", dependencies.EventHandler.Alertmanager)

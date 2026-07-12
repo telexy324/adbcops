@@ -15,6 +15,7 @@ type SkillRun struct {
 	ID            int64      `gorm:"column:id;primaryKey" json:"id"`
 	WorkflowRunID *int64     `gorm:"column:workflow_run_id" json:"workflowRunId,omitempty"`
 	NodeRunID     *int64     `gorm:"column:node_run_id" json:"nodeRunId,omitempty"`
+	RequestID     *string    `gorm:"column:request_id;size:160" json:"requestId,omitempty"`
 	SkillName     string     `gorm:"column:skill_name;size:120;not null" json:"skillName"`
 	ToolName      *string    `gorm:"column:tool_name;size:120" json:"toolName,omitempty"`
 	InputSummary  []byte     `gorm:"column:input_summary;type:jsonb" json:"inputSummary,omitempty"`

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/toolregistry"
@@ -111,6 +113,39 @@ func TestExecuteAuditsSkillRun(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].Status != model.SkillRunStatusSuccess || runs[0].FinishedAt == nil {
 		t.Fatalf("unexpected runs: %+v", runs)
+	}
+}
+
+func TestExecuteAuditCarriesRequestIDAndRedactsSensitiveInput(t *testing.T) {
+	audit := newMemoryAudit()
+	registry, err := NewRegistry(toolregistry.NewBuiltinRegistry(), audit, testSkill{name: "safe_skill", risk: model.SkillRiskSafeRead})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	ctx := appmiddleware.ContextWithRequestID(context.Background(), "req-skill-audit")
+
+	_, err = registry.Execute(ctx, ExecuteInput{
+		Actor:   userActor(),
+		Name:    "safe_skill",
+		Payload: json.RawMessage(`{"message":"hello","password":"plain-secret","nested":{"apiToken":"token-value"}}`),
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	runs, err := registry.ListRuns(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RequestID == nil || *runs[0].RequestID != "req-skill-audit" {
+		t.Fatalf("request id not audited: %+v", runs)
+	}
+	input := string(runs[0].InputSummary)
+	output := string(runs[0].OutputSummary)
+	if strings.Contains(input, "plain-secret") || strings.Contains(output, "token-value") {
+		t.Fatalf("sensitive value leaked in audit input=%s output=%s", input, output)
+	}
+	if !strings.Contains(input, "[REDACTED]") || !strings.Contains(output, "[REDACTED]") {
+		t.Fatalf("audit summaries were not redacted input=%s output=%s", input, output)
 	}
 }
 
