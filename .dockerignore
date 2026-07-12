@@ -1,7 +1,7 @@
 .git
 .codex
 .agents
-.env
+env
 data
 dist
 coverage

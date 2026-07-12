@@ -11,19 +11,21 @@ import { WorkflowPage } from "@/pages/workflow-page";
 
 export const router = createBrowserRouter([
   {
+    path: "/",
+    element: <Navigate to="/login" replace />,
+  },
+  {
     path: "/login",
     element: <LoginPage />,
   },
   {
-    path: "/",
     element: <AppShell />,
     children: [
-      { index: true, element: <Navigate to="/dashboard" replace /> },
-      { path: "dashboard", element: <DashboardPage /> },
-      { path: "analysis", element: <AnalysisPage /> },
-      { path: "knowledge", element: <KnowledgePage /> },
-      { path: "workflows", element: <WorkflowPage /> },
-      { path: "operations", element: <OperationsPage /> },
+      { path: "/dashboard", element: <DashboardPage /> },
+      { path: "/analysis", element: <AnalysisPage /> },
+      { path: "/knowledge", element: <KnowledgePage /> },
+      { path: "/workflows", element: <WorkflowPage /> },
+      { path: "/operations", element: <OperationsPage /> },
     ],
   },
   {
