@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-api-config
+  namespace: aiops
+data:
+  APP_ENV: prod
+  APP_PORT: "8080"
+  APP_TIMEZONE: Asia/Shanghai
+  DB_HOST: postgres.default.svc.cluster.local
+  DB_PORT: "5432"
+  DB_USER: aiops
+  DB_NAME: aiops
+  DB_SSLMODE: disable
+  LOCAL_FILE_DIR: /app/data/uploads
+  MAX_UPLOAD_BYTES: "52428800"
+  RAG_CHUNK_SIZE: "800"
+  RAG_CHUNK_OVERLAP: "100"

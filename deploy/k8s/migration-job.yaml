@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aiops-migrate
+  namespace: aiops
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: aiops-platform:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /app/migrate
+            - up
+          envFrom:
+            - configMapRef:
+                name: aiops-api-config
+            - secretRef:
+                name: aiops-api-secret

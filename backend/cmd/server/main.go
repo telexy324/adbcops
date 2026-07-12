@@ -213,8 +213,11 @@ func run() error {
 			SFTPHandler:         sftpHandler,
 			K8sHandler:          k8sHandler,
 			MetricsHandler:      metricsHandler,
-			Authenticate:        appmiddleware.Authenticate(authService),
-			RequireAdmin:        appmiddleware.RequireAdmin(),
+			ReadinessCheck: func(ctx context.Context) error {
+				return databaseConnection.SQL.PingContext(ctx)
+			},
+			Authenticate: appmiddleware.Authenticate(authService),
+			RequireAdmin: appmiddleware.RequireAdmin(),
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,

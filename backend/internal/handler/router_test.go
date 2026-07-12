@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -44,6 +45,60 @@ func TestHealth(t *testing.T) {
 	}
 	if body.Code != 0 || body.Message != "success" || body.Data.Status != "ok" {
 		t.Fatalf("response = %+v", body)
+	}
+}
+
+func TestLiveness(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(discardLogger(), RouterDependencies{})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/live", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body struct {
+		Data struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.Status != "alive" {
+		t.Fatalf("status = %q, want alive", body.Data.Status)
+	}
+}
+
+func TestReadiness(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(discardLogger(), RouterDependencies{
+		ReadinessCheck: func(_ context.Context) error { return nil },
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/ready", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+}
+
+func TestReadinessReportsUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(discardLogger(), RouterDependencies{
+		ReadinessCheck: func(_ context.Context) error { return errors.New("database unavailable") },
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/ready", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
 

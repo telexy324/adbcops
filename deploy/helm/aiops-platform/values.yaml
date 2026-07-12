@@ -1,0 +1,64 @@
+replicaCount: 1
+
+image:
+  repository: aiops-platform
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+env:
+  APP_ENV: prod
+  APP_PORT: "8080"
+  APP_TIMEZONE: Asia/Shanghai
+  DB_HOST: postgres.default.svc.cluster.local
+  DB_PORT: "5432"
+  DB_USER: aiops
+  DB_NAME: aiops
+  DB_SSLMODE: disable
+  LOCAL_FILE_DIR: /app/data/uploads
+  MAX_UPLOAD_BYTES: "52428800"
+  RAG_CHUNK_SIZE: "800"
+  RAG_CHUNK_OVERLAP: "100"
+
+secrets:
+  DB_PASSWORD: replace-with-a-random-database-password
+  JWT_SECRET: replace-with-a-long-random-jwt-secret-at-least-32-chars
+  INITIAL_ADMIN_USERNAME: admin
+  INITIAL_ADMIN_PASSWORD: replace-with-a-strong-admin-password
+  CREDENTIAL_MASTER_KEY: replace-with-a-32-byte-random-key-material
+  CREDENTIAL_KEY_VERSION: v1
+
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+
+migration:
+  enabled: true
+  backoffLimit: 3
+
+probes:
+  liveness:
+    path: /api/live
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /api/ready
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi

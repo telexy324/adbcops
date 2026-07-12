@@ -31,6 +31,7 @@ type RouterDependencies struct {
 	SFTPHandler         *SFTPHandler
 	K8sHandler          *K8sHandler
 	MetricsHandler      *MetricsHandler
+	ReadinessCheck      ReadinessChecker
 	Authenticate        gin.HandlerFunc
 	RequireAdmin        gin.HandlerFunc
 }
@@ -48,6 +49,8 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 	)
 
 	router.GET("/api/health", health)
+	router.GET("/api/live", liveness)
+	router.GET("/api/ready", readiness(dependencies.ReadinessCheck))
 	router.GET("/api/metrics", platformMetrics)
 	if dependencies.AuditHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		auditRoutes := router.Group("/api/audit-logs")

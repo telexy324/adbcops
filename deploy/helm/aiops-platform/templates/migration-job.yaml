@@ -1,0 +1,28 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aiops-platform.fullname" . }}-migrate
+  labels:
+    {{- include "aiops-platform.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "aiops-platform.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /app/migrate
+            - up
+          envFrom:
+            - configMapRef:
+                name: {{ include "aiops-platform.fullname" . }}-config
+            - secretRef:
+                name: {{ include "aiops-platform.fullname" . }}-secret
+{{- end }}

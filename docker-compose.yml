@@ -1,5 +1,26 @@
 name: aiops-platform
 
+x-api-env: &api-env
+  APP_ENV: ${APP_ENV:-dev}
+  APP_PORT: 8080
+  APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Shanghai}
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_USER: ${DB_USER:?DB_USER is required}
+  DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+  DB_NAME: ${DB_NAME:?DB_NAME is required}
+  DB_SSLMODE: ${DB_SSLMODE:-disable}
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+  JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-12}
+  INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:?INITIAL_ADMIN_USERNAME is required}
+  INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?INITIAL_ADMIN_PASSWORD is required}
+  CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:?CREDENTIAL_MASTER_KEY is required}
+  CREDENTIAL_KEY_VERSION: ${CREDENTIAL_KEY_VERSION:-v1}
+  LOCAL_FILE_DIR: /app/data/uploads
+  MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-52428800}
+  RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-800}
+  RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-100}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -20,5 +41,46 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aiops-platform:local
+    command: ["/app/migrate", "up"]
+    entrypoint: []
+    environment:
+      <<: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aiops-platform:local
+    command: ["/app/server"]
+    entrypoint: []
+    environment:
+      <<: *api-env
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/ready >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  uploads_data:
