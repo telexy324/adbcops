@@ -8,6 +8,7 @@ import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
+import { OperationsPage } from "@/pages/operations-page";
 import { WorkflowPage } from "@/pages/workflow-page";
 
 vi.mock("@/api/auth", () => ({
@@ -76,6 +77,120 @@ vi.mock("@/api/workflows", () => ({
     errors: ["agent node knowledge references unknown agent: missing_agent"],
     warnings: [],
   }),
+}));
+
+vi.mock("@/api/operations", () => ({
+  confirmRootCause: vi.fn(),
+  getBlastRadius: vi.fn().mockResolvedValue({
+    rootKey: "service:payment-api",
+    direction: "both",
+    hops: 2,
+    cycleDetected: false,
+    nodes: [],
+    edges: [],
+  }),
+  getIncident: vi.fn().mockResolvedValue({
+    incident: {
+      id: 1,
+      incidentKey: "INC-20260712-0001",
+      title: "支付接口错误率升高",
+      severity: "critical",
+      status: "investigating",
+      environment: "prod",
+      systemName: "payment",
+      componentName: "payment-api",
+      summary: "错误率在发布后明显升高。",
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+    events: [
+      { id: 1, incidentId: 1, eventId: 101, createdAt: "2026-07-12T10:00:00Z" },
+    ],
+    evidence: [
+      {
+        id: 1,
+        incidentId: 1,
+        evidenceKey: "event:101",
+        createdAt: "2026-07-12T10:00:00Z",
+      },
+    ],
+    rootCauses: [
+      {
+        id: 1,
+        incidentId: 1,
+        summary: "最近一次发布引入配置变更",
+        score: 0.86,
+        confirmed: false,
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+    ],
+    activities: [],
+  }),
+  getTimeline: vi.fn().mockResolvedValue({
+    from: "2026-07-12T08:00:00Z",
+    to: "2026-07-12T10:30:00Z",
+    timezone: "Asia/Shanghai",
+    anchorEventId: 101,
+    sourceCounts: { alertmanager: 1 },
+    items: [
+      {
+        eventId: 101,
+        time: "2026-07-12T10:00:00Z",
+        sourceType: "alertmanager",
+        eventType: "alert",
+        severity: "critical",
+        status: "firing",
+        summary: "HighErrorRate firing",
+      },
+    ],
+  }),
+  getTopologyGraph: vi.fn().mockResolvedValue({
+    nodes: [
+      {
+        id: 1,
+        nodeKey: "service:payment-api",
+        kind: "service",
+        name: "payment-api",
+        sourceType: "manual",
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+      {
+        id: 2,
+        nodeKey: "db:orders",
+        kind: "database",
+        name: "orders",
+        sourceType: "manual",
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+    ],
+    edges: [
+      {
+        id: 1,
+        edgeKey: "service:payment-api->db:orders",
+        fromNodeKey: "service:payment-api",
+        toNodeKey: "db:orders",
+        edgeType: "depends_on",
+        sourceType: "manual",
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+    ],
+  }),
+  listIncidents: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      incidentKey: "INC-20260712-0001",
+      title: "支付接口错误率升高",
+      severity: "critical",
+      status: "investigating",
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  toAPIErrorMessage: vi.fn(() => "请求失败"),
 }));
 
 function renderWithQueryClient(element: ReactElement) {
@@ -191,6 +306,35 @@ describe("WorkflowPage", () => {
       await screen.findByText(
         "agent node knowledge references unknown agent: missing_agent",
       ),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("OperationsPage", () => {
+  it("renders topology, blast radius and incident investigation panels", async () => {
+    renderWithQueryClient(<OperationsPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "拓扑 / 故障中心" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "拓扑图谱" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Blast Radius" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("支付接口错误率升高")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Incident Timeline" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Evidence" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Root Cause Candidates" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "报告导出 Markdown" }),
     ).toBeInTheDocument();
   });
 });

@@ -26,8 +26,8 @@ const navigation = [
   { label: "知识中心", icon: BookOpenText, to: "/knowledge", enabled: true },
   { label: "告警中心", icon: BellRing, enabled: false },
   { label: "工作流", icon: Workflow, to: "/workflows", enabled: true },
-  { label: "拓扑视图", icon: Network, enabled: false },
-  { label: "故障中心", icon: Siren, enabled: false },
+  { label: "拓扑视图", icon: Network, to: "/operations", enabled: true },
+  { label: "故障中心", icon: Siren, to: "/operations", enabled: true },
 ];
 
 export function AppShell() {
