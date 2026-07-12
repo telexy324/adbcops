@@ -32,6 +32,7 @@ import (
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/skillframework"
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
+	timelinesvc "aiops-platform/backend/internal/timeline"
 	"aiops-platform/backend/internal/toolregistry"
 	topologysvc "aiops-platform/backend/internal/topology"
 	usersvc "aiops-platform/backend/internal/user"
@@ -116,6 +117,7 @@ func run() error {
 	alertService := alertsvc.NewService(eventRepository)
 	evidenceService := evidencesvc.NewService(evidenceRepository)
 	topologyService := topologysvc.NewService(topologyRepository, k8sService)
+	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
@@ -161,6 +163,7 @@ func run() error {
 	eventHandler := handler.NewEventHandler(alertService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
 	topologyHandler := handler.NewTopologyHandler(topologyService)
+	timelineHandler := handler.NewTimelineHandler(timelineService)
 	toolHandler := handler.NewToolHandler(toolRegistry)
 	skillHandler := handler.NewSkillHandler(skillRegistry)
 	agentHandler := handler.NewAgentHandler(agentRuntime)
@@ -184,6 +187,7 @@ func run() error {
 			EventHandler:        eventHandler,
 			EvidenceHandler:     evidenceHandler,
 			TopologyHandler:     topologyHandler,
+			TimelineHandler:     timelineHandler,
 			ToolHandler:         toolHandler,
 			SkillHandler:        skillHandler,
 			AgentHandler:        agentHandler,

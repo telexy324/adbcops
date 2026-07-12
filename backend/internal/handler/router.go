@@ -19,6 +19,7 @@ type RouterDependencies struct {
 	EventHandler        *EventHandler
 	EvidenceHandler     *EvidenceHandler
 	TopologyHandler     *TopologyHandler
+	TimelineHandler     *TimelineHandler
 	ToolHandler         *ToolHandler
 	SkillHandler        *SkillHandler
 	AgentHandler        *AgentHandler
@@ -71,6 +72,11 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.POST("/nodes", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertNode)
 		topologyRoutes.POST("/edges", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertEdge)
 		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
+	}
+	if dependencies.TimelineHandler != nil && dependencies.Authenticate != nil {
+		timelineRoutes := router.Group("/api/timeline")
+		timelineRoutes.Use(dependencies.Authenticate)
+		timelineRoutes.GET("", dependencies.TimelineHandler.Build)
 	}
 	if dependencies.AuthHandler != nil && dependencies.Authenticate != nil {
 		authRoutes := router.Group("/api/auth")

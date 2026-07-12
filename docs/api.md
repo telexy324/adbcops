@@ -763,6 +763,23 @@ GET /api/topology/blast-radius?nodeKey=svc:prod:payment-db&hops=3&maxNodes=200
 
 `hops` 默认 1，最大 10；`maxNodes` 默认 200，最大 1000。遍历过程会检测有向环并在响应中返回 `cycleDetected`；超过最大节点数会返回失败，避免一次查询拉取过大的拓扑子图。
 
+## Timeline
+
+Timeline Engine 用于把告警、日志异常、指标异常、K8s Event、变更等多源 `ops_event` 合并成统一时间线，并可关联 Evidence。
+
+```http
+GET /api/timeline
+```
+
+支持两类窗口：
+
+```http
+GET /api/timeline?from=2026-07-12T10:00:00+08:00&to=2026-07-12T11:00:00+08:00&includeEvidence=true
+GET /api/timeline?anchorEventId=123&beforeMinutes=30&afterMinutes=30&includeEvidence=true
+```
+
+查询参数支持 `limit`、`sourceType`、`environment`、`systemName`、`componentName`、`namespace`、`resourceName`、`maxEvidencePerEvent`。响应中的 `time`、`from`、`to` 统一为 UTC；同时间事件使用 `sourceType + eventType + id` 稳定排序。Evidence 关联会读取事件 `payload.evidenceKeys`、`payload.evidenceKey` 或 `payload.evidence_refs`。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。
