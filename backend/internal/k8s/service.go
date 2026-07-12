@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
+	"aiops-platform/backend/internal/resourcelimit"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -30,6 +32,7 @@ var (
 	ErrNoAllowedNamespaces = errors.New("allowed namespaces are required")
 	ErrUnsupportedResource = errors.New("unsupported kubernetes resource")
 	ErrDataSourceDisabled  = errors.New("data source disabled")
+	ErrDataSourceLimited   = errors.New("data source concurrency limit exceeded")
 )
 
 type Repository interface {
@@ -53,6 +56,7 @@ type Service struct {
 	secrets    SecretManager
 	factory    ClientFactory
 	logReader  PodLogReader
+	limiter    *resourcelimit.KeyedLimiter
 }
 
 type Config struct {
@@ -232,25 +236,37 @@ func NewService(repository Repository, secrets SecretManager, factory ClientFact
 	if factory == nil {
 		factory = realClientFactory{}
 	}
-	return &Service{repository: repository, secrets: secrets, factory: factory, logReader: clientPodLogReader{}}
+	return &Service{repository: repository, secrets: secrets, factory: factory, logReader: clientPodLogReader{}, limiter: resourcelimit.NewKeyedLimiter(4)}
+}
+
+func (s *Service) SetDataSourceLimiter(limiter *resourcelimit.KeyedLimiter) {
+	s.limiter = limiter
 }
 
 func (s *Service) Test(ctx context.Context, actor *model.AppUser, dataSourceID int64) (*TestResult, error) {
 	if actor == nil {
 		return nil, ErrForbidden
 	}
+	release, err := s.acquireDataSource(ctx, dataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	dataSource, config, credential, err := s.load(ctx, dataSourceID)
 	if err != nil {
 		return nil, err
 	}
 	client, err := s.factory.ClientFor(ctx, dataSource, config, credential)
 	if err != nil {
+		observability.SetDatasourceHealth(model.DataSourceTypeKubernetes, dataSourceID, false)
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
 	ns := config.AllowedNamespaces[0]
 	if _, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
+		observability.SetDatasourceHealth(model.DataSourceTypeKubernetes, dataSourceID, false)
 		return nil, fmt.Errorf("test kubernetes client: %w", err)
 	}
+	observability.SetDatasourceHealth(model.DataSourceTypeKubernetes, dataSourceID, true)
 	return &TestResult{OK: true, AllowedNamespaces: config.AllowedNamespaces, Message: "kubernetes client can read allowed namespace"}, nil
 }
 
@@ -258,6 +274,11 @@ func (s *Service) Resources(ctx context.Context, actor *model.AppUser, input Res
 	if actor == nil {
 		return nil, ErrForbidden
 	}
+	release, err := s.acquireDataSource(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	dataSource, config, credential, err := s.load(ctx, input.DataSourceID)
 	if err != nil {
 		return nil, err
@@ -295,6 +316,11 @@ func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input P
 	if namespace == "" || podName == "" {
 		return nil, ErrInvalidInput
 	}
+	release, err := s.acquireDataSource(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	dataSource, config, credential, err := s.load(ctx, input.DataSourceID)
 	if err != nil {
 		return nil, err
@@ -343,6 +369,17 @@ func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input P
 	}
 	result.Rules = EvaluatePodRules(result)
 	return result, nil
+}
+
+func (s *Service) acquireDataSource(ctx context.Context, dataSourceID int64) (func(), error) {
+	release, err := s.limiter.Acquire(ctx, fmt.Sprintf("k8s:%d", dataSourceID))
+	if err == nil {
+		return release, nil
+	}
+	if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+		return nil, ErrDataSourceLimited
+	}
+	return nil, err
 }
 
 func (s *Service) load(ctx context.Context, dataSourceID int64) (*model.DataSource, Config, Credential, error) {

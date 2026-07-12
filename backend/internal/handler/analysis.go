@@ -182,10 +182,14 @@ func handleAnalysisError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, analysissvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40310, "analysis access forbidden")
+	case errors.Is(err, analysissvc.ErrRateLimited):
+		failure(c, http.StatusTooManyRequests, 42901, "analysis concurrency limit exceeded")
 	case errors.Is(err, logssvc.ErrTimeRangeTooLarge):
 		failure(c, http.StatusBadRequest, 40008, "time range exceeds 24 hours")
 	case errors.Is(err, logssvc.ErrLogQueryTimeout):
 		failure(c, http.StatusGatewayTimeout, 50401, "log query timeout")
+	case errors.Is(err, logssvc.ErrDataSourceLimited):
+		failure(c, http.StatusTooManyRequests, 42902, "data source concurrency limit exceeded")
 	case errors.Is(err, logssvc.ErrInvalidInput), errors.Is(err, logssvc.ErrUnsupportedSource), errors.Is(err, logssvc.ErrDataSourceDisabled):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, logssvc.ErrForbidden):

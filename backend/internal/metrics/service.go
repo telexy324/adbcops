@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
+	"aiops-platform/backend/internal/resourcelimit"
 )
 
 const (
@@ -37,6 +39,7 @@ var (
 	ErrUnsupportedSource  = errors.New("unsupported metrics data source")
 	ErrDataSourceDisabled = errors.New("data source disabled")
 	ErrMetricsTimeout     = errors.New("metrics query timeout")
+	ErrDataSourceLimited  = errors.New("data source concurrency limit exceeded")
 )
 
 type Repository interface {
@@ -51,6 +54,7 @@ type Service struct {
 	repository Repository
 	secrets    SecretManager
 	client     *http.Client
+	limiter    *resourcelimit.KeyedLimiter
 }
 
 type QueryInput struct {
@@ -135,7 +139,11 @@ func NewService(repository Repository, secrets SecretManager, client *http.Clien
 	if client == nil {
 		client = &http.Client{Timeout: maxTimeout}
 	}
-	return &Service{repository: repository, secrets: secrets, client: client}
+	return &Service{repository: repository, secrets: secrets, client: client, limiter: resourcelimit.NewKeyedLimiter(4)}
+}
+
+func (s *Service) SetDataSourceLimiter(limiter *resourcelimit.KeyedLimiter) {
+	s.limiter = limiter
 }
 
 func (s *Service) Test(ctx context.Context, actor *model.AppUser, dataSourceID int64) (*TestResult, error) {
@@ -144,8 +152,10 @@ func (s *Service) Test(ctx context.Context, actor *model.AppUser, dataSourceID i
 	}
 	_, err := s.Query(ctx, actor, QueryInput{DataSourceID: dataSourceID, Query: "up", MaxSeries: 1, MaxPoints: 1})
 	if err != nil {
+		observability.SetDatasourceHealth(model.DataSourceTypePrometheus, dataSourceID, false)
 		return nil, err
 	}
+	observability.SetDatasourceHealth(model.DataSourceTypePrometheus, dataSourceID, true)
 	return &TestResult{OK: true, Message: "prometheus query API is readable"}, nil
 }
 
@@ -157,6 +167,14 @@ func (s *Service) Query(ctx context.Context, actor *model.AppUser, input QueryIn
 	if err != nil {
 		return nil, err
 	}
+	release, err := s.limiter.Acquire(ctx, fmt.Sprintf("metrics:%d", normalized.DataSourceID))
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			return nil, ErrDataSourceLimited
+		}
+		return nil, err
+	}
+	defer release()
 	dataSource, config, credential, err := s.load(ctx, normalized.DataSourceID)
 	if err != nil {
 		return nil, err

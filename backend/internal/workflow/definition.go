@@ -18,6 +18,9 @@ const (
 	NodeTypeSkill     = "skill"
 	NodeTypeCondition = "condition"
 	NodeTypeMerge     = "merge"
+
+	maxWorkflowNodes = 100
+	maxWorkflowEdges = 200
 )
 
 var ErrInvalidDefinition = errors.New("invalid workflow definition")
@@ -107,6 +110,14 @@ func (v *graphValidator) validate() {
 	}
 	if len(v.definition.Nodes) == 0 {
 		v.addError("at least one node is required")
+		return
+	}
+	if len(v.definition.Nodes) > maxWorkflowNodes {
+		v.addError(fmt.Sprintf("workflow node limit exceeded: %d > %d", len(v.definition.Nodes), maxWorkflowNodes))
+		return
+	}
+	if len(v.definition.Edges) > maxWorkflowEdges {
+		v.addError(fmt.Sprintf("workflow edge limit exceeded: %d > %d", len(v.definition.Edges), maxWorkflowEdges))
 		return
 	}
 	v.validateNodes()

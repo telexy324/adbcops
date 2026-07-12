@@ -12,13 +12,16 @@ import (
 	"aiops-platform/backend/internal/auditutil"
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/resourcelimit"
 	"aiops-platform/backend/internal/skillframework"
 )
 
 const defaultWorkflowTimeout = 180 * time.Second
 
 var ErrWorkflowCancelled = errors.New("workflow cancelled")
+var ErrWorkflowLimited = errors.New("workflow concurrency limit exceeded")
 
 type DefinitionRepository interface {
 	FindWorkflowDefinitionByID(ctx context.Context, id int64) (*model.WorkflowDefinition, error)
@@ -48,6 +51,7 @@ type Executor struct {
 	agentCatalog AgentCatalog
 	skillCatalog SkillCatalog
 	timeout      time.Duration
+	limiter      *resourcelimit.Limiter
 	now          func() time.Time
 }
 
@@ -81,14 +85,28 @@ func NewExecutor(repository interface {
 		agentCatalog: agents,
 		skillCatalog: skills,
 		timeout:      timeout,
+		limiter:      resourcelimit.NewLimiter(8),
 		now:          func() time.Time { return time.Now().UTC() },
 	}
+}
+
+func (e *Executor) SetLimiter(limiter *resourcelimit.Limiter) {
+	e.limiter = limiter
 }
 
 func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.WorkflowRun, error) {
 	if input.Actor == nil || input.WorkflowID <= 0 {
 		return nil, ErrInvalidDefinition
 	}
+	startedAt := e.now()
+	release, err := e.limiter.Acquire(ctx)
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			return nil, ErrWorkflowLimited
+		}
+		return nil, err
+	}
+	defer release()
 	timeout := e.timeout
 	if input.Timeout > 0 {
 		timeout = input.Timeout
@@ -147,8 +165,10 @@ func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.Workflo
 		FinishedAt:   &finishedAt,
 	})
 	if updateErr != nil {
+		observability.ObserveWorkflow(model.WorkflowRunStatusFailed, e.now().Sub(startedAt))
 		return nil, updateErr
 	}
+	observability.ObserveWorkflow(status, finishedAt.Sub(startedAt))
 	if executeErr != nil {
 		return updated, executeErr
 	}

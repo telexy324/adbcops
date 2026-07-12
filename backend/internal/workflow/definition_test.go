@@ -41,6 +41,17 @@ func TestValidateRejectsUnknownAgentAndSkill(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsOversizedWorkflow(t *testing.T) {
+	definition := validDefinition()
+	for index := 0; index < maxWorkflowNodes; index++ {
+		definition.Nodes = append(definition.Nodes, Node{ID: "extra" + string(rune(index+65)), Type: NodeTypeMerge})
+	}
+	result := Validate(definition, fakeAgentCatalog{"knowledge_agent": true}, fakeSkillCatalog{"search_knowledge": true})
+	if result.Valid || !containsError(result.Errors, "node limit exceeded") {
+		t.Fatalf("expected node limit error, got %+v", result)
+	}
+}
+
 func validDefinition() Definition {
 	return Definition{
 		Name:    "knowledge_qa_workflow",

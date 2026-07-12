@@ -13,6 +13,7 @@ import (
 	"aiops-platform/backend/internal/auditutil"
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/toolregistry"
 )
@@ -208,6 +209,7 @@ func (r *Registry) Execute(ctx context.Context, input ExecuteInput) (*ExecuteRes
 			FinishedAt:    &finishedAt,
 		})
 	}
+	observability.ObserveSkill(normalized, status, finishedAt.Sub(startedAt))
 	if executeErr != nil {
 		return nil, executeErr
 	}

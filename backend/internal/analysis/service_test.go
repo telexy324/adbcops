@@ -3,6 +3,7 @@ package analysis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	logssvc "aiops-platform/backend/internal/logs"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/resourcelimit"
 )
 
 func TestRunGeneralProducesEvidenceCitationsAndSeparatesSpeculation(t *testing.T) {
@@ -61,6 +63,26 @@ func TestGetRejectsForeignTask(t *testing.T) {
 	_, err := service.Get(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, task.ID)
 	if err != ErrForbidden {
 		t.Fatalf("Get() error = %v, want ErrForbidden", err)
+	}
+}
+
+func TestRunGeneralRejectsWhenUserConcurrencyLimitExceeded(t *testing.T) {
+	service := NewService(newFakeRepository(), &fakeLogQuerier{}, nil, nil)
+	limiter := resourcelimit.NewKeyedLimiter(1)
+	release, err := limiter.Acquire(context.Background(), "user:7")
+	if err != nil {
+		t.Fatalf("pre-acquire limiter: %v", err)
+	}
+	defer release()
+	service.SetUserLimiter(limiter)
+
+	_, err = service.RunGeneral(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, RunInput{
+		Question:      "q",
+		Scope:         Scope{TimeStart: time.Now().Add(-time.Hour), TimeEnd: time.Now()},
+		DataSourceIDs: []int64{1},
+	})
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("RunGeneral() error = %v, want ErrRateLimited", err)
 	}
 }
 

@@ -117,6 +117,8 @@ func handleK8sError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, k8ssvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40313, "kubernetes access forbidden")
+	case errors.Is(err, k8ssvc.ErrDataSourceLimited):
+		failure(c, http.StatusTooManyRequests, 42902, "data source concurrency limit exceeded")
 	case errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "data source not found")
 	default:

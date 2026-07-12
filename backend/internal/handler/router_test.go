@@ -87,6 +87,29 @@ func TestRecoveryIncludesRequestID(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointExposesHTTPRequestMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(discardLogger(), RouterDependencies{})
+
+	healthRequest := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	healthResponse := httptest.NewRecorder()
+	router.ServeHTTP(healthResponse, healthRequest)
+	if healthResponse.Code != http.StatusOK {
+		t.Fatalf("health status = %d", healthResponse.Code)
+	}
+
+	metricsRequest := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	metricsResponse := httptest.NewRecorder()
+	router.ServeHTTP(metricsResponse, metricsRequest)
+	if metricsResponse.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d", metricsResponse.Code)
+	}
+	body := metricsResponse.Body.String()
+	if !strings.Contains(body, "aiops_http_requests_total") || !strings.Contains(body, `route="/api/health"`) {
+		t.Fatalf("metrics body missing http metrics:\n%s", body)
+	}
+}
+
 func TestAuditMiddlewareRecordsRequestIDAndRedactsQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := &routerAuditRecorder{}

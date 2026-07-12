@@ -99,6 +99,8 @@ func handleMetricsError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusForbidden, 40314, "metrics access forbidden")
 	case errors.Is(err, metricssvc.ErrMetricsTimeout):
 		failure(c, http.StatusGatewayTimeout, 50401, "metrics query timeout")
+	case errors.Is(err, metricssvc.ErrDataSourceLimited):
+		failure(c, http.StatusTooManyRequests, 42902, "data source concurrency limit exceeded")
 	case errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "data source not found")
 	default:

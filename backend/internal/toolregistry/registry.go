@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"aiops-platform/backend/internal/observability"
 )
 
 var (
@@ -164,25 +166,33 @@ func (r *Registry) Disable(name string) (ToolDefinition, error) {
 }
 
 func (r *Registry) Test(ctx context.Context, name string) error {
-	entry, _, err := r.lookup(name)
+	entry, normalized, err := r.lookup(name)
 	if err != nil {
+		observability.ObserveTool(normalizeName(name), "test", err)
 		return err
 	}
 	if !entry.enabled {
+		observability.ObserveTool(normalized, "test", ErrToolDisabled)
 		return ErrToolDisabled
 	}
-	return entry.tool.Test(ctx)
+	err = entry.tool.Test(ctx)
+	observability.ObserveTool(normalized, "test", err)
+	return err
 }
 
 func (r *Registry) Invoke(ctx context.Context, name string, operation string, input json.RawMessage) (json.RawMessage, error) {
-	entry, _, err := r.lookup(name)
+	entry, normalized, err := r.lookup(name)
 	if err != nil {
+		observability.ObserveTool(normalizeName(name), operation, err)
 		return nil, err
 	}
 	if !entry.enabled {
+		observability.ObserveTool(normalized, operation, ErrToolDisabled)
 		return nil, ErrToolDisabled
 	}
-	return entry.tool.Invoke(ctx, operation, input)
+	output, err := entry.tool.Invoke(ctx, operation, input)
+	observability.ObserveTool(normalized, operation, err)
+	return output, err
 }
 
 func (r *Registry) SkillCanExecute(requiredTools []string) error {

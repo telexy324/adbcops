@@ -205,6 +205,8 @@ func handleLLMError(c *gin.Context, err error, fallback string) bool {
 	switch {
 	case errors.Is(err, llmsvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
+	case errors.Is(err, llmsvc.ErrLLMLimited):
+		failure(c, http.StatusTooManyRequests, 42904, "llm concurrency limit exceeded")
 	case errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "llm config not found")
 	default:

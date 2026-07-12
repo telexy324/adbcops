@@ -380,6 +380,8 @@ func handleWorkflowError(c *gin.Context, err error, fallback string) bool {
 	switch {
 	case errors.Is(err, workflowdsl.ErrInvalidDefinition):
 		failure(c, http.StatusBadRequest, 40003, "invalid workflow definition")
+	case errors.Is(err, workflowdsl.ErrWorkflowLimited):
+		failure(c, http.StatusTooManyRequests, 42903, "workflow concurrency limit exceeded")
 	case errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "workflow not found")
 	default:

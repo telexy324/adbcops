@@ -42,11 +42,13 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 	router.Use(
 		appmiddleware.RequestID(),
 		appmiddleware.Logger(logger),
+		appmiddleware.Metrics(),
 		appmiddleware.Audit(dependencies.AuditRecorder, logger),
 		appmiddleware.Recovery(logger),
 	)
 
 	router.GET("/api/health", health)
+	router.GET("/api/metrics", platformMetrics)
 	if dependencies.AuditHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		auditRoutes := router.Group("/api/audit-logs")
 		auditRoutes.Use(dependencies.Authenticate, dependencies.RequireAdmin)

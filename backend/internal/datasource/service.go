@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
 )
 
@@ -208,9 +209,11 @@ func (s *Service) Test(ctx context.Context, actor *model.AppUser, id int64) (*Te
 	}
 	if dataSource.CredentialID != nil && dataSource.Credential != nil && s.secrets != nil {
 		if _, err := s.secrets.Decrypt(dataSource.Credential.EncryptedPayload); err != nil {
+			observability.SetDatasourceHealth(dataSource.SourceType, dataSource.ID, false)
 			return nil, fmt.Errorf("decrypt data source credential: %w", err)
 		}
 	}
+	observability.SetDatasourceHealth(dataSource.SourceType, dataSource.ID, true)
 	return &TestResult{
 		OK:                   true,
 		SourceType:           dataSource.SourceType,

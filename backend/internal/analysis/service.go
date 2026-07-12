@@ -14,6 +14,7 @@ import (
 	logssvc "aiops-platform/backend/internal/logs"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/resourcelimit"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 var (
 	ErrInvalidInput = errors.New("invalid input")
 	ErrForbidden    = errors.New("analysis access forbidden")
+	ErrRateLimited  = errors.New("analysis concurrency limit exceeded")
 )
 
 type Repository interface {
@@ -48,6 +50,7 @@ type Service struct {
 	logs       LogQuerier
 	secrets    SecretManager
 	client     llmsvc.Client
+	limiter    *resourcelimit.KeyedLimiter
 }
 
 type Scope struct {
@@ -111,13 +114,25 @@ type RunOutput struct {
 }
 
 func NewService(repository Repository, logs LogQuerier, secrets SecretManager, client llmsvc.Client) *Service {
-	return &Service{repository: repository, logs: logs, secrets: secrets, client: client}
+	return &Service{repository: repository, logs: logs, secrets: secrets, client: client, limiter: resourcelimit.NewKeyedLimiter(2)}
+}
+
+func (s *Service) SetUserLimiter(limiter *resourcelimit.KeyedLimiter) {
+	s.limiter = limiter
 }
 
 func (s *Service) RunGeneral(ctx context.Context, actor *model.AppUser, input RunInput) (*RunOutput, error) {
 	if actor == nil {
 		return nil, ErrForbidden
 	}
+	release, err := s.limiter.Acquire(ctx, fmt.Sprintf("user:%d", actor.ID))
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			return nil, ErrRateLimited
+		}
+		return nil, err
+	}
+	defer release()
 	normalized, err := normalizeRunInput(input)
 	if err != nil {
 		return nil, err

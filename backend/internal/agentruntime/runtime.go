@@ -13,6 +13,7 @@ import (
 	"aiops-platform/backend/internal/auditutil"
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/skillframework"
 )
@@ -262,6 +263,7 @@ func (r *Runtime) Run(ctx context.Context, input RunInput) (*RunOutput, error) {
 			FinishedAt:   &finishedAt,
 		})
 	}
+	observability.ObserveAgent(name, status, finishedAt.Sub(startedAt))
 	if runErr != nil {
 		return nil, runErr
 	}

@@ -111,9 +111,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize user service: %w", err)
 	}
+	llmClient := llmsvc.NewLimitedClient(llmsvc.NewOpenAICompatibleClient(nil), 4)
 	conversationService := conversationsvc.NewService(conversationRepository)
-	llmService := llmsvc.NewService(llmRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
-	ragService := ragsvc.NewService(ragRepository, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
+	llmService := llmsvc.NewService(llmRepository, credentialManager, llmClient)
+	ragService := ragsvc.NewService(ragRepository, credentialManager, llmClient)
 	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
 	logsService := logssvc.NewService(dataSourceRepository, credentialManager, nil)
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
@@ -139,7 +140,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize agent runtime: %w", err)
 	}
-	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmsvc.NewOpenAICompatibleClient(nil))
+	analysisService := analysissvc.NewService(analysisRepository, logsService, credentialManager, llmClient)
 	documentService, err := documentsvc.NewService(userRepository, cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes, cfg.RAG.ChunkSize, cfg.RAG.ChunkOverlap)
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
