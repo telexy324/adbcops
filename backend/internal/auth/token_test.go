@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"aiops-platform/backend/internal/model"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestTokenManagerIssueAndParse(t *testing.T) {
@@ -42,5 +43,21 @@ func TestTokenManagerRejectsUnexpectedSigningMethod(t *testing.T) {
 	}
 	if _, err := manager.Parse("not-a-token"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("Parse() error = %v, want ErrInvalidToken", err)
+	}
+	unsigned, err := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
+		"iss":              tokenIssuer,
+		"sub":              "1",
+		"userId":           1,
+		"username":         "admin",
+		"role":             model.RoleAdmin,
+		"issuedAtUnixNano": time.Now().UnixNano(),
+		"exp":              time.Now().Add(time.Hour).Unix(),
+		"iat":              time.Now().Unix(),
+	}).SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("create unsigned token: %v", err)
+	}
+	if _, err := manager.Parse(unsigned); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Parse(unsigned) error = %v, want ErrInvalidToken", err)
 	}
 }

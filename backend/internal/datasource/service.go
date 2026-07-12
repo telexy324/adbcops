@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"unicode/utf8"
@@ -26,6 +27,7 @@ var (
 	ErrAdminRequired   = errors.New("admin role required")
 	ErrInvalidInput    = errors.New("invalid input")
 	ErrSensitiveConfig = errors.New("config contains sensitive credential fields")
+	ErrUnsafeEndpoint  = errors.New("endpoint is not allowed")
 )
 
 type Repository interface {
@@ -382,10 +384,11 @@ func validateConfigByType(sourceType string, raw []byte) error {
 	switch sourceType {
 	case model.DataSourceTypeElasticsearch, model.DataSourceTypeOpenSearch, model.DataSourceTypePrometheus, model.DataSourceTypeHTTP:
 		if endpoint, ok := config["baseUrl"].(string); ok && strings.TrimSpace(endpoint) != "" {
-			parsed, err := url.Parse(strings.TrimSpace(endpoint))
-			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-				return ErrInvalidInput
-			}
+			return validateEndpoint(endpoint)
+		}
+	case model.DataSourceTypeKubernetes:
+		if endpoint, ok := config["apiServer"].(string); ok && strings.TrimSpace(endpoint) != "" {
+			return validateEndpoint(endpoint)
 		}
 	case model.DataSourceTypeSSH:
 		if host, ok := config["host"].(string); ok && strings.TrimSpace(host) == "" {
@@ -393,6 +396,36 @@ func validateConfigByType(sourceType string, raw []byte) error {
 		}
 	}
 	return nil
+}
+
+func validateEndpoint(endpoint string) error {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ErrInvalidInput
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ErrInvalidInput
+	}
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
+	if host == "" {
+		return ErrInvalidInput
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return ErrUnsafeEndpoint
+	}
+	if ip := net.ParseIP(host); ip != nil && unsafeIP(ip) {
+		return ErrUnsafeEndpoint
+	}
+	return nil
+}
+
+func unsafeIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast()
 }
 
 func containsSensitiveKey(value any) bool {

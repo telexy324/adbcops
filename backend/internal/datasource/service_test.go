@@ -47,6 +47,36 @@ func TestCreateEncryptsCredentialAndRejectsSensitiveConfig(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsUnsafeEndpointsForSSRF(t *testing.T) {
+	service := NewService(newFakeRepository(), &fakeSecrets{}, "v1")
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	cases := []struct {
+		name       string
+		sourceType string
+		config     json.RawMessage
+	}{
+		{name: "localhost", sourceType: model.DataSourceTypeHTTP, config: json.RawMessage(`{"baseUrl":"http://localhost:8080/api"}`)},
+		{name: "loopback", sourceType: model.DataSourceTypePrometheus, config: json.RawMessage(`{"baseUrl":"http://127.0.0.1:9090"}`)},
+		{name: "private", sourceType: model.DataSourceTypeElasticsearch, config: json.RawMessage(`{"baseUrl":"http://10.0.0.5:9200"}`)},
+		{name: "metadata", sourceType: model.DataSourceTypeHTTP, config: json.RawMessage(`{"baseUrl":"http://169.254.169.254/latest/meta-data"}`)},
+		{name: "kubernetes api server loopback", sourceType: model.DataSourceTypeKubernetes, config: json.RawMessage(`{"apiServer":"https://[::1]:6443","allowedNamespaces":["default"]}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.Create(context.Background(), admin, SaveInput{
+				Name:       tc.name,
+				SourceType: tc.sourceType,
+				Config:     tc.config,
+				Enabled:    true,
+				ReadOnly:   true,
+			})
+			if err != ErrUnsafeEndpoint {
+				t.Fatalf("Create() error = %v, want ErrUnsafeEndpoint", err)
+			}
+		})
+	}
+}
+
 func TestUserListsOnlyEnabledSanitizedDataSources(t *testing.T) {
 	store := newFakeRepository()
 	service := NewService(store, &fakeSecrets{}, "v1")

@@ -118,6 +118,10 @@ func TestUploadRejectsPathTraversalFileName(t *testing.T) {
 	if err != ErrPathTraversal {
 		t.Fatalf("normalizeFileName() error = %v, want ErrPathTraversal", err)
 	}
+	_, err = normalizeFileName(`..\bad.md`)
+	if err != ErrPathTraversal {
+		t.Fatalf("normalizeFileName(windows) error = %v, want ErrPathTraversal", err)
+	}
 }
 
 func TestUploadRejectsOversizedFile(t *testing.T) {

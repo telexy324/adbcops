@@ -238,6 +238,8 @@ func handleDataSourceError(c *gin.Context, err error, fallback string) bool {
 	switch {
 	case errors.Is(err, datasourcesvc.ErrSensitiveConfig):
 		failure(c, http.StatusBadRequest, 40007, "config contains sensitive credential fields")
+	case errors.Is(err, datasourcesvc.ErrUnsafeEndpoint):
+		failure(c, http.StatusBadRequest, 40010, "endpoint is not allowed")
 	case errors.Is(err, datasourcesvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, datasourcesvc.ErrAdminRequired), errors.Is(err, datasourcesvc.ErrForbidden):
