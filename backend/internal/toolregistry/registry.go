@@ -96,6 +96,13 @@ func BuiltinTools() []Tool {
 			ReadOnly:     true,
 			Capabilities: []string{"webhook", "parse_labels", "fingerprint", "deduplicate", "resolved"},
 		}),
+		NewReadOnlyTool(ToolDefinition{
+			Name:         "generic_http",
+			Type:         "http",
+			Description:  "Read release, configuration and Git change records from configured HTTP APIs.",
+			ReadOnly:     true,
+			Capabilities: []string{"get", "recent_release", "config_change", "git_change", "time_range"},
+		}),
 	}
 }
 

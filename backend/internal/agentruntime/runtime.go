@@ -160,6 +160,7 @@ func BuiltinAgents() []Agent {
 		LogAgent{},
 		MetricsAgent{},
 		KubernetesAgent{},
+		ChangeAgent{},
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	alertsvc "aiops-platform/backend/internal/alert"
 	analysissvc "aiops-platform/backend/internal/analysis"
 	"aiops-platform/backend/internal/auth"
+	changesvc "aiops-platform/backend/internal/change"
 	"aiops-platform/backend/internal/config"
 	conversationsvc "aiops-platform/backend/internal/conversation"
 	correlationsvc "aiops-platform/backend/internal/correlation"
@@ -115,6 +116,7 @@ func run() error {
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
+	changeService := changesvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
 	evidenceService := evidencesvc.NewService(evidenceRepository)
 	topologyService := topologysvc.NewService(topologyRepository, k8sService)
@@ -123,6 +125,7 @@ func run() error {
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
+	skills = append(skills, skillframework.ChangeSkills(changeService)...)
 	skillRegistry, err := skillframework.NewRegistry(toolRegistry, skillRunRepository, skills...)
 	if err != nil {
 		return fmt.Errorf("initialize skill registry: %w", err)

@@ -151,6 +151,40 @@ func (KubernetesAgent) Analyze(ctx context.Context, input AgentContext, runtime 
 	}, "kubernetes context and diagnostic rules completed", 0.7), nil
 }
 
+type ChangeAgent struct{}
+
+func (ChangeAgent) Name() string {
+	return "change_agent"
+}
+
+func (ChangeAgent) Description() string {
+	return "Queries recent release, configuration and Git changes without blocking on partial source failures."
+}
+
+func (ChangeAgent) Analyze(ctx context.Context, input AgentContext, runtime *RunContext) (*AgentResult, error) {
+	dataSourceID, ok := int64Variable(input, "dataSourceId")
+	if !ok {
+		return needsScopeResult("change_agent", "missing change scope: dataSourceId"), nil
+	}
+	payload := map[string]any{
+		"dataSourceId": dataSourceID,
+	}
+	copyOptional(input, payload, "from", "to", "environment", "systemName", "component", "limit")
+	if payload["from"] == nil && payload["to"] == nil {
+		now := time.Now().UTC()
+		payload["from"] = now.Add(-2 * time.Hour).Format(time.RFC3339)
+		payload["to"] = now.Format(time.RFC3339)
+	}
+	if err := runtime.Step("query recent changes"); err != nil {
+		return nil, err
+	}
+	result, err := executeJSONSkill(ctx, runtime, "query_recent_changes", payload)
+	if err != nil {
+		return nil, err
+	}
+	return skillResult("change_agent", "query_recent_changes", result, "recent changes query completed", 0.62), nil
+}
+
 type skillEvidence struct {
 	Skill  string
 	Result *skillExecutionOutput

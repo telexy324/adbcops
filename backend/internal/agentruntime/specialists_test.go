@@ -20,7 +20,7 @@ func TestBuiltinAgentsIncludeSpecialists(t *testing.T) {
 	for _, definition := range runtime.List() {
 		names[definition.Name] = true
 	}
-	for _, name := range []string{"knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent"} {
+	for _, name := range []string{"knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "change_agent"} {
 		if !names[name] {
 			t.Fatalf("missing builtin agent %s in %+v", name, names)
 		}
@@ -94,6 +94,31 @@ func TestSpecialistMissingScopeDoesNotCallProductionSkill(t *testing.T) {
 	}
 	if output.Skills != 0 || len(output.Result.Hypotheses) == 0 {
 		t.Fatalf("expected missing-scope hypothesis without skill call, got %+v", output)
+	}
+}
+
+func TestChangeAgentCallsRecentChangesSkillWithScope(t *testing.T) {
+	runtime := newSpecialistRuntime(t, ChangeAgent{}, namedOutputSkill{
+		name:   "query_recent_changes",
+		output: json.RawMessage(`{"partial":true,"changes":{"count":1,"partial":true}}`),
+	})
+
+	output, err := runtime.Run(context.Background(), RunInput{
+		Actor: adminActor(),
+		Name:  "change_agent",
+		Context: AgentContext{
+			UserID: 1,
+			Variables: map[string]any{
+				"dataSourceId": float64(5),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run change agent: %v", err)
+	}
+	assertEvidenceBacked(t, output.Result)
+	if output.Skills != 1 {
+		t.Fatalf("skills = %d, want 1", output.Skills)
 	}
 }
 

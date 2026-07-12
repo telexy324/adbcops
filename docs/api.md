@@ -807,6 +807,40 @@ Content-Type: application/json
 
 每个候选结果都包含 `scoreDetails`，展示每项分数、权重、加权分和解释。没有 Evidence 引用的候选会被限制在非高置信区间，避免“无证据高置信根因”。
 
+## Change
+
+Change 模块通过只读 Generic HTTP datasource 查询近期变更，覆盖 release、config change 和 Git change 三类来源。数据源类型使用 `http`，配置示例：
+
+```json
+{
+  "baseUrl": "https://changes.example",
+  "recentReleasePath": "/api/releases",
+  "configChangePath": "/api/config-changes",
+  "gitChangePath": "/api/git-changes",
+  "timeoutMs": 10000
+}
+```
+
+每个 endpoint 使用 `GET`，平台会附加 `from`、`to`、`environment`、`systemName`、`component` 查询参数。响应支持：
+
+```json
+{
+  "items": [
+    {
+      "id": "rel-20260712",
+      "title": "payment-api release",
+      "component": "payment-api",
+      "author": "ops",
+      "revision": "v1.2.3",
+      "deployedAt": "2026-07-12T10:00:00Z",
+      "url": "https://changes.example/releases/rel-20260712"
+    }
+  ]
+}
+```
+
+也支持直接返回数组。Skill 名称为 `query_recent_changes`，Agent 名称为 `change_agent`。未显式传 `from/to` 时默认查询最近 2 小时。三类来源独立查询，单个来源失败会返回 `partial=true` 和对应 `sources[].error`，不会阻断其他来源结果。
+
 ## Tool Registry
 
 Tool Registry 提供只读 Tool 元数据和启停管理。所有 v1 Tool 均为只读；平台不暴露通用 invoke API 给前端，业务能力必须通过受控 Skill、Workflow 或专用分析 API 调用。
@@ -826,6 +860,7 @@ POST /api/tools/{name}/disable
 - `kubernetes`
 - `prometheus`
 - `alertmanager`
+- `generic_http`
 
 `GET` 接口要求登录；`test`、`enable`、`disable` 要求管理员。禁用 Tool 后，后续 Skill Framework 会通过 Registry 拒绝依赖该 Tool 的 Skill 执行。
 
