@@ -67,6 +67,51 @@ func TestConfirmRootCauseWritesActivityAudit(t *testing.T) {
 	}
 }
 
+func TestMatchHistoryReturnsAdvisoryOnlyAndDoesNotConfirmRootCause(t *testing.T) {
+	repo := newMemoryIncidentRepository()
+	service := NewService(repo, nil)
+	current, err := service.Create(context.Background(), &model.AppUser{ID: 1}, CreateInput{
+		Title:         "payment api timeout",
+		Severity:      model.IncidentSeverityWarning,
+		Tags:          []string{"payment", "timeout"},
+		ErrorTemplate: "upstream timeout waiting for dependency",
+		RootCauses: []RootCauseCandidateIn{{
+			Summary: "candidate awaiting confirmation",
+			Score:   0.6,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create current incident: %v", err)
+	}
+	historical := model.Incident{
+		ID:            99,
+		Title:         "payment dependency timeout",
+		Severity:      model.IncidentSeverityWarning,
+		Status:        model.IncidentStatusClosed,
+		Tags:          []byte(`["payment","timeout"]`),
+		ErrorTemplate: strPtr("upstream timeout waiting for dependency"),
+	}
+	repo.incidents[historical.ID] = historical
+	repo.similar = []repository.IncidentSimilarityResult{{
+		Incident: historical,
+		Score:    0.77,
+		Reasons:  []string{"text similarity via pg_trgm"},
+	}}
+
+	result, err := service.MatchHistory(context.Background(), &model.AppUser{ID: 2}, current.Incident.ID, MatchQuery{Limit: 5})
+	if err != nil {
+		t.Fatalf("match history: %v", err)
+	}
+	if len(result) != 1 || !result[0].AdvisoryOnly || result[0].Notice == "" {
+		t.Fatalf("expected advisory-only match, got %+v", result)
+	}
+	for _, candidate := range repo.causes[current.Incident.ID] {
+		if candidate.Confirmed {
+			t.Fatalf("history match must not auto-confirm root cause: %+v", candidate)
+		}
+	}
+}
+
 type memoryIncidentRepository struct {
 	nextIncidentID int64
 	nextCauseID    int64
@@ -75,6 +120,7 @@ type memoryIncidentRepository struct {
 	evidence       map[int64][]model.IncidentEvidence
 	causes         map[int64][]model.IncidentRootCauseCandidate
 	activities     map[int64][]model.IncidentActivity
+	similar        []repository.IncidentSimilarityResult
 }
 
 func newMemoryIncidentRepository() *memoryIncidentRepository {
@@ -211,6 +257,13 @@ func (r *memoryIncidentRepository) CreateIncidentActivity(_ context.Context, act
 
 func (r *memoryIncidentRepository) ListIncidentActivities(_ context.Context, incidentID int64) ([]model.IncidentActivity, error) {
 	return r.activities[incidentID], nil
+}
+
+func (r *memoryIncidentRepository) SearchSimilarIncidents(_ context.Context, input repository.IncidentSimilaritySearch) ([]repository.IncidentSimilarityResult, error) {
+	if input.IncidentID <= 0 || input.Text == "" {
+		return nil, nil
+	}
+	return r.similar, nil
 }
 
 func (r *memoryIncidentRepository) hasActivity(incidentID int64, action string) bool {

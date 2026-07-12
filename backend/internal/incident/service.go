@@ -30,6 +30,7 @@ type Repository interface {
 	ListIncidentEvidence(ctx context.Context, incidentID int64) ([]model.IncidentEvidence, error)
 	CreateIncidentActivity(ctx context.Context, activity *model.IncidentActivity) error
 	ListIncidentActivities(ctx context.Context, incidentID int64) ([]model.IncidentActivity, error)
+	SearchSimilarIncidents(ctx context.Context, input repository.IncidentSimilaritySearch) ([]repository.IncidentSimilarityResult, error)
 }
 
 type AnalysisRepository interface {
@@ -49,6 +50,8 @@ type CreateInput struct {
 	SystemName     string                 `json:"systemName"`
 	ComponentName  string                 `json:"componentName"`
 	Summary        string                 `json:"summary"`
+	Tags           []string               `json:"tags"`
+	ErrorTemplate  string                 `json:"errorTemplate"`
 	AnalysisTaskID *int64                 `json:"analysisTaskId"`
 	EventIDs       []int64                `json:"eventIds"`
 	EvidenceKeys   []string               `json:"evidenceKeys"`
@@ -56,17 +59,21 @@ type CreateInput struct {
 }
 
 type UpdateInput struct {
-	Title          *string `json:"title"`
-	Severity       *string `json:"severity"`
-	Status         *string `json:"status"`
-	Environment    *string `json:"environment"`
-	EnvironmentSet bool
-	SystemName     *string `json:"systemName"`
-	SystemSet      bool
-	ComponentName  *string `json:"componentName"`
-	ComponentSet   bool
-	Summary        *string `json:"summary"`
-	SummarySet     bool
+	Title            *string `json:"title"`
+	Severity         *string `json:"severity"`
+	Status           *string `json:"status"`
+	Environment      *string `json:"environment"`
+	EnvironmentSet   bool
+	SystemName       *string `json:"systemName"`
+	SystemSet        bool
+	ComponentName    *string `json:"componentName"`
+	ComponentSet     bool
+	Summary          *string `json:"summary"`
+	SummarySet       bool
+	Tags             []string `json:"tags"`
+	TagsSet          bool
+	ErrorTemplate    *string `json:"errorTemplate"`
+	ErrorTemplateSet bool
 }
 
 type RootCauseCandidateIn struct {
@@ -90,6 +97,18 @@ type Query struct {
 	Severity    string
 	Environment string
 	SystemName  string
+}
+
+type MatchQuery struct {
+	Limit int
+}
+
+type SimilarIncidentResult struct {
+	Incident     model.Incident `json:"incident"`
+	Score        float64        `json:"score"`
+	Reasons      []string       `json:"reasons"`
+	AdvisoryOnly bool           `json:"advisoryOnly"`
+	Notice       string         `json:"notice"`
 }
 
 type Detail struct {
@@ -228,6 +247,42 @@ func (s *Service) ConfirmRootCause(ctx context.Context, actor *model.AppUser, in
 	return s.Get(ctx, actor, incidentID)
 }
 
+func (s *Service) MatchHistory(ctx context.Context, actor *model.AppUser, incidentID int64, query MatchQuery) ([]SimilarIncidentResult, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	if incidentID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	current, err := s.repository.FindIncidentByID(ctx, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	matches, err := s.repository.SearchSimilarIncidents(ctx, repository.IncidentSimilaritySearch{
+		IncidentID:    incidentID,
+		Text:          matchText(current),
+		Tags:          tagsFromRaw(current.Tags),
+		ErrorTemplate: derefString(current.ErrorTemplate),
+		Environment:   derefString(current.Environment),
+		SystemName:    derefString(current.SystemName),
+		Limit:         query.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]SimilarIncidentResult, 0, len(matches))
+	for _, item := range matches {
+		results = append(results, SimilarIncidentResult{
+			Incident:     item.Incident,
+			Score:        item.Score,
+			Reasons:      item.Reasons,
+			AdvisoryOnly: true,
+			Notice:       "仅供参考：历史相似 Incident 不会自动确认当前根因",
+		})
+	}
+	return results, nil
+}
+
 func (s *Service) addRelations(ctx context.Context, incidentID int64, eventIDs []int64, evidenceKeys []string, causes []model.IncidentRootCauseCandidate) error {
 	if err := s.repository.LinkIncidentEvents(ctx, incidentID, uniqueInt64(eventIDs)); err != nil {
 		return err
@@ -269,6 +324,8 @@ func normalizeCreate(input CreateInput, actorID int64) (*model.Incident, []model
 		SystemName:     cleanString(input.SystemName),
 		ComponentName:  cleanString(input.ComponentName),
 		Summary:        cleanString(input.Summary),
+		Tags:           tagsJSON(input.Tags),
+		ErrorTemplate:  cleanString(input.ErrorTemplate),
 		AnalysisTaskID: input.AnalysisTaskID,
 		CreatedBy:      &createdBy,
 	}, causes, nil
@@ -321,6 +378,14 @@ func normalizeUpdate(input UpdateInput) (repository.IncidentUpdates, bool, error
 	if input.SummarySet {
 		updates.Summary = cleanStringPtr(input.Summary)
 		updates.SummarySet = true
+	}
+	if input.TagsSet {
+		updates.Tags = tagsJSON(input.Tags)
+		updates.TagsSet = true
+	}
+	if input.ErrorTemplateSet {
+		updates.ErrorTemplate = cleanStringPtr(input.ErrorTemplate)
+		updates.ErrorTemplateSet = true
 	}
 	return updates, lifecycle, nil
 }
@@ -412,4 +477,33 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func tagsJSON(tags []string) []byte {
+	unique := uniqueStrings(tags)
+	if len(unique) == 0 {
+		return nil
+	}
+	raw, _ := json.Marshal(unique)
+	return raw
+}
+
+func tagsFromRaw(raw []byte) []string {
+	var tags []string
+	if len(raw) == 0 || json.Unmarshal(raw, &tags) != nil {
+		return nil
+	}
+	return uniqueStrings(tags)
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func matchText(incident *model.Incident) string {
+	parts := []string{incident.Title, derefString(incident.Summary), derefString(incident.ErrorTemplate)}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }

@@ -108,6 +108,23 @@ func (h *IncidentHandler) Get(c *gin.Context) {
 	success(c, detail)
 }
 
+func (h *IncidentHandler) Similar(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := incidentIDParam(c)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	result, err := h.service.MatchHistory(c.Request.Context(), actor, id, incidentsvc.MatchQuery{Limit: limit})
+	if handleIncidentError(c, err, "match similar incidents failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *IncidentHandler) ConfirmRootCause(c *gin.Context) {
 	actor, ok := currentUser(c)
 	if !ok {

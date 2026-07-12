@@ -27,19 +27,23 @@ type IncidentRepository interface {
 }
 
 type IncidentUpdates struct {
-	Title          *string
-	Severity       *string
-	Status         *string
-	Environment    *string
-	EnvironmentSet bool
-	SystemName     *string
-	SystemSet      bool
-	ComponentName  *string
-	ComponentSet   bool
-	Summary        *string
-	SummarySet     bool
-	ResolvedAt     *time.Time
-	ClosedAt       *time.Time
+	Title            *string
+	Severity         *string
+	Status           *string
+	Environment      *string
+	EnvironmentSet   bool
+	SystemName       *string
+	SystemSet        bool
+	ComponentName    *string
+	ComponentSet     bool
+	Summary          *string
+	SummarySet       bool
+	Tags             []byte
+	TagsSet          bool
+	ErrorTemplate    *string
+	ErrorTemplateSet bool
+	ResolvedAt       *time.Time
+	ClosedAt         *time.Time
 }
 
 type IncidentFilters struct {
@@ -48,6 +52,22 @@ type IncidentFilters struct {
 	Severity    string
 	Environment string
 	SystemName  string
+}
+
+type IncidentSimilaritySearch struct {
+	IncidentID    int64
+	Text          string
+	Tags          []string
+	ErrorTemplate string
+	Environment   string
+	SystemName    string
+	Limit         int
+}
+
+type IncidentSimilarityResult struct {
+	Incident model.Incident
+	Score    float64
+	Reasons  []string
 }
 
 type GORMIncidentRepository struct {
@@ -87,6 +107,12 @@ func (r *GORMIncidentRepository) UpdateIncident(ctx context.Context, id int64, u
 	}
 	if updates.SummarySet {
 		values["summary"] = updates.Summary
+	}
+	if updates.TagsSet {
+		values["tags"] = updates.Tags
+	}
+	if updates.ErrorTemplateSet {
+		values["error_template"] = updates.ErrorTemplate
 	}
 	if updates.ResolvedAt != nil {
 		values["resolved_at"] = *updates.ResolvedAt
@@ -225,4 +251,60 @@ func (r *GORMIncidentRepository) CreateIncidentActivity(ctx context.Context, act
 func (r *GORMIncidentRepository) ListIncidentActivities(ctx context.Context, incidentID int64) ([]model.IncidentActivity, error) {
 	var rows []model.IncidentActivity
 	return rows, r.db.WithContext(ctx).Where("incident_id = ?", incidentID).Order("created_at ASC, id ASC").Find(&rows).Error
+}
+
+func (r *GORMIncidentRepository) SearchSimilarIncidents(ctx context.Context, input IncidentSimilaritySearch) ([]IncidentSimilarityResult, error) {
+	limit := input.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	text := input.Text
+	if text == "" {
+		text = input.ErrorTemplate
+	}
+	if text == "" {
+		return []IncidentSimilarityResult{}, nil
+	}
+	query := r.db.WithContext(ctx).
+		Model(&model.Incident{}).
+		Where("id <> ?", input.IncidentID).
+		Where("status IN ?", []string{model.IncidentStatusResolved, model.IncidentStatusClosed})
+	if input.Environment != "" {
+		query = query.Where("environment = ?", input.Environment)
+	}
+	if input.SystemName != "" {
+		query = query.Where("system_name = ?", input.SystemName)
+	}
+	selectExpr := `
+		incident.*,
+		GREATEST(
+			similarity(COALESCE(title, ''), ?),
+			similarity(COALESCE(summary, ''), ?),
+			similarity(COALESCE(error_template, ''), ?)
+		) AS similarity_score`
+	var rows []incidentSimilarityRow
+	if err := query.Select(selectExpr, text, text, text).
+		Where("(COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || COALESCE(error_template, '')) % ?", text).
+		Order("similarity_score DESC, updated_at DESC").
+		Limit(limit).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("search similar incidents: %w", err)
+	}
+	results := make([]IncidentSimilarityResult, 0, len(rows))
+	for _, row := range rows {
+		reasons := []string{"text similarity via pg_trgm"}
+		if input.ErrorTemplate != "" && row.ErrorTemplate != nil {
+			reasons = append(reasons, "error template comparable")
+		}
+		if len(input.Tags) > 0 {
+			reasons = append(reasons, "query tags supplied")
+		}
+		results = append(results, IncidentSimilarityResult{Incident: row.Incident, Score: row.SimilarityScore, Reasons: reasons})
+	}
+	return results, nil
+}
+
+type incidentSimilarityRow struct {
+	model.Incident
+	SimilarityScore float64 `gorm:"column:similarity_score"`
 }

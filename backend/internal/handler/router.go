@@ -91,6 +91,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		incidentRoutes.GET("", dependencies.IncidentHandler.List)
 		incidentRoutes.POST("", dependencies.RequireAdmin, dependencies.IncidentHandler.Create)
 		incidentRoutes.POST("/promote-analysis", dependencies.RequireAdmin, dependencies.IncidentHandler.PromoteAnalysis)
+		incidentRoutes.GET("/:id/similar", dependencies.IncidentHandler.Similar)
 		incidentRoutes.GET("/:id", dependencies.IncidentHandler.Get)
 		incidentRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.IncidentHandler.Update)
 		incidentRoutes.POST("/:id/root-causes/:candidateId/confirm", dependencies.RequireAdmin, dependencies.IncidentHandler.ConfirmRootCause)

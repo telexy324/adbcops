@@ -850,6 +850,7 @@ GET  /api/incidents
 POST /api/incidents
 POST /api/incidents/promote-analysis
 GET  /api/incidents/{id}
+GET  /api/incidents/{id}/similar
 PUT  /api/incidents/{id}
 POST /api/incidents/{id}/root-causes/{candidateId}/confirm
 ```
@@ -865,6 +866,8 @@ POST /api/incidents/{id}/root-causes/{candidateId}/confirm
   "systemName": "payment",
   "componentName": "payment-api",
   "summary": "latency increased after release",
+  "tags": ["latency", "payment-api"],
+  "errorTemplate": "upstream timeout waiting for payment dependency",
   "eventIds": [101, 102],
   "evidenceKeys": ["ev_log", "ev_metric"],
   "rootCauses": [
@@ -892,6 +895,14 @@ POST /api/incidents/{id}/root-causes/{candidateId}/confirm
 ```
 
 `status` 支持 `open`、`mitigating`、`resolved`、`closed`；`severity` 支持 `critical`、`warning`、`info`。确认 root cause 会取消其他候选的 confirmed 状态，并写入 `incident_activity`，用于审计“谁在什么时候确认了哪个候选根因”。
+
+历史 Incident 匹配：
+
+```http
+GET /api/incidents/123/similar?limit=10
+```
+
+相似匹配使用 `pg_trgm` 对 `title`、`summary`、`errorTemplate` 做文本相似度检索，并保留 `tags` 用于后续标签增强。返回项始终包含 `advisoryOnly=true` 和“仅供参考”说明；历史相似结果不会自动确认当前 root cause。
 
 ### Incident Agent
 

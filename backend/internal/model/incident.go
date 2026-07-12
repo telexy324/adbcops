@@ -27,6 +27,8 @@ type Incident struct {
 	SystemName     *string    `gorm:"column:system_name;size:120" json:"systemName,omitempty"`
 	ComponentName  *string    `gorm:"column:component_name;size:120" json:"componentName,omitempty"`
 	Summary        *string    `gorm:"column:summary" json:"summary,omitempty"`
+	Tags           []byte     `gorm:"column:tags;type:jsonb" json:"tags,omitempty"`
+	ErrorTemplate  *string    `gorm:"column:error_template" json:"errorTemplate,omitempty"`
 	AnalysisTaskID *int64     `gorm:"column:analysis_task_id" json:"analysisTaskId,omitempty"`
 	CreatedBy      *int64     `gorm:"column:created_by" json:"createdBy,omitempty"`
 	ResolvedAt     *time.Time `gorm:"column:resolved_at" json:"resolvedAt,omitempty"`
