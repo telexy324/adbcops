@@ -34,6 +34,126 @@ func (h *TopologyHandler) Graph(c *gin.Context) {
 	success(c, graph)
 }
 
+func (h *TopologyHandler) ListNodeTypes(c *gin.Context) {
+	nodeTypes, err := h.service.ListNodeTypes(c.Request.Context())
+	if handleTopologyError(c, err, "list topology node types failed") {
+		return
+	}
+	success(c, nodeTypes)
+}
+
+func (h *TopologyHandler) CreateNodeType(c *gin.Context) {
+	var request topologysvc.NodeTypeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	nodeType, err := h.service.CreateNodeType(c.Request.Context(), request)
+	if handleTopologyError(c, err, "create topology node type failed") {
+		return
+	}
+	success(c, nodeType)
+}
+
+func (h *TopologyHandler) UpdateNodeType(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.NodeTypeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	nodeType, err := h.service.UpdateNodeType(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "update topology node type failed") {
+		return
+	}
+	success(c, nodeType)
+}
+
+func (h *TopologyHandler) EnableNodeType(c *gin.Context) {
+	h.setNodeTypeEnabled(c, true)
+}
+
+func (h *TopologyHandler) DisableNodeType(c *gin.Context) {
+	h.setNodeTypeEnabled(c, false)
+}
+
+func (h *TopologyHandler) setNodeTypeEnabled(c *gin.Context, enabled bool) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	nodeType, err := h.service.SetNodeTypeEnabled(c.Request.Context(), id, enabled)
+	if handleTopologyError(c, err, "update topology node type status failed") {
+		return
+	}
+	success(c, nodeType)
+}
+
+func (h *TopologyHandler) ListRelationTypes(c *gin.Context) {
+	relationTypes, err := h.service.ListRelationTypes(c.Request.Context())
+	if handleTopologyError(c, err, "list topology relation types failed") {
+		return
+	}
+	success(c, relationTypes)
+}
+
+func (h *TopologyHandler) CreateRelationType(c *gin.Context) {
+	var request topologysvc.RelationTypeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	relationType, err := h.service.CreateRelationType(c.Request.Context(), request)
+	if handleTopologyError(c, err, "create topology relation type failed") {
+		return
+	}
+	success(c, relationType)
+}
+
+func (h *TopologyHandler) UpdateRelationType(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.RelationTypeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	var actorID *int64
+	if actor, exists := currentUser(c); exists {
+		actorID = &actor.ID
+	}
+	relationType, err := h.service.UpdateRelationType(c.Request.Context(), id, actorID, request)
+	if handleTopologyError(c, err, "update topology relation type failed") {
+		return
+	}
+	success(c, relationType)
+}
+
+func (h *TopologyHandler) EnableRelationType(c *gin.Context) {
+	h.setRelationTypeEnabled(c, true)
+}
+
+func (h *TopologyHandler) DisableRelationType(c *gin.Context) {
+	h.setRelationTypeEnabled(c, false)
+}
+
+func (h *TopologyHandler) setRelationTypeEnabled(c *gin.Context, enabled bool) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	relationType, err := h.service.SetRelationTypeEnabled(c.Request.Context(), id, enabled)
+	if handleTopologyError(c, err, "update topology relation type status failed") {
+		return
+	}
+	success(c, relationType)
+}
+
 func (h *TopologyHandler) Upstream(c *gin.Context) {
 	result, err := h.service.Upstream(c.Request.Context(), traversalQueryFromRequest(c))
 	if handleTopologyError(c, err, "query upstream topology failed") {
@@ -119,6 +239,15 @@ func (h *TopologyHandler) SyncK8s(c *gin.Context) {
 	success(c, result)
 }
 
+func idFromParam(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return 0, false
+	}
+	return id, true
+}
+
 func traversalQueryFromRequest(c *gin.Context) topologysvc.TraversalQuery {
 	hops, _ := strconv.Atoi(c.Query("hops"))
 	maxNodes, _ := strconv.Atoi(c.Query("maxNodes"))
@@ -145,6 +274,10 @@ func handleTopologyError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40002, "topology node limit exceeded")
 	case errors.Is(err, topologysvc.ErrTopologyNodeAbsent), errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "topology node not found")
+	case errors.Is(err, topologysvc.ErrTopologyTypeDisabled):
+		failure(c, http.StatusBadRequest, 40003, "topology type disabled")
+	case errors.Is(err, topologysvc.ErrTopologyTypeBuiltIn):
+		failure(c, http.StatusBadRequest, 40004, "built-in topology type is protected")
 	default:
 		failure(c, http.StatusInternalServerError, 50096, fallback)
 	}

@@ -42,6 +42,78 @@ func TestUpsertManualTopologyGraph(t *testing.T) {
 	}
 }
 
+func TestTopologyTypeCatalogValidatesEnabledTypes(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	nodeType := repo.nodeTypes["service"]
+	nodeType.Enabled = false
+	repo.nodeTypes["service"] = nodeType
+
+	_, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api"})
+	if !errors.Is(err, ErrTopologyTypeDisabled) {
+		t.Fatalf("expected disabled node type error, got %v", err)
+	}
+}
+
+func TestTopologyRelationTypeRejectsInvalidSourceTarget(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	_, err := service.CreateRelationType(context.Background(), RelationTypeInput{
+		TypeKey:            "service_to_database",
+		DisplayName:        "Service To Database",
+		Semantics:          model.TopologyRelationSemanticsHardDep,
+		FailurePropagation: model.TopologyFailurePropagationDstToSrc,
+		DefaultDirection:   "downstream",
+		AllowedSourceTypes: json.RawMessage(`["service"]`),
+		AllowedTargetTypes: json.RawMessage(`["database"]`),
+	})
+	if err != nil {
+		t.Fatalf("create relation type: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api"}); err != nil {
+		t.Fatalf("upsert service node: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-worker"}); err != nil {
+		t.Fatalf("upsert worker node: %v", err)
+	}
+	_, err = service.UpsertEdge(context.Background(), EdgeInput{
+		FromNodeKey: "service:payment-api",
+		ToNodeKey:   "service:payment-worker",
+		EdgeType:    "service_to_database",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid source/target combination, got %v", err)
+	}
+}
+
+func TestUpdateRelationTypeAuditsPropagationChange(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	relation, err := service.CreateRelationType(context.Background(), RelationTypeInput{
+		TypeKey:            "custom_depends_on",
+		DisplayName:        "Custom Depends On",
+		Semantics:          model.TopologyRelationSemanticsHardDep,
+		FailurePropagation: model.TopologyFailurePropagationDstToSrc,
+		DefaultDirection:   "downstream",
+	})
+	if err != nil {
+		t.Fatalf("create relation type: %v", err)
+	}
+	actorID := int64(42)
+	if _, err := service.UpdateRelationType(context.Background(), relation.ID, &actorID, RelationTypeInput{
+		TypeKey:            "custom_depends_on",
+		DisplayName:        "Custom Depends On",
+		Semantics:          model.TopologyRelationSemanticsRuntimeDep,
+		FailurePropagation: model.TopologyFailurePropagationBoth,
+		DefaultDirection:   "both",
+	}); err != nil {
+		t.Fatalf("update relation type: %v", err)
+	}
+	if len(repo.audits) != 1 || repo.audits[0].ActorID == nil || *repo.audits[0].ActorID != actorID {
+		t.Fatalf("expected propagation audit, got %+v", repo.audits)
+	}
+}
+
 func TestSyncK8sGeneratesDeploymentPodServiceIngressRelations(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	reader := fakeK8sReader{resources: map[string][]k8ssvc.ResourceItem{
@@ -243,15 +315,41 @@ func (r fakeK8sReader) Resources(_ context.Context, _ *model.AppUser, input k8ss
 }
 
 type memoryTopologyRepository struct {
-	nodes map[string]model.TopologyNode
-	edges map[string]model.TopologyEdge
+	nodes         map[string]model.TopologyNode
+	edges         map[string]model.TopologyEdge
+	nextTypeID    int64
+	nodeTypes     map[string]model.TopologyNodeType
+	relationTypes map[string]model.TopologyRelationType
+	audits        []model.TopologyTypeAudit
 }
 
 func newMemoryTopologyRepository() *memoryTopologyRepository {
-	return &memoryTopologyRepository{
-		nodes: map[string]model.TopologyNode{},
-		edges: map[string]model.TopologyEdge{},
+	repo := &memoryTopologyRepository{
+		nodes:         map[string]model.TopologyNode{},
+		edges:         map[string]model.TopologyEdge{},
+		nextTypeID:    1,
+		nodeTypes:     map[string]model.TopologyNodeType{},
+		relationTypes: map[string]model.TopologyRelationType{},
 	}
+	for _, key := range []string{
+		"service",
+		"database",
+		model.TopologyNodeKindK8sDeployment,
+		model.TopologyNodeKindK8sPod,
+		model.TopologyNodeKindK8sService,
+		model.TopologyNodeKindK8sIngress,
+	} {
+		repo.seedNodeType(key)
+	}
+	for _, key := range []string{
+		model.TopologyEdgeTypeOwns,
+		model.TopologyEdgeTypeSelects,
+		model.TopologyEdgeTypeRoutesTo,
+		model.TopologyEdgeTypeDependsOn,
+	} {
+		repo.seedRelationType(key)
+	}
+	return repo
 }
 
 func (r *memoryTopologyRepository) UpsertNode(_ context.Context, node *model.TopologyNode) error {
@@ -262,6 +360,14 @@ func (r *memoryTopologyRepository) UpsertNode(_ context.Context, node *model.Top
 func (r *memoryTopologyRepository) UpsertEdge(_ context.Context, edge *model.TopologyEdge) error {
 	r.edges[edge.EdgeKey] = *edge
 	return nil
+}
+
+func (r *memoryTopologyRepository) FindNodeByKey(_ context.Context, nodeKey string) (*model.TopologyNode, error) {
+	node, ok := r.nodes[nodeKey]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &node, nil
 }
 
 func (r *memoryTopologyRepository) ListNodes(_ context.Context, _ repository.TopologyFilters) ([]model.TopologyNode, error) {
@@ -280,6 +386,84 @@ func (r *memoryTopologyRepository) ListEdges(_ context.Context, _ repository.Top
 	return result, nil
 }
 
+func (r *memoryTopologyRepository) ListTopologyNodeTypes(_ context.Context) ([]model.TopologyNodeType, error) {
+	result := make([]model.TopologyNodeType, 0, len(r.nodeTypes))
+	for _, item := range r.nodeTypes {
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) FindTopologyNodeTypeByKey(_ context.Context, typeKey string) (*model.TopologyNodeType, error) {
+	nodeType, ok := r.nodeTypes[typeKey]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &nodeType, nil
+}
+
+func (r *memoryTopologyRepository) FindTopologyNodeTypeByID(_ context.Context, id int64) (*model.TopologyNodeType, error) {
+	for _, nodeType := range r.nodeTypes {
+		if nodeType.ID == id {
+			return &nodeType, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) CreateTopologyNodeType(_ context.Context, nodeType *model.TopologyNodeType) error {
+	nodeType.ID = r.nextID()
+	r.nodeTypes[nodeType.TypeKey] = *nodeType
+	return nil
+}
+
+func (r *memoryTopologyRepository) UpdateTopologyNodeType(_ context.Context, nodeType *model.TopologyNodeType) error {
+	r.nodeTypes[nodeType.TypeKey] = *nodeType
+	return nil
+}
+
+func (r *memoryTopologyRepository) ListTopologyRelationTypes(_ context.Context) ([]model.TopologyRelationType, error) {
+	result := make([]model.TopologyRelationType, 0, len(r.relationTypes))
+	for _, item := range r.relationTypes {
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) FindTopologyRelationTypeByKey(_ context.Context, typeKey string) (*model.TopologyRelationType, error) {
+	relationType, ok := r.relationTypes[typeKey]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &relationType, nil
+}
+
+func (r *memoryTopologyRepository) FindTopologyRelationTypeByID(_ context.Context, id int64) (*model.TopologyRelationType, error) {
+	for _, relationType := range r.relationTypes {
+		if relationType.ID == id {
+			return &relationType, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) CreateTopologyRelationType(_ context.Context, relationType *model.TopologyRelationType) error {
+	relationType.ID = r.nextID()
+	r.relationTypes[relationType.TypeKey] = *relationType
+	return nil
+}
+
+func (r *memoryTopologyRepository) UpdateTopologyRelationType(_ context.Context, relationType *model.TopologyRelationType) error {
+	r.relationTypes[relationType.TypeKey] = *relationType
+	return nil
+}
+
+func (r *memoryTopologyRepository) CreateTopologyTypeAudit(_ context.Context, audit *model.TopologyTypeAudit) error {
+	audit.ID = int64(len(r.audits) + 1)
+	r.audits = append(r.audits, *audit)
+	return nil
+}
+
 func (r *memoryTopologyRepository) hasEdge(edgeType string) bool {
 	for _, edge := range r.edges {
 		if edge.EdgeType == edgeType {
@@ -287,4 +471,37 @@ func (r *memoryTopologyRepository) hasEdge(edgeType string) bool {
 		}
 	}
 	return false
+}
+
+func (r *memoryTopologyRepository) seedNodeType(typeKey string) {
+	r.nodeTypes[typeKey] = model.TopologyNodeType{
+		ID:          r.nextID(),
+		TypeKey:     typeKey,
+		DisplayName: typeKey,
+		Enabled:     true,
+		BuiltIn:     true,
+	}
+}
+
+func (r *memoryTopologyRepository) seedRelationType(typeKey string) {
+	r.relationTypes[typeKey] = model.TopologyRelationType{
+		ID:                 r.nextID(),
+		TypeKey:            typeKey,
+		DisplayName:        typeKey,
+		Semantics:          model.TopologyRelationSemanticsRuntimeDep,
+		FailurePropagation: model.TopologyFailurePropagationBoth,
+		DefaultDirection:   "both",
+		PropagatesFailure:  true,
+		AllowedSourceTypes: []byte(`[]`),
+		AllowedTargetTypes: []byte(`[]`),
+		Style:              []byte(`{}`),
+		Enabled:            true,
+		BuiltIn:            true,
+	}
+}
+
+func (r *memoryTopologyRepository) nextID() int64 {
+	id := r.nextTypeID
+	r.nextTypeID++
+	return id
 }

@@ -19,17 +19,31 @@ import (
 )
 
 var (
-	ErrInvalidInput       = errors.New("invalid input")
-	ErrForbidden          = errors.New("topology access forbidden")
-	ErrNodeLimitExceeded  = errors.New("topology node limit exceeded")
-	ErrTopologyNodeAbsent = errors.New("topology node not found")
+	ErrInvalidInput         = errors.New("invalid input")
+	ErrForbidden            = errors.New("topology access forbidden")
+	ErrNodeLimitExceeded    = errors.New("topology node limit exceeded")
+	ErrTopologyNodeAbsent   = errors.New("topology node not found")
+	ErrTopologyTypeDisabled = errors.New("topology type disabled")
+	ErrTopologyTypeBuiltIn  = errors.New("built-in topology type is protected")
 )
 
 type Repository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
+	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
 	ListNodes(ctx context.Context, filters repository.TopologyFilters) ([]model.TopologyNode, error)
 	ListEdges(ctx context.Context, filters repository.TopologyFilters) ([]model.TopologyEdge, error)
+	ListTopologyNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error)
+	FindTopologyNodeTypeByKey(ctx context.Context, typeKey string) (*model.TopologyNodeType, error)
+	FindTopologyNodeTypeByID(ctx context.Context, id int64) (*model.TopologyNodeType, error)
+	CreateTopologyNodeType(ctx context.Context, nodeType *model.TopologyNodeType) error
+	UpdateTopologyNodeType(ctx context.Context, nodeType *model.TopologyNodeType) error
+	ListTopologyRelationTypes(ctx context.Context) ([]model.TopologyRelationType, error)
+	FindTopologyRelationTypeByKey(ctx context.Context, typeKey string) (*model.TopologyRelationType, error)
+	FindTopologyRelationTypeByID(ctx context.Context, id int64) (*model.TopologyRelationType, error)
+	CreateTopologyRelationType(ctx context.Context, relationType *model.TopologyRelationType) error
+	UpdateTopologyRelationType(ctx context.Context, relationType *model.TopologyRelationType) error
+	CreateTopologyTypeAudit(ctx context.Context, audit *model.TopologyTypeAudit) error
 }
 
 type K8sReader interface {
@@ -127,8 +141,164 @@ type SyncResult struct {
 	Edges int `json:"edges"`
 }
 
+type NodeTypeInput struct {
+	TypeKey              string          `json:"typeKey"`
+	DisplayName          string          `json:"displayName"`
+	Category             *string         `json:"category"`
+	Icon                 *string         `json:"icon"`
+	DefaultColor         *string         `json:"defaultColor"`
+	IdentityFields       json.RawMessage `json:"identityFields"`
+	SearchableFields     json.RawMessage `json:"searchableFields"`
+	DefaultLabelTemplate *string         `json:"defaultLabelTemplate"`
+	DetailFields         json.RawMessage `json:"detailFields"`
+	Enabled              *bool           `json:"enabled"`
+}
+
+type RelationTypeInput struct {
+	TypeKey            string          `json:"typeKey"`
+	DisplayName        string          `json:"displayName"`
+	Semantics          string          `json:"semantics"`
+	FailurePropagation string          `json:"failurePropagation"`
+	DefaultDirection   string          `json:"defaultDirection"`
+	PropagatesFailure  *bool           `json:"propagatesFailure"`
+	AllowedSourceTypes json.RawMessage `json:"allowedSourceTypes"`
+	AllowedTargetTypes json.RawMessage `json:"allowedTargetTypes"`
+	Style              json.RawMessage `json:"style"`
+	Enabled            *bool           `json:"enabled"`
+}
+
 func NewService(repository Repository, k8sReader K8sReader) *Service {
 	return &Service{repository: repository, k8sReader: k8sReader}
+}
+
+func (s *Service) ListNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error) {
+	return s.repository.ListTopologyNodeTypes(ctx)
+}
+
+func (s *Service) CreateNodeType(ctx context.Context, input NodeTypeInput) (*model.TopologyNodeType, error) {
+	nodeType, err := normalizeNodeType(input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repository.CreateTopologyNodeType(ctx, nodeType); err != nil {
+		return nil, err
+	}
+	return nodeType, nil
+}
+
+func (s *Service) UpdateNodeType(ctx context.Context, id int64, input NodeTypeInput) (*model.TopologyNodeType, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	existing, err := s.repository.FindTopologyNodeTypeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := normalizeNodeType(input)
+	if err != nil {
+		return nil, err
+	}
+	if existing.BuiltIn && updated.TypeKey != existing.TypeKey {
+		return nil, ErrTopologyTypeBuiltIn
+	}
+	updated.ID = existing.ID
+	updated.BuiltIn = existing.BuiltIn
+	if err := s.repository.UpdateTopologyNodeType(ctx, updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (s *Service) SetNodeTypeEnabled(ctx context.Context, id int64, enabled bool) (*model.TopologyNodeType, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	nodeType, err := s.repository.FindTopologyNodeTypeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	nodeType.Enabled = enabled
+	if err := s.repository.UpdateTopologyNodeType(ctx, nodeType); err != nil {
+		return nil, err
+	}
+	return nodeType, nil
+}
+
+func (s *Service) ListRelationTypes(ctx context.Context) ([]model.TopologyRelationType, error) {
+	return s.repository.ListTopologyRelationTypes(ctx)
+}
+
+func (s *Service) CreateRelationType(ctx context.Context, input RelationTypeInput) (*model.TopologyRelationType, error) {
+	relationType, err := normalizeRelationType(input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateAllowedNodeTypes(ctx, relationType); err != nil {
+		return nil, err
+	}
+	if err := s.repository.CreateTopologyRelationType(ctx, relationType); err != nil {
+		return nil, err
+	}
+	return relationType, nil
+}
+
+func (s *Service) UpdateRelationType(ctx context.Context, id int64, actorID *int64, input RelationTypeInput) (*model.TopologyRelationType, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	existing, err := s.repository.FindTopologyRelationTypeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := normalizeRelationType(input)
+	if err != nil {
+		return nil, err
+	}
+	if existing.BuiltIn && updated.TypeKey != existing.TypeKey {
+		return nil, ErrTopologyTypeBuiltIn
+	}
+	if err := s.validateAllowedNodeTypes(ctx, updated); err != nil {
+		return nil, err
+	}
+	updated.ID = existing.ID
+	updated.BuiltIn = existing.BuiltIn
+	if err := s.repository.UpdateTopologyRelationType(ctx, updated); err != nil {
+		return nil, err
+	}
+	if existing.Semantics != updated.Semantics || existing.FailurePropagation != updated.FailurePropagation {
+		before, _ := json.Marshal(map[string]string{
+			"semantics":          existing.Semantics,
+			"failurePropagation": existing.FailurePropagation,
+		})
+		after, _ := json.Marshal(map[string]string{
+			"semantics":          updated.Semantics,
+			"failurePropagation": updated.FailurePropagation,
+		})
+		_ = s.repository.CreateTopologyTypeAudit(ctx, &model.TopologyTypeAudit{
+			TypeKind: "relation",
+			TypeID:   updated.ID,
+			Action:   "update_semantics_or_propagation",
+			Before:   before,
+			After:    after,
+			ActorID:  actorID,
+		})
+	}
+	return updated, nil
+}
+
+func (s *Service) SetRelationTypeEnabled(ctx context.Context, id int64, enabled bool) (*model.TopologyRelationType, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	relationType, err := s.repository.FindTopologyRelationTypeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	relationType.Enabled = enabled
+	if err := s.repository.UpdateTopologyRelationType(ctx, relationType); err != nil {
+		return nil, err
+	}
+	return relationType, nil
 }
 
 func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.TopologyNode, error) {
@@ -136,6 +306,14 @@ func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.Topol
 	if err != nil {
 		return nil, err
 	}
+	nodeType, err := s.repository.FindTopologyNodeTypeByKey(ctx, node.Kind)
+	if err != nil {
+		return nil, err
+	}
+	if !nodeType.Enabled {
+		return nil, ErrTopologyTypeDisabled
+	}
+	node.NodeTypeID = &nodeType.ID
 	if err := s.repository.UpsertNode(ctx, node); err != nil {
 		return nil, err
 	}
@@ -147,6 +325,17 @@ func (s *Service) UpsertEdge(ctx context.Context, input EdgeInput) (*model.Topol
 	if err != nil {
 		return nil, err
 	}
+	relationType, err := s.repository.FindTopologyRelationTypeByKey(ctx, edge.EdgeType)
+	if err != nil {
+		return nil, err
+	}
+	if !relationType.Enabled {
+		return nil, ErrTopologyTypeDisabled
+	}
+	if err := s.validateEdgeTypeCompatibility(ctx, edge, relationType); err != nil {
+		return nil, err
+	}
+	edge.RelationTypeID = &relationType.ID
 	if err := s.repository.UpsertEdge(ctx, edge); err != nil {
 		return nil, err
 	}
@@ -539,6 +728,131 @@ func sortTopologyEdges(edges []model.TopologyEdge) {
 	})
 }
 
+func normalizeNodeType(input NodeTypeInput) (*model.TopologyNodeType, error) {
+	typeKey := strings.TrimSpace(input.TypeKey)
+	displayName := strings.TrimSpace(input.DisplayName)
+	if !validTypeKey(typeKey) || displayName == "" {
+		return nil, ErrInvalidInput
+	}
+	identityFields := validJSONOrDefault(input.IdentityFields, []byte(`[]`))
+	searchableFields := validJSONOrDefault(input.SearchableFields, []byte(`[]`))
+	detailFields := validJSONOrDefault(input.DetailFields, []byte(`[]`))
+	if identityFields == nil || searchableFields == nil || detailFields == nil {
+		return nil, ErrInvalidInput
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	return &model.TopologyNodeType{
+		TypeKey:              typeKey,
+		DisplayName:          displayName,
+		Category:             cleanStringPtr(input.Category),
+		Icon:                 cleanStringPtr(input.Icon),
+		DefaultColor:         cleanStringPtr(input.DefaultColor),
+		IdentityFields:       identityFields,
+		SearchableFields:     searchableFields,
+		DefaultLabelTemplate: cleanStringPtr(input.DefaultLabelTemplate),
+		DetailFields:         detailFields,
+		Enabled:              enabled,
+	}, nil
+}
+
+func normalizeRelationType(input RelationTypeInput) (*model.TopologyRelationType, error) {
+	typeKey := strings.TrimSpace(input.TypeKey)
+	displayName := strings.TrimSpace(input.DisplayName)
+	semantics := strings.TrimSpace(input.Semantics)
+	failurePropagation := strings.TrimSpace(input.FailurePropagation)
+	defaultDirection := strings.TrimSpace(input.DefaultDirection)
+	if !validTypeKey(typeKey) || displayName == "" || !validSemantics(semantics) || !validFailurePropagation(failurePropagation) {
+		return nil, ErrInvalidInput
+	}
+	if defaultDirection == "" {
+		defaultDirection = "both"
+	}
+	if defaultDirection != "upstream" && defaultDirection != "downstream" && defaultDirection != "both" {
+		return nil, ErrInvalidInput
+	}
+	allowedSourceTypes := validJSONOrDefault(input.AllowedSourceTypes, []byte(`[]`))
+	allowedTargetTypes := validJSONOrDefault(input.AllowedTargetTypes, []byte(`[]`))
+	style := validJSONOrDefault(input.Style, []byte(`{}`))
+	if allowedSourceTypes == nil || allowedTargetTypes == nil || style == nil {
+		return nil, ErrInvalidInput
+	}
+	propagatesFailure := semantics == model.TopologyRelationSemanticsHardDep ||
+		semantics == model.TopologyRelationSemanticsRuntimeDep ||
+		semantics == model.TopologyRelationSemanticsTraffic
+	if input.PropagatesFailure != nil {
+		propagatesFailure = *input.PropagatesFailure
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	return &model.TopologyRelationType{
+		TypeKey:            typeKey,
+		DisplayName:        displayName,
+		Semantics:          semantics,
+		FailurePropagation: failurePropagation,
+		DefaultDirection:   defaultDirection,
+		PropagatesFailure:  propagatesFailure,
+		AllowedSourceTypes: allowedSourceTypes,
+		AllowedTargetTypes: allowedTargetTypes,
+		Style:              style,
+		Enabled:            enabled,
+	}, nil
+}
+
+func (s *Service) validateAllowedNodeTypes(ctx context.Context, relationType *model.TopologyRelationType) error {
+	sourceTypes, err := decodeStringArray(relationType.AllowedSourceTypes)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	targetTypes, err := decodeStringArray(relationType.AllowedTargetTypes)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	for _, typeKey := range append(sourceTypes, targetTypes...) {
+		nodeType, err := s.repository.FindTopologyNodeTypeByKey(ctx, typeKey)
+		if err != nil {
+			return err
+		}
+		if !nodeType.Enabled {
+			return ErrTopologyTypeDisabled
+		}
+	}
+	return nil
+}
+
+func (s *Service) validateEdgeTypeCompatibility(ctx context.Context, edge *model.TopologyEdge, relationType *model.TopologyRelationType) error {
+	sourceTypes, err := decodeStringArray(relationType.AllowedSourceTypes)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	targetTypes, err := decodeStringArray(relationType.AllowedTargetTypes)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	if len(sourceTypes) == 0 && len(targetTypes) == 0 {
+		return nil
+	}
+	from, err := s.repository.FindNodeByKey(ctx, edge.FromNodeKey)
+	if err != nil {
+		return err
+	}
+	to, err := s.repository.FindNodeByKey(ctx, edge.ToNodeKey)
+	if err != nil {
+		return err
+	}
+	if len(sourceTypes) > 0 && !stringInSlice(from.Kind, sourceTypes) {
+		return ErrInvalidInput
+	}
+	if len(targetTypes) > 0 && !stringInSlice(to.Kind, targetTypes) {
+		return ErrInvalidInput
+	}
+	return nil
+}
+
 func normalizeNode(input NodeInput) (*model.TopologyNode, error) {
 	kind := strings.TrimSpace(input.Kind)
 	name := strings.TrimSpace(input.Name)
@@ -617,6 +931,85 @@ func validJSONOrEmpty(raw json.RawMessage) []byte {
 		return nil
 	}
 	return raw
+}
+
+func validJSONOrDefault(raw json.RawMessage, fallback []byte) []byte {
+	if len(raw) == 0 {
+		return fallback
+	}
+	if !json.Valid(raw) {
+		return nil
+	}
+	return raw
+}
+
+func decodeStringArray(raw []byte) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, err
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || !validTypeKey(value) {
+			return nil, ErrInvalidInput
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized, nil
+}
+
+func validTypeKey(value string) bool {
+	if value == "" || len(value) > 80 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validSemantics(value string) bool {
+	switch value {
+	case model.TopologyRelationSemanticsHardDep,
+		model.TopologyRelationSemanticsRuntimeDep,
+		model.TopologyRelationSemanticsTraffic,
+		model.TopologyRelationSemanticsOwnership,
+		model.TopologyRelationSemanticsContainment,
+		model.TopologyRelationSemanticsConfiguration,
+		model.TopologyRelationSemanticsAnnotation,
+		model.TopologyRelationSemanticsObservation:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFailurePropagation(value string) bool {
+	switch value {
+	case model.TopologyFailurePropagationNone,
+		model.TopologyFailurePropagationSrcToDst,
+		model.TopologyFailurePropagationDstToSrc,
+		model.TopologyFailurePropagationBoth:
+		return true
+	default:
+		return false
+	}
+}
+
+func stringInSlice(value string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanString(value string) *string {
