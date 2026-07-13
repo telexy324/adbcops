@@ -109,6 +109,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.POST("/edges", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertEdge)
 		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
 		topologyRoutes.POST("/sync/trace", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncTrace)
+		topologyRoutes.POST("/sync/component", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncComponent)
 	}
 	if dependencies.TimelineHandler != nil && dependencies.Authenticate != nil {
 		timelineRoutes := router.Group("/api/timeline")

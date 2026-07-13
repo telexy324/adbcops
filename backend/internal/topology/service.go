@@ -82,10 +82,15 @@ type TraceGraphReader interface {
 	ReadTraceServiceGraph(ctx context.Context, actor *model.AppUser, input TraceServiceGraphInput) (*TraceServiceGraph, error)
 }
 
+type ComponentTopologyReader interface {
+	ReadComponentTopology(ctx context.Context, actor *model.AppUser, input ComponentTopologyInput) (*ComponentTopologyFacts, error)
+}
+
 type Service struct {
-	repository       Repository
-	k8sReader        K8sReader
-	traceGraphReader TraceGraphReader
+	repository              Repository
+	k8sReader               K8sReader
+	traceGraphReader        TraceGraphReader
+	componentTopologyReader ComponentTopologyReader
 }
 
 type NodeInput struct {
@@ -201,6 +206,42 @@ type TraceServiceGraphEdge struct {
 	ErrorCount   int64   `json:"errorCount,omitempty"`
 	LatencyP95Ms float64 `json:"latencyP95Ms,omitempty"`
 	Confidence   float64 `json:"confidence,omitempty"`
+}
+
+type ComponentTopologyInput struct {
+	Component    string `json:"component"`
+	DataSourceID int64  `json:"dataSourceId"`
+	Environment  string `json:"environment"`
+	Cluster      string `json:"cluster"`
+	Namespace    string `json:"namespace"`
+	Limit        int    `json:"limit"`
+	TTLSeconds   int    `json:"ttlSeconds"`
+}
+
+type ComponentTopologyFacts struct {
+	Nodes []ComponentTopologyNode `json:"nodes"`
+	Edges []ComponentTopologyEdge `json:"edges"`
+}
+
+type ComponentTopologyNode struct {
+	Kind       string         `json:"kind"`
+	Identity   string         `json:"identity"`
+	Name       string         `json:"name"`
+	Namespace  string         `json:"namespace,omitempty"`
+	Group      string         `json:"group,omitempty"`
+	Endpoint   string         `json:"endpoint,omitempty"`
+	Properties map[string]any `json:"properties,omitempty"`
+}
+
+type ComponentTopologyEdge struct {
+	FromIdentity string         `json:"fromIdentity"`
+	ToIdentity   string         `json:"toIdentity"`
+	FromKind     string         `json:"fromKind,omitempty"`
+	ToKind       string         `json:"toKind,omitempty"`
+	Relation     string         `json:"relation"`
+	Confidence   float64        `json:"confidence,omitempty"`
+	Observation  bool           `json:"observation,omitempty"`
+	Properties   map[string]any `json:"properties,omitempty"`
 }
 
 type SyncResult struct {
@@ -338,11 +379,16 @@ type FindNodeResult struct {
 func NewService(repository Repository, k8sReader K8sReader) *Service {
 	service := &Service{repository: repository, k8sReader: k8sReader}
 	service.traceGraphReader = httpTraceGraphReader{repository: repository, client: &http.Client{Timeout: 10 * time.Second}}
+	service.componentTopologyReader = configComponentTopologyReader{repository: repository}
 	return service
 }
 
 func (s *Service) SetTraceGraphReader(reader TraceGraphReader) {
 	s.traceGraphReader = reader
+}
+
+func (s *Service) SetComponentTopologyReader(reader ComponentTopologyReader) {
+	s.componentTopologyReader = reader
 }
 
 func (s *Service) ListNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error) {
@@ -1325,6 +1371,100 @@ func (s *Service) SyncTraceServiceGraph(ctx context.Context, actor *model.AppUse
 	return result, nil
 }
 
+func (s *Service) SyncComponentTopology(ctx context.Context, actor *model.AppUser, input ComponentTopologyInput) (*SyncResult, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	if s.componentTopologyReader == nil {
+		return nil, ErrInvalidInput
+	}
+	component := normalizeComponent(input.Component)
+	if component == "" || input.DataSourceID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	input.Component = component
+	limit := input.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	ttlSeconds := input.TTLSeconds
+	if ttlSeconds <= 0 {
+		ttlSeconds = 1800
+	}
+	facts, err := s.componentTopologyReader.ReadComponentTopology(ctx, actor, input)
+	if err != nil {
+		return nil, err
+	}
+	if facts == nil {
+		return &SyncResult{}, nil
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second)
+	nodesByIdentity := map[string]*model.TopologyNode{}
+	result := &SyncResult{}
+	for _, fact := range facts.Nodes {
+		if result.Nodes >= limit {
+			break
+		}
+		node, err := s.upsertComponentNode(ctx, input, fact)
+		if err != nil {
+			return nil, err
+		}
+		nodesByIdentity[componentNodeIdentity(fact)] = node
+		if bare := strings.TrimSpace(firstNonEmpty(fact.Identity, fact.Endpoint, fact.Name)); bare != "" {
+			nodesByIdentity[bare] = node
+		}
+		result.Nodes++
+	}
+	for _, fact := range facts.Edges {
+		if result.Edges >= limit {
+			break
+		}
+		from := nodesByIdentity[componentEdgeEndpointIdentity(fact.FromKind, fact.FromIdentity)]
+		to := nodesByIdentity[componentEdgeEndpointIdentity(fact.ToKind, fact.ToIdentity)]
+		if from == nil || to == nil {
+			continue
+		}
+		confidence := fact.Confidence
+		if confidence <= 0 {
+			confidence = componentDefaultConfidence(fact)
+		}
+		if confidence > 1 {
+			confidence = 1
+		}
+		relation := strings.TrimSpace(fact.Relation)
+		if relation == "" {
+			relation = model.TopologyEdgeTypeConnectsTo
+		}
+		if fact.Observation {
+			relation = model.TopologyEdgeTypeObservedWith
+		}
+		properties, _ := json.Marshal(fact.Properties)
+		sourceRef, _ := json.Marshal(map[string]any{
+			"component":    component,
+			"dataSourceId": input.DataSourceID,
+			"from":         fact.FromIdentity,
+			"to":           fact.ToIdentity,
+			"observation":  fact.Observation,
+		})
+		recordKey := fmt.Sprintf("%s:%d:%s:%s:%s", component, input.DataSourceID, fact.FromIdentity, fact.ToIdentity, relation)
+		if _, err := s.UpsertEdge(ctx, EdgeInput{
+			FromNodeKey:     from.NodeKey,
+			ToNodeKey:       to.NodeKey,
+			EdgeType:        relation,
+			Confidence:      &confidence,
+			SourceType:      componentSourceType(component),
+			SourceRecordKey: &recordKey,
+			ExpiresAt:       &expiresAt,
+			Properties:      properties,
+			SourceRef:       sourceRef,
+		}); err != nil {
+			return nil, err
+		}
+		result.Edges++
+	}
+	return result, nil
+}
+
 func (s *Service) readK8sResource(ctx context.Context, actor *model.AppUser, dataSourceID int64, namespace, resource string, limit int) (*k8ssvc.ResourceResult, error) {
 	return s.k8sReader.Resources(ctx, actor, k8ssvc.ResourceInput{
 		DataSourceID: dataSourceID,
@@ -1510,6 +1650,150 @@ func decodeTraceServiceGraph(raw []byte) (*TraceServiceGraph, error) {
 	graph.Edges = append(graph.Edges, wrapped.Data.Edges...)
 	graph.Edges = append(graph.Edges, wrapped.Data.Calls...)
 	return &graph, nil
+}
+
+func (s *Service) upsertComponentNode(ctx context.Context, input ComponentTopologyInput, fact ComponentTopologyNode) (*model.TopologyNode, error) {
+	kind := strings.TrimSpace(fact.Kind)
+	if kind == "" {
+		kind = componentDefaultNodeKind(input.Component)
+	}
+	identity := componentNodeIdentity(fact)
+	if identity == "" {
+		return nil, ErrInvalidInput
+	}
+	bareIdentity := componentBareIdentity(fact)
+	name := strings.TrimSpace(fact.Name)
+	if name == "" {
+		name = bareIdentity
+	}
+	properties, _ := json.Marshal(fact.Properties)
+	sourceRef, _ := json.Marshal(map[string]any{
+		"component":    input.Component,
+		"dataSourceId": input.DataSourceID,
+		"identity":     bareIdentity,
+	})
+	return s.UpsertNode(ctx, NodeInput{
+		NodeKey:     externalKey(input.Environment, kind, componentSourceType(input.Component), bareIdentity),
+		Kind:        kind,
+		Name:        name,
+		Environment: input.Environment,
+		Cluster:     input.Cluster,
+		Namespace:   firstNonEmpty(fact.Namespace, input.Namespace),
+		SourceType:  componentSourceType(input.Component),
+		Properties:  properties,
+		SourceRef:   sourceRef,
+	})
+}
+
+type configComponentTopologyReader struct {
+	repository Repository
+}
+
+func (r configComponentTopologyReader) ReadComponentTopology(ctx context.Context, _ *model.AppUser, input ComponentTopologyInput) (*ComponentTopologyFacts, error) {
+	dataSource, err := r.repository.FindDataSourceByID(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	if !dataSource.Enabled || !dataSource.ReadOnly {
+		return nil, ErrForbidden
+	}
+	expected := componentDataSourceType(input.Component)
+	if expected == "" || dataSource.SourceType != expected {
+		return nil, ErrUnsupportedSource
+	}
+	var config struct {
+		Topology ComponentTopologyFacts `json:"topology"`
+	}
+	if err := json.Unmarshal(dataSource.Config, &config); err != nil {
+		return nil, ErrInvalidInput
+	}
+	return &config.Topology, nil
+}
+
+func normalizeComponent(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case model.TopologySourceTypeNacos:
+		return model.TopologySourceTypeNacos
+	case model.TopologySourceTypeRedis:
+		return model.TopologySourceTypeRedis
+	case model.TopologySourceTypeTiDB:
+		return model.TopologySourceTypeTiDB
+	case model.TopologySourceTypeNginx:
+		return model.TopologySourceTypeNginx
+	default:
+		return ""
+	}
+}
+
+func componentSourceType(component string) string {
+	return normalizeComponent(component)
+}
+
+func componentDataSourceType(component string) string {
+	switch normalizeComponent(component) {
+	case model.TopologySourceTypeNacos:
+		return model.DataSourceTypeNacos
+	case model.TopologySourceTypeRedis:
+		return model.DataSourceTypeRedis
+	case model.TopologySourceTypeTiDB:
+		return model.DataSourceTypeTiDB
+	case model.TopologySourceTypeNginx:
+		return model.DataSourceTypeNginx
+	default:
+		return ""
+	}
+}
+
+func componentDefaultNodeKind(component string) string {
+	switch normalizeComponent(component) {
+	case model.TopologySourceTypeNacos:
+		return "nacos_service"
+	case model.TopologySourceTypeRedis:
+		return "redis_instance"
+	case model.TopologySourceTypeTiDB:
+		return "tidb"
+	case model.TopologySourceTypeNginx:
+		return "nginx"
+	default:
+		return "service"
+	}
+}
+
+func componentNodeIdentity(fact ComponentTopologyNode) string {
+	return componentEdgeEndpointIdentity(fact.Kind, componentBareIdentity(fact))
+}
+
+func componentBareIdentity(fact ComponentTopologyNode) string {
+	return firstNonEmpty(fact.Identity, fact.Endpoint, fact.Name)
+}
+
+func componentEdgeEndpointIdentity(kind, identity string) string {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return ""
+	}
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return identity
+	}
+	return kind + ":" + identity
+}
+
+func componentDefaultConfidence(edge ComponentTopologyEdge) float64 {
+	if edge.Observation {
+		return 0.5
+	}
+	return 0.9
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type graphIndex struct {

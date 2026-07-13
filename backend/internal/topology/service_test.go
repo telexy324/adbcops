@@ -621,6 +621,96 @@ func TestSyncTraceServiceGraphEmptyResultDoesNotDeleteExistingEdges(t *testing.T
 	}
 }
 
+func TestSyncComponentTopologyBuildsMiddlewareGraph(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	service.SetComponentTopologyReader(fakeComponentTopologyReader{facts: &ComponentTopologyFacts{
+		Nodes: []ComponentTopologyNode{
+			{Kind: "redis_cluster", Identity: "redis-prod", Name: "redis-prod"},
+			{Kind: "redis_instance", Identity: "10.0.0.1:6379", Endpoint: "10.0.0.1:6379", Name: "redis-a"},
+			{Kind: "redis_instance", Identity: "10.0.0.2:6379", Endpoint: "10.0.0.2:6379", Name: "redis-b"},
+		},
+		Edges: []ComponentTopologyEdge{
+			{FromIdentity: "redis-prod", FromKind: "redis_cluster", ToIdentity: "10.0.0.1:6379", ToKind: "redis_instance", Relation: model.TopologyEdgeTypeMemberOf, Confidence: 0.95},
+			{FromIdentity: "10.0.0.1:6379", FromKind: "redis_instance", ToIdentity: "10.0.0.2:6379", ToKind: "redis_instance", Relation: model.TopologyEdgeTypeReplicatesTo, Confidence: 0.9},
+		},
+	}})
+
+	result, err := service.SyncComponentTopology(context.Background(), &model.AppUser{ID: 1}, ComponentTopologyInput{
+		Component:    model.TopologySourceTypeRedis,
+		DataSourceID: 1,
+		Environment:  "prod",
+	})
+	if err != nil {
+		t.Fatalf("sync redis topology: %v", err)
+	}
+	if result.Nodes != 3 || result.Edges != 2 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+	cluster := repo.nodes["prod:redis_cluster:redis:redis-prod"]
+	if cluster.NodeKey == "" || cluster.SourceType != model.TopologySourceTypeRedis {
+		t.Fatalf("expected stable redis cluster identity and source, got %+v", cluster)
+	}
+	if !repo.hasEdge(model.TopologyEdgeTypeReplicatesTo) {
+		t.Fatalf("expected redis replication edge, got %+v", repo.edges)
+	}
+	for _, edge := range repo.edges {
+		if edge.SourceType != model.TopologySourceTypeRedis || edge.Confidence == nil || *edge.Confidence <= 0 {
+			t.Fatalf("expected automatic edge source/confidence, got %+v", edge)
+		}
+	}
+}
+
+func TestSyncComponentTopologyMarksLogInferredEdgesAsObservation(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	service.SetComponentTopologyReader(fakeComponentTopologyReader{facts: &ComponentTopologyFacts{
+		Nodes: []ComponentTopologyNode{
+			{Kind: "nginx", Identity: "gw-1", Name: "gw-1"},
+			{Kind: "service", Identity: "payment-api", Name: "payment-api"},
+		},
+		Edges: []ComponentTopologyEdge{
+			{FromIdentity: "gw-1", FromKind: "nginx", ToIdentity: "payment-api", ToKind: "service", Observation: true, Properties: map[string]any{"source": "access_log"}},
+		},
+	}})
+
+	if _, err := service.SyncComponentTopology(context.Background(), &model.AppUser{ID: 1}, ComponentTopologyInput{
+		Component:    model.TopologySourceTypeNginx,
+		DataSourceID: 1,
+		Environment:  "prod",
+	}); err != nil {
+		t.Fatalf("sync nginx topology: %v", err)
+	}
+	if !repo.hasEdge(model.TopologyEdgeTypeObservedWith) {
+		t.Fatalf("expected observation edge for log inferred relation, got %+v", repo.edges)
+	}
+	for _, edge := range repo.edges {
+		if edge.EdgeType == model.TopologyEdgeTypeObservedWith && edge.ResolvedConfidence != nil && *edge.ResolvedConfidence > 0.6 {
+			t.Fatalf("expected observation confidence to stay conservative, got %+v", edge)
+		}
+	}
+}
+
+func TestSyncComponentTopologyDefaultReaderRequiresReadOnlyDataSource(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	repo.dataSources[1] = model.DataSource{
+		ID:         1,
+		SourceType: model.DataSourceTypeRedis,
+		Enabled:    true,
+		ReadOnly:   false,
+		Config:     []byte(`{"topology":{"nodes":[],"edges":[]}}`),
+	}
+	service := NewService(repo, nil)
+
+	_, err := service.SyncComponentTopology(context.Background(), &model.AppUser{ID: 1}, ComponentTopologyInput{
+		Component:    model.TopologySourceTypeRedis,
+		DataSourceID: 1,
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected non-read-only data source to be rejected, got %v", err)
+	}
+}
+
 func TestTopologyTraversalDetectsCycleAndHonorsHops(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	seedManualGraph(t, repo,
@@ -857,6 +947,18 @@ func (r fakeTraceGraphReader) ReadTraceServiceGraph(_ context.Context, _ *model.
 	return r.graph, nil
 }
 
+type fakeComponentTopologyReader struct {
+	facts *ComponentTopologyFacts
+	err   error
+}
+
+func (r fakeComponentTopologyReader) ReadComponentTopology(_ context.Context, _ *model.AppUser, _ ComponentTopologyInput) (*ComponentTopologyFacts, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.facts, nil
+}
+
 type memoryTopologyRepository struct {
 	nodes            map[string]model.TopologyNode
 	edges            map[string]model.TopologyEdge
@@ -893,6 +995,17 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		model.TopologyNodeKindK8sEndpoint,
 		model.TopologyNodeKindK8sNode,
 		model.TopologyNodeKindK8sPVC,
+		"application",
+		"nacos",
+		"nacos_service",
+		"service_instance",
+		"redis_cluster",
+		"redis_instance",
+		"tidb_cluster",
+		"tidb",
+		"tikv",
+		"pd",
+		"nginx",
 	} {
 		repo.seedNodeType(key)
 	}
@@ -904,6 +1017,12 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		model.TopologyEdgeTypeRunsOn,
 		model.TopologyEdgeTypeStoresIn,
 		model.TopologyEdgeTypeCalls,
+		model.TopologyEdgeTypeMemberOf,
+		model.TopologyEdgeTypeReplicatesTo,
+		model.TopologyEdgeTypeConnectsTo,
+		model.TopologyEdgeTypeRegisteredIn,
+		model.TopologyEdgeTypeObservedWith,
+		model.TopologyEdgeTypeExposes,
 	} {
 		repo.seedRelationType(key)
 	}
