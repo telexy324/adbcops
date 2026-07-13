@@ -235,6 +235,25 @@ func (TopologySyncRun) TableName() string {
 	return "topology_sync_run"
 }
 
+type TopologySavedView struct {
+	ID            int64     `gorm:"column:id;primaryKey" json:"id"`
+	Name          string    `gorm:"column:name;size:120;not null" json:"name"`
+	Description   *string   `gorm:"column:description" json:"description,omitempty"`
+	OwnerID       int64     `gorm:"column:owner_id;not null" json:"ownerId"`
+	Visibility    string    `gorm:"column:visibility;size:30;not null" json:"visibility"`
+	CenterNodeID  *int64    `gorm:"column:center_node_id" json:"centerNodeId,omitempty"`
+	QueryConfig   []byte    `gorm:"column:query_config;type:jsonb;not null" json:"queryConfig"`
+	DisplayConfig []byte    `gorm:"column:display_config;type:jsonb;not null" json:"displayConfig"`
+	LayoutData    []byte    `gorm:"column:layout_data;type:jsonb" json:"layoutData,omitempty"`
+	IsDefault     bool      `gorm:"column:is_default;not null" json:"isDefault"`
+	CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+}
+
+func (TopologySavedView) TableName() string {
+	return "topology_saved_view"
+}
+
 type TopologyNodeAlias struct {
 	ID          int64     `gorm:"column:id;primaryKey" json:"id"`
 	NodeID      int64     `gorm:"column:node_id;not null" json:"nodeId"`

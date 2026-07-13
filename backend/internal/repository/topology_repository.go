@@ -48,6 +48,12 @@ type TopologyRepository interface {
 	CreateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
 	UpdateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
 	ListTopologySyncRuns(ctx context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error)
+	CreateTopologySavedView(ctx context.Context, view *model.TopologySavedView) error
+	UpdateTopologySavedView(ctx context.Context, view *model.TopologySavedView) error
+	DeleteTopologySavedView(ctx context.Context, id int64) error
+	FindTopologySavedViewByID(ctx context.Context, id int64) (*model.TopologySavedView, error)
+	ListTopologySavedViews(ctx context.Context, filters TopologySavedViewFilters) ([]model.TopologySavedView, error)
+	ClearDefaultTopologySavedViews(ctx context.Context, visibility string, ownerID int64) error
 	FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error)
 }
 
@@ -89,6 +95,12 @@ type TopologyConflictFilters struct {
 	NodeID       int64
 	EdgeID       int64
 	Limit        int
+}
+
+type TopologySavedViewFilters struct {
+	ActorID    int64
+	Visibility string
+	Limit      int
 }
 
 type GORMTopologyRepository struct {
@@ -548,6 +560,74 @@ func (r *GORMTopologyRepository) ListTopologySyncRuns(ctx context.Context, sourc
 		return nil, fmt.Errorf("list topology sync runs: %w", err)
 	}
 	return runs, nil
+}
+
+func (r *GORMTopologyRepository) CreateTopologySavedView(ctx context.Context, view *model.TopologySavedView) error {
+	if err := r.db.WithContext(ctx).Create(view).Error; err != nil {
+		return fmt.Errorf("create topology saved view: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) UpdateTopologySavedView(ctx context.Context, view *model.TopologySavedView) error {
+	if err := r.db.WithContext(ctx).Save(view).Error; err != nil {
+		return fmt.Errorf("update topology saved view: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) DeleteTopologySavedView(ctx context.Context, id int64) error {
+	result := r.db.WithContext(ctx).Delete(&model.TopologySavedView{}, id)
+	if result.Error != nil {
+		return fmt.Errorf("delete topology saved view: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) FindTopologySavedViewByID(ctx context.Context, id int64) (*model.TopologySavedView, error) {
+	var view model.TopologySavedView
+	if err := r.db.WithContext(ctx).First(&view, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find topology saved view: %w", err)
+	}
+	return &view, nil
+}
+
+func (r *GORMTopologyRepository) ListTopologySavedViews(ctx context.Context, filters TopologySavedViewFilters) ([]model.TopologySavedView, error) {
+	limit := filters.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	query := r.db.WithContext(ctx).
+		Where("visibility IN ? OR owner_id = ?", []string{"team", "public"}, filters.ActorID).
+		Order("is_default DESC, updated_at DESC, id DESC").
+		Limit(limit)
+	if filters.Visibility != "" {
+		query = query.Where("visibility = ?", filters.Visibility)
+	}
+	var views []model.TopologySavedView
+	if err := query.Find(&views).Error; err != nil {
+		return nil, fmt.Errorf("list topology saved views: %w", err)
+	}
+	return views, nil
+}
+
+func (r *GORMTopologyRepository) ClearDefaultTopologySavedViews(ctx context.Context, visibility string, ownerID int64) error {
+	query := r.db.WithContext(ctx).Model(&model.TopologySavedView{}).Where("is_default = true")
+	if visibility == "public" {
+		query = query.Where("visibility = ?", "public")
+	} else {
+		query = query.Where("owner_id = ?", ownerID)
+	}
+	if err := query.Update("is_default", false).Error; err != nil {
+		return fmt.Errorf("clear default topology saved views: %w", err)
+	}
+	return nil
 }
 
 func (r *GORMTopologyRepository) FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error) {

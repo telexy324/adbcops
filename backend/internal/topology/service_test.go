@@ -883,6 +883,86 @@ func TestRunTopologySyncTransitionsExpiredEdgesToStale(t *testing.T) {
 	}
 }
 
+func TestSavedTopologyViewsPermissionsCloneAndDefault(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	user := &model.AppUser{ID: 2, Role: model.RoleUser}
+
+	publicView, err := service.CreateSavedView(context.Background(), admin, SavedViewInput{
+		Name:          "prod overview",
+		Visibility:    "public",
+		QueryConfig:   json.RawMessage(`{"centerNodeId":"svc:a","depth":2,"direction":"downstream","maxNodes":100}`),
+		DisplayConfig: json.RawMessage(`{"layout":"dagre-lr","showLabels":true}`),
+		IsDefault:     true,
+	})
+	if err != nil {
+		t.Fatalf("create public view: %v", err)
+	}
+	_, err = service.UpdateSavedView(context.Background(), user, publicView.ID, SavedViewInput{
+		Name:          "hacked",
+		Visibility:    "public",
+		QueryConfig:   json.RawMessage(`{}`),
+		DisplayConfig: json.RawMessage(`{"layout":"dagre-lr"}`),
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("normal user should not modify public view, got %v", err)
+	}
+	cloned, err := service.CloneSavedView(context.Background(), user, publicView.ID, SavedViewInput{Name: "my overview"})
+	if err != nil {
+		t.Fatalf("clone public view: %v", err)
+	}
+	if cloned.OwnerID != user.ID || cloned.Visibility != "private" || cloned.IsDefault {
+		t.Fatalf("unexpected cloned view: %+v", cloned)
+	}
+	privateDefault, err := service.CreateSavedView(context.Background(), user, SavedViewInput{
+		Name:          "private default",
+		Visibility:    "private",
+		QueryConfig:   json.RawMessage(`{"depth":1}`),
+		DisplayConfig: json.RawMessage(`{"layout":"manual"}`),
+		IsDefault:     true,
+	})
+	if err != nil {
+		t.Fatalf("create private default: %v", err)
+	}
+	if !privateDefault.IsDefault || repo.savedViews[cloned.ID].IsDefault {
+		t.Fatalf("expected user default isolation, cloned=%+v private=%+v", repo.savedViews[cloned.ID], privateDefault)
+	}
+}
+
+func TestSavedTopologyViewSchemaAndLayoutDoesNotMutateNodes(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	user := &model.AppUser{ID: 2, Role: model.RoleUser}
+	node, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api"})
+	if err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	_, err = service.CreateSavedView(context.Background(), user, SavedViewInput{
+		Name:          "bad layout",
+		Visibility:    "private",
+		QueryConfig:   json.RawMessage(`{"depth":9}`),
+		DisplayConfig: json.RawMessage(`{"layout":"unknown"}`),
+		LayoutData:    json.RawMessage(`{"mutateNode":{"name":"bad"}}`),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected schema validation error, got %v", err)
+	}
+	view, err := service.CreateSavedView(context.Background(), user, SavedViewInput{
+		Name:          "manual layout",
+		Visibility:    "private",
+		QueryConfig:   json.RawMessage(`{"depth":2}`),
+		DisplayConfig: json.RawMessage(`{"layout":"manual"}`),
+		LayoutData:    json.RawMessage(`{"nodes":{"` + node.NodeKey + `":{"x":1,"y":2}}}`),
+	})
+	if err != nil {
+		t.Fatalf("create view with layout: %v", err)
+	}
+	if view.LayoutData == nil || repo.nodes[node.NodeKey].Name != "payment-api" {
+		t.Fatalf("layout should not mutate real node, view=%+v node=%+v", view, repo.nodes[node.NodeKey])
+	}
+}
+
 func TestTopologyTraversalDetectsCycleAndHonorsHops(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	seedManualGraph(t, repo,
@@ -1300,6 +1380,7 @@ type memoryTopologyRepository struct {
 	sourceConfigs    map[int64]model.TopologySourceConfig
 	dataSources      map[int64]model.DataSource
 	syncRuns         map[int64]model.TopologySyncRun
+	savedViews       map[int64]model.TopologySavedView
 	aliases          map[int64]model.TopologyNodeAlias
 	conflicts        []model.TopologyConflict
 	audits           []model.TopologyTypeAudit
@@ -1316,6 +1397,7 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		sourceConfigs:    map[int64]model.TopologySourceConfig{},
 		dataSources:      map[int64]model.DataSource{},
 		syncRuns:         map[int64]model.TopologySyncRun{},
+		savedViews:       map[int64]model.TopologySavedView{},
 		aliases:          map[int64]model.TopologyNodeAlias{},
 	}
 	for _, key := range []string{
@@ -1751,6 +1833,82 @@ func (r *memoryTopologyRepository) ListTopologySyncRuns(_ context.Context, sourc
 		result = result[:limit]
 	}
 	return result, nil
+}
+
+func (r *memoryTopologyRepository) CreateTopologySavedView(_ context.Context, view *model.TopologySavedView) error {
+	if view.ID == 0 {
+		view.ID = r.nextID()
+	}
+	r.savedViews[view.ID] = *view
+	return nil
+}
+
+func (r *memoryTopologyRepository) UpdateTopologySavedView(_ context.Context, view *model.TopologySavedView) error {
+	if _, ok := r.savedViews[view.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	r.savedViews[view.ID] = *view
+	return nil
+}
+
+func (r *memoryTopologyRepository) DeleteTopologySavedView(_ context.Context, id int64) error {
+	if _, ok := r.savedViews[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(r.savedViews, id)
+	return nil
+}
+
+func (r *memoryTopologyRepository) FindTopologySavedViewByID(_ context.Context, id int64) (*model.TopologySavedView, error) {
+	view, ok := r.savedViews[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &view, nil
+}
+
+func (r *memoryTopologyRepository) ListTopologySavedViews(_ context.Context, filters repository.TopologySavedViewFilters) ([]model.TopologySavedView, error) {
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	result := []model.TopologySavedView{}
+	for _, view := range r.savedViews {
+		if filters.Visibility != "" && view.Visibility != filters.Visibility {
+			continue
+		}
+		if view.OwnerID != filters.ActorID && view.Visibility != "team" && view.Visibility != "public" {
+			continue
+		}
+		result = append(result, view)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].IsDefault == result[j].IsDefault {
+			return result[i].ID > result[j].ID
+		}
+		return result[i].IsDefault
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) ClearDefaultTopologySavedViews(_ context.Context, visibility string, ownerID int64) error {
+	for id, view := range r.savedViews {
+		if visibility == "public" {
+			if view.Visibility == "public" {
+				view.IsDefault = false
+				r.savedViews[id] = view
+			}
+			continue
+		}
+		if view.OwnerID == ownerID {
+			view.IsDefault = false
+			r.savedViews[id] = view
+		}
+	}
+	return nil
 }
 
 func (r *memoryTopologyRepository) FindDataSourceByID(_ context.Context, id int64) (*model.DataSource, error) {

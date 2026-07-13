@@ -64,6 +64,112 @@ func (h *TopologyHandler) ListConflicts(c *gin.Context) {
 	success(c, conflicts)
 }
 
+func (h *TopologyHandler) ListSavedViews(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	views, err := h.service.ListSavedViews(c.Request.Context(), actor, topologysvc.SavedViewQuery{
+		Visibility: c.Query("visibility"),
+		Limit:      limit,
+	})
+	if handleTopologyError(c, err, "list topology saved views failed") {
+		return
+	}
+	success(c, views)
+}
+
+func (h *TopologyHandler) CreateSavedView(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.SavedViewInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	view, err := h.service.CreateSavedView(c.Request.Context(), actor, request)
+	if handleTopologyError(c, err, "create topology saved view failed") {
+		return
+	}
+	success(c, view)
+}
+
+func (h *TopologyHandler) GetSavedView(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	view, err := h.service.GetSavedView(c.Request.Context(), actor, id)
+	if handleTopologyError(c, err, "get topology saved view failed") {
+		return
+	}
+	success(c, view)
+}
+
+func (h *TopologyHandler) UpdateSavedView(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.SavedViewInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	view, err := h.service.UpdateSavedView(c.Request.Context(), actor, id, request)
+	if handleTopologyError(c, err, "update topology saved view failed") {
+		return
+	}
+	success(c, view)
+}
+
+func (h *TopologyHandler) DeleteSavedView(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteSavedView(c.Request.Context(), actor, id); handleTopologyError(c, err, "delete topology saved view failed") {
+		return
+	}
+	success(c, gin.H{"deleted": true})
+}
+
+func (h *TopologyHandler) CloneSavedView(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.SavedViewInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	view, err := h.service.CloneSavedView(c.Request.Context(), actor, id, request)
+	if handleTopologyError(c, err, "clone topology saved view failed") {
+		return
+	}
+	success(c, view)
+}
+
 func (h *TopologyHandler) GetConflict(c *gin.Context) {
 	id, ok := idFromParam(c)
 	if !ok {

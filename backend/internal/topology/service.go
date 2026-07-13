@@ -80,6 +80,12 @@ type Repository interface {
 	CreateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
 	UpdateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
 	ListTopologySyncRuns(ctx context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error)
+	CreateTopologySavedView(ctx context.Context, view *model.TopologySavedView) error
+	UpdateTopologySavedView(ctx context.Context, view *model.TopologySavedView) error
+	DeleteTopologySavedView(ctx context.Context, id int64) error
+	FindTopologySavedViewByID(ctx context.Context, id int64) (*model.TopologySavedView, error)
+	ListTopologySavedViews(ctx context.Context, filters repository.TopologySavedViewFilters) ([]model.TopologySavedView, error)
+	ClearDefaultTopologySavedViews(ctx context.Context, visibility string, ownerID int64) error
 	FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error)
 }
 
@@ -467,6 +473,22 @@ type ConflictResolutionInput struct {
 	Prefer      string          `json:"prefer"`
 	MergePatch  json.RawMessage `json:"mergePatch"`
 	ActorID     *int64          `json:"-"`
+}
+
+type SavedViewInput struct {
+	Name          string          `json:"name"`
+	Description   *string         `json:"description"`
+	Visibility    string          `json:"visibility"`
+	CenterNodeID  *int64          `json:"centerNodeId"`
+	QueryConfig   json.RawMessage `json:"queryConfig"`
+	DisplayConfig json.RawMessage `json:"displayConfig"`
+	LayoutData    json.RawMessage `json:"layoutData"`
+	IsDefault     bool            `json:"isDefault"`
+}
+
+type SavedViewQuery struct {
+	Visibility string
+	Limit      int
 }
 
 func NewService(repository Repository, k8sReader K8sReader) *Service {
@@ -984,6 +1006,144 @@ func (s *Service) ResolveConflict(ctx context.Context, id int64, input ConflictR
 	return conflict, nil
 }
 
+func (s *Service) ListSavedViews(ctx context.Context, actor *model.AppUser, query SavedViewQuery) ([]model.TopologySavedView, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	visibility := strings.TrimSpace(query.Visibility)
+	if visibility != "" && !validSavedViewVisibility(visibility) {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.ListTopologySavedViews(ctx, repository.TopologySavedViewFilters{ActorID: actor.ID, Visibility: visibility, Limit: query.Limit})
+}
+
+func (s *Service) GetSavedView(ctx context.Context, actor *model.AppUser, id int64) (*model.TopologySavedView, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	view, err := s.repository.FindTopologySavedViewByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !canReadSavedView(actor, view) {
+		return nil, ErrForbidden
+	}
+	return view, nil
+}
+
+func (s *Service) CreateSavedView(ctx context.Context, actor *model.AppUser, input SavedViewInput) (*model.TopologySavedView, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	view, err := normalizeSavedViewInput(input)
+	if err != nil {
+		return nil, err
+	}
+	view.OwnerID = actor.ID
+	if view.Visibility == "public" && actor.Role != model.RoleAdmin {
+		return nil, ErrForbidden
+	}
+	if view.IsDefault {
+		if err := s.repository.ClearDefaultTopologySavedViews(ctx, view.Visibility, actor.ID); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.repository.CreateTopologySavedView(ctx, view); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+func (s *Service) UpdateSavedView(ctx context.Context, actor *model.AppUser, id int64, input SavedViewInput) (*model.TopologySavedView, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	existing, err := s.repository.FindTopologySavedViewByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !canWriteSavedView(actor, existing) {
+		return nil, ErrForbidden
+	}
+	updated, err := normalizeSavedViewInput(input)
+	if err != nil {
+		return nil, err
+	}
+	if updated.Visibility == "public" && actor.Role != model.RoleAdmin {
+		return nil, ErrForbidden
+	}
+	existing.Name = updated.Name
+	existing.Description = updated.Description
+	existing.Visibility = updated.Visibility
+	existing.CenterNodeID = updated.CenterNodeID
+	existing.QueryConfig = updated.QueryConfig
+	existing.DisplayConfig = updated.DisplayConfig
+	existing.LayoutData = updated.LayoutData
+	existing.IsDefault = updated.IsDefault
+	if existing.IsDefault {
+		if err := s.repository.ClearDefaultTopologySavedViews(ctx, existing.Visibility, existing.OwnerID); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.repository.UpdateTopologySavedView(ctx, existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
+func (s *Service) DeleteSavedView(ctx context.Context, actor *model.AppUser, id int64) error {
+	if actor == nil {
+		return ErrForbidden
+	}
+	view, err := s.repository.FindTopologySavedViewByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !canWriteSavedView(actor, view) {
+		return ErrForbidden
+	}
+	return s.repository.DeleteTopologySavedView(ctx, id)
+}
+
+func (s *Service) CloneSavedView(ctx context.Context, actor *model.AppUser, id int64, input SavedViewInput) (*model.TopologySavedView, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	source, err := s.GetSavedView(ctx, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = source.Name + " Copy"
+	}
+	view := &model.TopologySavedView{
+		Name:          name,
+		Description:   cleanStringPtr(input.Description),
+		OwnerID:       actor.ID,
+		Visibility:    "private",
+		CenterNodeID:  source.CenterNodeID,
+		QueryConfig:   append([]byte{}, source.QueryConfig...),
+		DisplayConfig: append([]byte{}, source.DisplayConfig...),
+		LayoutData:    append([]byte{}, source.LayoutData...),
+		IsDefault:     false,
+	}
+	if len(input.QueryConfig) > 0 {
+		normalized, err := normalizeSavedViewInput(SavedViewInput{Name: name, Visibility: "private", QueryConfig: input.QueryConfig, DisplayConfig: view.DisplayConfig, LayoutData: input.LayoutData})
+		if err != nil {
+			return nil, err
+		}
+		view.QueryConfig = normalized.QueryConfig
+		if len(normalized.LayoutData) > 0 {
+			view.LayoutData = normalized.LayoutData
+		}
+	}
+	if err := s.repository.CreateTopologySavedView(ctx, view); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
 func (s *Service) applyConflictResolution(ctx context.Context, conflict *model.TopologyConflict, action string, input ConflictResolutionInput) error {
 	if conflict.NodeID == nil {
 		return nil
@@ -1024,6 +1184,143 @@ func validConflictResolutionAction(action string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeSavedViewInput(input SavedViewInput) (*model.TopologySavedView, error) {
+	name := strings.TrimSpace(input.Name)
+	visibility := strings.TrimSpace(input.Visibility)
+	if visibility == "" {
+		visibility = "private"
+	}
+	if name == "" || len(name) > 120 || !validSavedViewVisibility(visibility) {
+		return nil, ErrInvalidInput
+	}
+	queryConfig := validJSONObjectOrDefault(input.QueryConfig, []byte(`{}`))
+	displayConfig := validJSONObjectOrDefault(input.DisplayConfig, []byte(`{"layout":"dagre-lr","showLabels":true}`))
+	layoutData := validJSONObjectOrDefault(input.LayoutData, nil)
+	if queryConfig == nil || displayConfig == nil || (len(input.LayoutData) > 0 && layoutData == nil) {
+		return nil, ErrInvalidInput
+	}
+	if !validSavedViewQueryConfig(queryConfig) || !validSavedViewDisplayConfig(displayConfig) || !validSavedViewLayoutData(layoutData) {
+		return nil, ErrInvalidInput
+	}
+	return &model.TopologySavedView{
+		Name:          name,
+		Description:   cleanStringPtr(input.Description),
+		Visibility:    visibility,
+		CenterNodeID:  input.CenterNodeID,
+		QueryConfig:   queryConfig,
+		DisplayConfig: displayConfig,
+		LayoutData:    layoutData,
+		IsDefault:     input.IsDefault,
+	}, nil
+}
+
+func validSavedViewVisibility(value string) bool {
+	switch value {
+	case "private", "team", "public":
+		return true
+	default:
+		return false
+	}
+}
+
+func validSavedViewQueryConfig(raw []byte) bool {
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return false
+	}
+	if depth, ok := numberAsInt(config["depth"]); ok && (depth < 0 || depth > 5) {
+		return false
+	}
+	if maxNodes, ok := numberAsInt(config["maxNodes"]); ok && (maxNodes <= 0 || maxNodes > 1000) {
+		return false
+	}
+	if direction, ok := config["direction"].(string); ok && direction != "" && direction != "upstream" && direction != "downstream" && direction != "both" {
+		return false
+	}
+	return true
+}
+
+func validSavedViewDisplayConfig(raw []byte) bool {
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return false
+	}
+	if layout, ok := config["layout"].(string); ok && layout != "" {
+		switch layout {
+		case "dagre-lr", "dagre-tb", "force", "concentric", "radial", "manual":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validSavedViewLayoutData(raw []byte) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var layout map[string]any
+	if err := json.Unmarshal(raw, &layout); err != nil {
+		return false
+	}
+	for key := range layout {
+		switch key {
+		case "nodes", "edges", "viewport", "groups":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validJSONObjectOrDefault(raw json.RawMessage, fallback []byte) []byte {
+	if len(raw) == 0 {
+		if fallback == nil {
+			return nil
+		}
+		return append([]byte{}, fallback...)
+	}
+	if !json.Valid(raw) {
+		return nil
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil
+	}
+	return raw
+}
+
+func numberAsInt(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed), true
+	case int:
+		return typed, true
+	default:
+		return 0, false
+	}
+}
+
+func canReadSavedView(actor *model.AppUser, view *model.TopologySavedView) bool {
+	if actor == nil || view == nil {
+		return false
+	}
+	return view.OwnerID == actor.ID || view.Visibility == "team" || view.Visibility == "public" || actor.Role == model.RoleAdmin
+}
+
+func canWriteSavedView(actor *model.AppUser, view *model.TopologySavedView) bool {
+	if actor == nil || view == nil {
+		return false
+	}
+	if actor.Role == model.RoleAdmin {
+		return true
+	}
+	if view.Visibility == "public" {
+		return false
+	}
+	return view.OwnerID == actor.ID
 }
 
 func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.TopologyNode, error) {
