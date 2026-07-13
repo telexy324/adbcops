@@ -55,6 +55,9 @@ type Repository interface {
 	DeleteTopologyNodeAlias(ctx context.Context, id int64) error
 	ListTopologyNodeAliases(ctx context.Context, nodeID int64) ([]model.TopologyNodeAlias, error)
 	CreateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error
+	ListTopologyConflicts(ctx context.Context, filters repository.TopologyConflictFilters) ([]model.TopologyConflict, error)
+	FindTopologyConflictByID(ctx context.Context, id int64) (*model.TopologyConflict, error)
+	UpdateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error
 	ListNodes(ctx context.Context, filters repository.TopologyFilters) ([]model.TopologyNode, error)
 	ListEdges(ctx context.Context, filters repository.TopologyFilters) ([]model.TopologyEdge, error)
 	ListTopologyNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error)
@@ -387,6 +390,23 @@ type FindNodeResult struct {
 	Ambiguous  bool                 `json:"ambiguous"`
 	Node       *model.TopologyNode  `json:"node,omitempty"`
 	Candidates []model.TopologyNode `json:"candidates"`
+}
+
+type ConflictQuery struct {
+	Status       string
+	ConflictType string
+	NodeID       int64
+	EdgeID       int64
+	Limit        int
+}
+
+type ConflictResolutionInput struct {
+	Action      string          `json:"action"`
+	Note        string          `json:"note"`
+	ManualValue json.RawMessage `json:"manualValue"`
+	Prefer      string          `json:"prefer"`
+	MergePatch  json.RawMessage `json:"mergePatch"`
+	ActorID     *int64          `json:"-"`
 }
 
 func NewService(repository Repository, k8sReader K8sReader) *Service {
@@ -847,6 +867,103 @@ func (s *Service) FindNode(ctx context.Context, input FindNodeInput) (*FindNodeR
 		result.Ambiguous = true
 	}
 	return result, nil
+}
+
+func (s *Service) ListConflicts(ctx context.Context, query ConflictQuery) ([]model.TopologyConflict, error) {
+	return s.repository.ListTopologyConflicts(ctx, repository.TopologyConflictFilters{
+		Status:       strings.TrimSpace(query.Status),
+		ConflictType: strings.TrimSpace(query.ConflictType),
+		NodeID:       query.NodeID,
+		EdgeID:       query.EdgeID,
+		Limit:        query.Limit,
+	})
+}
+
+func (s *Service) GetConflict(ctx context.Context, id int64) (*model.TopologyConflict, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.FindTopologyConflictByID(ctx, id)
+}
+
+func (s *Service) ResolveConflict(ctx context.Context, id int64, input ConflictResolutionInput) (*model.TopologyConflict, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	conflict, err := s.repository.FindTopologyConflictByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if conflict.Status == "resolved" || conflict.Status == "ignored" {
+		return conflict, nil
+	}
+	action := strings.TrimSpace(input.Action)
+	if !validConflictResolutionAction(action) {
+		return nil, ErrInvalidInput
+	}
+	if err := s.applyConflictResolution(ctx, conflict, action, input); err != nil {
+		return nil, err
+	}
+	resolution, _ := json.Marshal(map[string]any{
+		"action": action,
+		"note":   strings.TrimSpace(input.Note),
+		"prefer": strings.TrimSpace(input.Prefer),
+	})
+	conflict.Resolution = resolution
+	if action == "ignore" {
+		conflict.Status = "ignored"
+	} else {
+		conflict.Status = "resolved"
+	}
+	conflict.ResolvedBy = input.ActorID
+	resolvedAt := time.Now().UTC()
+	conflict.ResolvedAt = &resolvedAt
+	if err := s.repository.UpdateTopologyConflict(ctx, conflict); err != nil {
+		return nil, err
+	}
+	return conflict, nil
+}
+
+func (s *Service) applyConflictResolution(ctx context.Context, conflict *model.TopologyConflict, action string, input ConflictResolutionInput) error {
+	if conflict.NodeID == nil {
+		return nil
+	}
+	node, err := s.repository.FindNodeByID(ctx, *conflict.NodeID)
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "keep", "ignore":
+		return nil
+	case "prefer":
+		value := conflictCandidateValue(conflict.Candidates, strings.TrimSpace(input.Prefer))
+		if value == "" {
+			return ErrInvalidInput
+		}
+		node.Name = value
+	case "manual":
+		value := manualConflictValue(input.ManualValue)
+		if value == "" {
+			return ErrInvalidInput
+		}
+		node.Name = value
+	case "merge":
+		patch := validJSONOrEmpty(input.MergePatch)
+		if patch == nil {
+			return ErrInvalidInput
+		}
+		node.Properties = mergeJSONObjects(node.Properties, patch)
+	}
+	return s.repository.UpsertNode(ctx, node)
+}
+
+func validConflictResolutionAction(action string) bool {
+	switch action {
+	case "merge", "keep", "prefer", "manual", "ignore":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.TopologyNode, error) {
@@ -2906,6 +3023,55 @@ func conflictCandidates(existing, incoming string) []byte {
 		{"source": "incoming", "value": incoming},
 	})
 	return payload
+}
+
+func conflictCandidateValue(raw []byte, preferred string) string {
+	if preferred == "" {
+		preferred = "incoming"
+	}
+	var candidates []map[string]string
+	if err := json.Unmarshal(raw, &candidates); err != nil {
+		return ""
+	}
+	for _, candidate := range candidates {
+		if candidate["source"] == preferred {
+			return strings.TrimSpace(candidate["value"])
+		}
+	}
+	return ""
+}
+
+func manualConflictValue(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		Value string `json:"value"`
+		Name  string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		return firstNonEmpty(payload.Value, payload.Name)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func mergeJSONObjects(base, patch []byte) []byte {
+	var baseObject map[string]any
+	var patchObject map[string]any
+	_ = json.Unmarshal(base, &baseObject)
+	_ = json.Unmarshal(patch, &patchObject)
+	if baseObject == nil {
+		baseObject = map[string]any{}
+	}
+	for key, value := range patchObject {
+		baseObject[key] = value
+	}
+	merged, _ := json.Marshal(baseObject)
+	return merged
 }
 
 func validJSONOrDefault(raw json.RawMessage, fallback []byte) []byte {

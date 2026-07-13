@@ -47,6 +47,57 @@ func (h *TopologyHandler) FindNode(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *TopologyHandler) ListConflicts(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	nodeID, _ := strconv.ParseInt(c.Query("nodeId"), 10, 64)
+	edgeID, _ := strconv.ParseInt(c.Query("edgeId"), 10, 64)
+	conflicts, err := h.service.ListConflicts(c.Request.Context(), topologysvc.ConflictQuery{
+		Status:       c.Query("status"),
+		ConflictType: c.Query("conflictType"),
+		NodeID:       nodeID,
+		EdgeID:       edgeID,
+		Limit:        limit,
+	})
+	if handleTopologyError(c, err, "list topology conflicts failed") {
+		return
+	}
+	success(c, conflicts)
+}
+
+func (h *TopologyHandler) GetConflict(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	conflict, err := h.service.GetConflict(c.Request.Context(), id)
+	if handleTopologyError(c, err, "get topology conflict failed") {
+		return
+	}
+	success(c, conflict)
+}
+
+func (h *TopologyHandler) ResolveConflict(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.ConflictResolutionInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	request.ActorID = &actor.ID
+	conflict, err := h.service.ResolveConflict(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "resolve topology conflict failed") {
+		return
+	}
+	success(c, conflict)
+}
+
 func (h *TopologyHandler) ListNodeTypes(c *gin.Context) {
 	nodeTypes, err := h.service.ListNodeTypes(c.Request.Context())
 	if handleTopologyError(c, err, "list topology node types failed") {

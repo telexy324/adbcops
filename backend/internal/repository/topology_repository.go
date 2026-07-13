@@ -24,6 +24,9 @@ type TopologyRepository interface {
 	DeleteTopologyNodeAlias(ctx context.Context, id int64) error
 	ListTopologyNodeAliases(ctx context.Context, nodeID int64) ([]model.TopologyNodeAlias, error)
 	CreateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error
+	ListTopologyConflicts(ctx context.Context, filters TopologyConflictFilters) ([]model.TopologyConflict, error)
+	FindTopologyConflictByID(ctx context.Context, id int64) (*model.TopologyConflict, error)
+	UpdateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error
 	ListNodes(ctx context.Context, filters TopologyFilters) ([]model.TopologyNode, error)
 	ListEdges(ctx context.Context, filters TopologyFilters) ([]model.TopologyEdge, error)
 	ListTopologyNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error)
@@ -78,6 +81,14 @@ type TopologySourceConfigUpdates struct {
 	MappingRulesSet    bool
 	StaleAfterSeconds  *int
 	DeleteAfterSeconds *int
+}
+
+type TopologyConflictFilters struct {
+	Status       string
+	ConflictType string
+	NodeID       int64
+	EdgeID       int64
+	Limit        int
 }
 
 type GORMTopologyRepository struct {
@@ -255,6 +266,49 @@ func (r *GORMTopologyRepository) ListTopologyNodeAliases(ctx context.Context, no
 func (r *GORMTopologyRepository) CreateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error {
 	if err := r.db.WithContext(ctx).Create(conflict).Error; err != nil {
 		return fmt.Errorf("create topology conflict: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) ListTopologyConflicts(ctx context.Context, filters TopologyConflictFilters) ([]model.TopologyConflict, error) {
+	limit := filters.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	query := r.db.WithContext(ctx).Order("created_at DESC, id DESC").Limit(limit)
+	if filters.Status != "" {
+		query = query.Where("status = ?", filters.Status)
+	}
+	if filters.ConflictType != "" {
+		query = query.Where("conflict_type = ?", filters.ConflictType)
+	}
+	if filters.NodeID > 0 {
+		query = query.Where("node_id = ?", filters.NodeID)
+	}
+	if filters.EdgeID > 0 {
+		query = query.Where("edge_id = ?", filters.EdgeID)
+	}
+	var conflicts []model.TopologyConflict
+	if err := query.Find(&conflicts).Error; err != nil {
+		return nil, fmt.Errorf("list topology conflicts: %w", err)
+	}
+	return conflicts, nil
+}
+
+func (r *GORMTopologyRepository) FindTopologyConflictByID(ctx context.Context, id int64) (*model.TopologyConflict, error) {
+	var conflict model.TopologyConflict
+	if err := r.db.WithContext(ctx).First(&conflict, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find topology conflict: %w", err)
+	}
+	return &conflict, nil
+}
+
+func (r *GORMTopologyRepository) UpdateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error {
+	if err := r.db.WithContext(ctx).Save(conflict).Error; err != nil {
+		return fmt.Errorf("update topology conflict: %w", err)
 	}
 	return nil
 }

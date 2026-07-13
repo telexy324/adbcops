@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -482,6 +483,89 @@ func TestNodeMergeProtectsLockedFieldsAndRecordsConflict(t *testing.T) {
 	}
 	if len(repo.conflicts) != 1 {
 		t.Fatalf("expected one conflict, got %+v", repo.conflicts)
+	}
+}
+
+func TestConflictCenterListsAndResolvesPreferIdempotently(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	node, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api", SourcePriority: 90})
+	if err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: node.NodeKey, Kind: "service", Name: "payment-api-new", SourcePriority: 10}); err != nil {
+		t.Fatalf("upsert conflicting node: %v", err)
+	}
+	conflicts, err := service.ListConflicts(context.Background(), ConflictQuery{Status: "open"})
+	if err != nil {
+		t.Fatalf("list conflicts: %v", err)
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("expected one open conflict, got %+v", conflicts)
+	}
+	actorID := int64(42)
+	resolved, err := service.ResolveConflict(context.Background(), conflicts[0].ID, ConflictResolutionInput{Action: "prefer", Prefer: "incoming", ActorID: &actorID})
+	if err != nil {
+		t.Fatalf("resolve conflict: %v", err)
+	}
+	if resolved.Status != "resolved" || resolved.ResolvedBy == nil || *resolved.ResolvedBy != actorID {
+		t.Fatalf("unexpected resolved conflict: %+v", resolved)
+	}
+	updated, err := repo.FindNodeByID(context.Background(), node.ID)
+	if err != nil {
+		t.Fatalf("find node: %v", err)
+	}
+	if updated.Name != "payment-api-new" {
+		t.Fatalf("expected preferred incoming value, got %+v", updated)
+	}
+	again, err := service.ResolveConflict(context.Background(), conflicts[0].ID, ConflictResolutionInput{Action: "manual", ManualValue: json.RawMessage(`{"value":"ignored"}`)})
+	if err != nil {
+		t.Fatalf("resolve again: %v", err)
+	}
+	if again.Status != "resolved" || repo.nodes[node.NodeKey].Name != "payment-api-new" {
+		t.Fatalf("resolution should be idempotent, conflict=%+v node=%+v", again, repo.nodes[node.NodeKey])
+	}
+}
+
+func TestConflictCenterManualMergeAndIgnore(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	node, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "checkout", Properties: json.RawMessage(`{"owner":"a"}`)})
+	if err != nil {
+		t.Fatalf("upsert node: %v", err)
+	}
+	conflict := &model.TopologyConflict{ConflictType: "attribute_conflict", Status: "open", NodeID: &node.ID, Description: "manual test", Candidates: conflictCandidates("checkout", "checkout-v2")}
+	if err := repo.CreateTopologyConflict(context.Background(), conflict); err != nil {
+		t.Fatalf("create conflict: %v", err)
+	}
+	if _, err := service.ResolveConflict(context.Background(), conflict.ID, ConflictResolutionInput{Action: "manual", ManualValue: json.RawMessage(`"checkout-manual"`)}); err != nil {
+		t.Fatalf("manual resolve: %v", err)
+	}
+	if repo.nodes[node.NodeKey].Name != "checkout-manual" {
+		t.Fatalf("expected manual name, got %+v", repo.nodes[node.NodeKey])
+	}
+
+	mergeConflict := &model.TopologyConflict{ConflictType: "attribute_conflict", Status: "open", NodeID: &node.ID, Description: "merge test"}
+	if err := repo.CreateTopologyConflict(context.Background(), mergeConflict); err != nil {
+		t.Fatalf("create merge conflict: %v", err)
+	}
+	if _, err := service.ResolveConflict(context.Background(), mergeConflict.ID, ConflictResolutionInput{Action: "merge", MergePatch: json.RawMessage(`{"tier":"gold"}`)}); err != nil {
+		t.Fatalf("merge resolve: %v", err)
+	}
+	if !strings.Contains(string(repo.nodes[node.NodeKey].Properties), `"tier":"gold"`) {
+		t.Fatalf("expected merged properties, got %s", string(repo.nodes[node.NodeKey].Properties))
+	}
+
+	ignoreConflict := &model.TopologyConflict{ConflictType: "direction_conflict", Status: "open", Description: "ignore test"}
+	if err := repo.CreateTopologyConflict(context.Background(), ignoreConflict); err != nil {
+		t.Fatalf("create ignore conflict: %v", err)
+	}
+	ignored, err := service.ResolveConflict(context.Background(), ignoreConflict.ID, ConflictResolutionInput{Action: "ignore"})
+	if err != nil {
+		t.Fatalf("ignore resolve: %v", err)
+	}
+	if ignored.Status != "ignored" {
+		t.Fatalf("expected ignored status, got %+v", ignored)
 	}
 }
 
@@ -1257,6 +1341,54 @@ func (r *memoryTopologyRepository) CreateTopologyConflict(_ context.Context, con
 	conflict.ID = int64(len(r.conflicts) + 1)
 	r.conflicts = append(r.conflicts, *conflict)
 	return nil
+}
+
+func (r *memoryTopologyRepository) ListTopologyConflicts(_ context.Context, filters repository.TopologyConflictFilters) ([]model.TopologyConflict, error) {
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	result := []model.TopologyConflict{}
+	for _, conflict := range r.conflicts {
+		if filters.Status != "" && conflict.Status != filters.Status {
+			continue
+		}
+		if filters.ConflictType != "" && conflict.ConflictType != filters.ConflictType {
+			continue
+		}
+		if filters.NodeID > 0 && (conflict.NodeID == nil || *conflict.NodeID != filters.NodeID) {
+			continue
+		}
+		if filters.EdgeID > 0 && (conflict.EdgeID == nil || *conflict.EdgeID != filters.EdgeID) {
+			continue
+		}
+		result = append(result, conflict)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID > result[j].ID })
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) FindTopologyConflictByID(_ context.Context, id int64) (*model.TopologyConflict, error) {
+	for index := range r.conflicts {
+		if r.conflicts[index].ID == id {
+			conflict := r.conflicts[index]
+			return &conflict, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) UpdateTopologyConflict(_ context.Context, conflict *model.TopologyConflict) error {
+	for index := range r.conflicts {
+		if r.conflicts[index].ID == conflict.ID {
+			r.conflicts[index] = *conflict
+			return nil
+		}
+	}
+	return repository.ErrNotFound
 }
 
 func (r *memoryTopologyRepository) ListNodes(_ context.Context, _ repository.TopologyFilters) ([]model.TopologyNode, error) {
