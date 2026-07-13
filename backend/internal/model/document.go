@@ -71,6 +71,22 @@ func (KBChunk) TableName() string {
 	return "kb_chunk"
 }
 
+type KBChunkEmbedding struct {
+	ID          int64     `gorm:"column:id;primaryKey" json:"id"`
+	ChunkID     int64     `gorm:"column:chunk_id;not null" json:"chunkId"`
+	LLMConfigID *int64    `gorm:"column:llm_config_id" json:"llmConfigId,omitempty"`
+	Model       string    `gorm:"column:model;size:255;not null" json:"model"`
+	Dimension   int       `gorm:"column:dimension;not null" json:"dimension"`
+	Embedding   []byte    `gorm:"column:embedding;type:jsonb;not null" json:"embedding,omitempty"`
+	Chunk       KBChunk   `gorm:"foreignKey:ChunkID;references:ID" json:"chunk,omitempty"`
+	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt   time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+}
+
+func (KBChunkEmbedding) TableName() string {
+	return "kb_chunk_embedding"
+}
+
 type KBDocumentReview struct {
 	ID         int64     `gorm:"column:id;primaryKey" json:"id"`
 	DocumentID int64     `gorm:"column:document_id;not null" json:"documentId"`

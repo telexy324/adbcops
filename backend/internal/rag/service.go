@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	defaultRecallLimit = 5
-	maxRecallLimit     = 10
-	maxQuestionBytes   = 8192
-	noEvidenceAnswer   = "未找到可依据的已发布知识，无法基于知识库回答该问题。"
+	defaultRecallLimit  = 5
+	maxRecallLimit      = 10
+	maxQuestionBytes    = 8192
+	noEvidenceAnswer    = "未找到可依据的已发布知识，无法基于知识库回答该问题。"
+	maxVectorCandidates = 1000
+	maxVectorBuildBatch = 100
 )
 
 var (
@@ -34,6 +36,9 @@ type Repository interface {
 	CreateMessage(ctx context.Context, message *model.Message) error
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 	ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error)
+	ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error)
+	ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error)
+	UpsertChunkEmbeddings(ctx context.Context, embeddings []model.KBChunkEmbedding) error
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -290,19 +295,62 @@ func (s *Service) embeddingRank(ctx context.Context, query string, chunks []mode
 	if !ok || config == nil {
 		return chunks
 	}
-	candidates := dedupeChunks(chunks)
-	if len(candidates) < limit {
-		all, err := s.repository.ListPublishedChunks(ctx, 200)
-		if err == nil {
-			candidates = dedupeChunks(append(candidates, all...))
-		}
-	}
-	if len(candidates) == 0 {
+	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
+		BaseURL: config.BaseURL,
+		APIKey:  apiKey,
+		Model:   config.Model,
+		Input:   []string{query},
+	})
+	if err != nil || result == nil || len(result.Embeddings) == 0 {
 		return chunks
 	}
-	inputs := make([]string, 0, len(candidates)+1)
-	inputs = append(inputs, query)
-	for _, chunk := range candidates {
+	queryEmbedding := result.Embeddings[0]
+	s.ensureChunkEmbeddings(ctx, client, config, apiKey)
+	indexes, err := s.repository.ListPublishedChunkEmbeddings(ctx, config.Model, maxVectorCandidates)
+	if err != nil || len(indexes) == 0 {
+		return chunks
+	}
+	type scoredChunk struct {
+		chunk model.KBChunk
+		score float64
+	}
+	scored := make([]scoredChunk, 0, len(indexes))
+	for _, item := range indexes {
+		vector, err := decodeEmbedding(item.Embedding)
+		if err != nil || item.Dimension != len(vector) {
+			continue
+		}
+		scored = append(scored, scoredChunk{chunk: item.Chunk, score: cosine(queryEmbedding, vector)})
+	}
+	if len(scored) == 0 {
+		return chunks
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+	ranked := make([]model.KBChunk, 0, len(scored))
+	for _, item := range scored {
+		if item.chunk.ID == 0 {
+			continue
+		}
+		ranked = append(ranked, item.chunk)
+		if len(ranked) >= limit {
+			return ranked
+		}
+	}
+	if len(ranked) == 0 {
+		return chunks
+	}
+	return ranked
+}
+
+func (s *Service) ensureChunkEmbeddings(ctx context.Context, client llmsvc.EmbeddingClient, config *model.LLMConfig, apiKey string) {
+	missing, err := s.repository.ListPublishedChunksMissingEmbedding(ctx, config.Model, maxVectorBuildBatch)
+	if err != nil || len(missing) == 0 {
+		return
+	}
+	inputs := make([]string, 0, len(missing))
+	for _, chunk := range missing {
 		inputs = append(inputs, chunk.Content)
 	}
 	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
@@ -311,17 +359,29 @@ func (s *Service) embeddingRank(ctx context.Context, query string, chunks []mode
 		Model:   config.Model,
 		Input:   inputs,
 	})
-	if err != nil || result == nil || len(result.Embeddings) != len(inputs) {
-		return chunks
+	if err != nil || result == nil || len(result.Embeddings) != len(missing) {
+		return
 	}
-	queryEmbedding := result.Embeddings[0]
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return cosine(queryEmbedding, result.Embeddings[i+1]) > cosine(queryEmbedding, result.Embeddings[j+1])
-	})
-	if len(candidates) > limit {
-		return candidates[:limit]
+	configID := config.ID
+	embeddings := make([]model.KBChunkEmbedding, 0, len(missing))
+	for index, chunk := range missing {
+		vector := result.Embeddings[index]
+		if len(vector) == 0 {
+			continue
+		}
+		encoded, err := json.Marshal(vector)
+		if err != nil {
+			continue
+		}
+		embeddings = append(embeddings, model.KBChunkEmbedding{
+			ChunkID:     chunk.ID,
+			LLMConfigID: &configID,
+			Model:       config.Model,
+			Dimension:   len(vector),
+			Embedding:   encoded,
+		})
 	}
-	return candidates
+	_ = s.repository.UpsertChunkEmbeddings(ctx, embeddings)
 }
 
 func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, apiKey string) []model.KBChunk {
@@ -485,6 +545,14 @@ func cosine(a, b []float64) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+func decodeEmbedding(raw []byte) ([]float64, error) {
+	var vector []float64
+	if err := json.Unmarshal(raw, &vector); err != nil {
+		return nil, err
+	}
+	return vector, nil
 }
 
 func modelName(config *model.LLMConfig, ready bool) string {

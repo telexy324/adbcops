@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -19,6 +20,9 @@ type DocumentRepository interface {
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
 	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
+	ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error)
+	ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error)
+	UpsertChunkEmbeddings(ctx context.Context, embeddings []model.KBChunkEmbedding) error
 }
 
 func (r *GORMUserRepository) CreateDocument(ctx context.Context, document *model.KBDocument) error {
@@ -166,4 +170,75 @@ func (r *GORMUserRepository) ListPublishedChunks(ctx context.Context, limit int)
 		return nil, fmt.Errorf("list published kb chunks: %w", err)
 	}
 	return chunks, nil
+}
+
+func (r *GORMUserRepository) ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error) {
+	var embeddings []model.KBChunkEmbedding
+	if limit <= 0 || limit > 5000 {
+		limit = 1000
+	}
+	if err := r.db.WithContext(ctx).
+		Model(&model.KBChunkEmbedding{}).
+		Joins("JOIN kb_chunk ON kb_chunk.id = kb_chunk_embedding.chunk_id").
+		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
+		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("kb_chunk_embedding.model = ?", modelName).
+		Preload("Chunk").
+		Order("kb_chunk_embedding.updated_at DESC, kb_chunk_embedding.id DESC").
+		Limit(limit).
+		Find(&embeddings).Error; err != nil {
+		return nil, fmt.Errorf("list published kb chunk embeddings: %w", err)
+	}
+	return embeddings, nil
+}
+
+func (r *GORMUserRepository) ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error) {
+	var chunks []model.KBChunk
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	if err := r.db.WithContext(ctx).
+		Model(&model.KBChunk{}).
+		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
+		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("NOT EXISTS (?)",
+			r.db.Model(&model.KBChunkEmbedding{}).
+				Select("1").
+				Where("kb_chunk_embedding.chunk_id = kb_chunk.id").
+				Where("kb_chunk_embedding.model = ?", modelName),
+		).
+		Order("kb_chunk.id ASC").
+		Limit(limit).
+		Find(&chunks).Error; err != nil {
+		return nil, fmt.Errorf("list published kb chunks missing embedding: %w", err)
+	}
+	return chunks, nil
+}
+
+func (r *GORMUserRepository) UpsertChunkEmbeddings(ctx context.Context, embeddings []model.KBChunkEmbedding) error {
+	if len(embeddings) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	for index := range embeddings {
+		embeddings[index].UpdatedAt = now
+		if embeddings[index].CreatedAt.IsZero() {
+			embeddings[index].CreatedAt = now
+		}
+		if !json.Valid(embeddings[index].Embedding) {
+			return fmt.Errorf("upsert kb chunk embeddings: invalid embedding json for chunk %d", embeddings[index].ChunkID)
+		}
+	}
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "chunk_id"}, {Name: "model"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"llm_config_id",
+			"dimension",
+			"embedding",
+			"updated_at",
+		}),
+	}).Create(&embeddings).Error; err != nil {
+		return fmt.Errorf("upsert kb chunk embeddings: %w", err)
+	}
+	return nil
 }

@@ -15,6 +15,9 @@ type RAGRepository interface {
 	CreateMessage(ctx context.Context, message *model.Message) error
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 	ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error)
+	ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error)
+	ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error)
+	UpsertChunkEmbeddings(ctx context.Context, embeddings []model.KBChunkEmbedding) error
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -69,6 +72,18 @@ func (r *GORMRAGRepository) SearchChunks(ctx context.Context, query string, limi
 
 func (r *GORMRAGRepository) ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error) {
 	return (&GORMUserRepository{db: r.db}).ListPublishedChunks(ctx, limit)
+}
+
+func (r *GORMRAGRepository) ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error) {
+	return (&GORMUserRepository{db: r.db}).ListPublishedChunkEmbeddings(ctx, modelName, limit)
+}
+
+func (r *GORMRAGRepository) ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error) {
+	return (&GORMUserRepository{db: r.db}).ListPublishedChunksMissingEmbedding(ctx, modelName, limit)
+}
+
+func (r *GORMRAGRepository) UpsertChunkEmbeddings(ctx context.Context, embeddings []model.KBChunkEmbedding) error {
+	return (&GORMUserRepository{db: r.db}).UpsertChunkEmbeddings(ctx, embeddings)
 }
 
 func (r *GORMRAGRepository) FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error) {

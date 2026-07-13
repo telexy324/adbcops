@@ -1208,11 +1208,23 @@ upload
  -> quality check
  -> chunk
  -> retrieval metadata
+ -> persistent embedding index if embedding model is configured
  -> save
  -> reviewing
  -> human approve
  -> published
 ```
+
+## 30.1. 持久化向量索引
+
+当配置了 `purpose=embedding` 的默认启用模型时，知识库应为已发布文档切片维护持久化向量索引：
+
+- 向量索引与 chunk 关联；
+- 索引记录 embedding 模型、维度、向量数据、更新时间；
+- 文档重新切片时旧索引必须失效或被删除；
+- 查询时优先使用已持久化向量做语义召回与排序；
+- 发现已发布 chunk 缺失当前 embedding 模型的向量时，可自动补建；
+- embedding 模型缺失或调用失败时，知识库必须降级到文本检索，不得影响 LLM-only 模式。
 
 ## 31. 切片规则
 
@@ -1239,18 +1251,19 @@ chunk_overlap=100 Chinese chars
 - 风险与操作；
 - 表格单行。
 
-## 32. 无向量检索方案
+## 32. 检索与降级方案
 
 v1：
 
 1. LLM 查询改写；
-2. 关键词抽取；
-3. pg_trgm 召回；
-4. 标题/章节/标签加权；
-5. LLM 重排；
-6. TopK 进入回答。
+2. 如果 embedding 模型可用，使用持久化 chunk 向量索引进行语义召回与排序；
+3. 如果向量索引缺失，自动补建当前 embedding 模型对应的 chunk 向量；
+4. 如果 embedding 不可用或失败，降级为关键词抽取 + pg_trgm 召回；
+5. 标题/章节/标签加权；
+6. 如果 rerank 模型可用，使用 rerank 精排，否则使用本地词法重排；
+7. TopK 进入回答。
 
-后续可增加 pgvector，但必须保持 Retrieval 接口兼容。
+后续可将 JSONB 向量存储替换为 pgvector/IVFFLAT/HNSW，但必须保持 Retrieval 接口兼容。
 
 ## 33. 检索质量
 
@@ -3108,7 +3121,7 @@ GET /api/health
 
 - query rewrite；
 - recall；
-- 可选 embedding 语义排序；
+- 可选持久化 embedding 向量召回与语义排序；
 - rerank；
 - 可选 rerank 模型精排；
 - answer；
@@ -3119,7 +3132,7 @@ GET /api/health
 验收：
 
 - 只有 LLM 时可基于文本检索运行；
-- LLM + Embedding 时可使用语义排序并在失败时降级；
+- LLM + Embedding 时可使用持久化向量索引进行语义召回，并在索引缺失时自动补建、失败时降级；
 - LLM + Embedding + Rerank 时可使用精排并在失败时降级；
 - 无依据明确说明；
 - citation 指向真实 chunk；

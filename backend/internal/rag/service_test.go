@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -89,6 +90,9 @@ func TestAskWorksWithEmbeddingAndRerankModels(t *testing.T) {
 	if client.embedCalls == 0 || client.rerankCalls == 0 {
 		t.Fatalf("embedCalls=%d rerankCalls=%d", client.embedCalls, client.rerankCalls)
 	}
+	if len(store.embeddings) != 2 {
+		t.Fatalf("persistent embeddings = %d, want 2", len(store.embeddings))
+	}
 }
 
 type fakeRepository struct {
@@ -101,6 +105,7 @@ type fakeRepository struct {
 	messages           map[int64][]model.Message
 	documents          map[int64]string
 	chunks             map[int64][]model.KBChunk
+	embeddings         map[string]model.KBChunkEmbedding
 	qaRecords          []model.QARecord
 	llmConfigs         map[string]*model.LLMConfig
 }
@@ -116,6 +121,7 @@ func newFakeRepository() *fakeRepository {
 		messages:           make(map[int64][]model.Message),
 		documents:          make(map[int64]string),
 		chunks:             make(map[int64][]model.KBChunk),
+		embeddings:         make(map[string]model.KBChunkEmbedding),
 		llmConfigs:         make(map[string]*model.LLMConfig),
 	}
 }
@@ -201,6 +207,66 @@ func (f *fakeRepository) ListPublishedChunks(_ context.Context, limit int) ([]mo
 		}
 	}
 	return results, nil
+}
+
+func (f *fakeRepository) ListPublishedChunkEmbeddings(_ context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error) {
+	var results []model.KBChunkEmbedding
+	for _, embedding := range f.embeddings {
+		if embedding.Model != modelName {
+			continue
+		}
+		chunk, ok := f.findChunk(embedding.ChunkID)
+		if !ok || f.documents[chunk.DocumentID] != model.DocumentStatusPublished {
+			continue
+		}
+		embedding.Chunk = chunk
+		results = append(results, embedding)
+		if len(results) >= limit {
+			return results, nil
+		}
+	}
+	return results, nil
+}
+
+func (f *fakeRepository) ListPublishedChunksMissingEmbedding(_ context.Context, modelName string, limit int) ([]model.KBChunk, error) {
+	var results []model.KBChunk
+	for documentID, chunks := range f.chunks {
+		if f.documents[documentID] != model.DocumentStatusPublished {
+			continue
+		}
+		for _, chunk := range chunks {
+			if _, ok := f.embeddings[embeddingKey(chunk.ID, modelName)]; ok {
+				continue
+			}
+			results = append(results, chunk)
+			if len(results) >= limit {
+				return results, nil
+			}
+		}
+	}
+	return results, nil
+}
+
+func (f *fakeRepository) UpsertChunkEmbeddings(_ context.Context, embeddings []model.KBChunkEmbedding) error {
+	for _, embedding := range embeddings {
+		f.embeddings[embeddingKey(embedding.ChunkID, embedding.Model)] = embedding
+	}
+	return nil
+}
+
+func (f *fakeRepository) findChunk(chunkID int64) (model.KBChunk, bool) {
+	for _, chunks := range f.chunks {
+		for _, chunk := range chunks {
+			if chunk.ID == chunkID {
+				return chunk, true
+			}
+		}
+	}
+	return model.KBChunk{}, false
+}
+
+func embeddingKey(chunkID int64, modelName string) string {
+	return fmt.Sprintf("%d:%s", chunkID, modelName)
 }
 
 func (f *fakeRepository) FindDefaultEnabledLLMConfig(_ context.Context) (*model.LLMConfig, error) {

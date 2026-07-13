@@ -1,2 +1,1 @@
 DROP TABLE IF EXISTS kb_chunk_embedding;
-DROP TABLE IF EXISTS kb_chunk;
