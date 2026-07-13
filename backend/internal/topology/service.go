@@ -25,6 +25,8 @@ var (
 	ErrTopologyNodeAbsent   = errors.New("topology node not found")
 	ErrTopologyTypeDisabled = errors.New("topology type disabled")
 	ErrTopologyTypeBuiltIn  = errors.New("built-in topology type is protected")
+	ErrUnsupportedSource    = errors.New("unsupported topology source")
+	ErrSensitiveConfig      = errors.New("topology config contains sensitive fields")
 )
 
 type Repository interface {
@@ -44,6 +46,12 @@ type Repository interface {
 	CreateTopologyRelationType(ctx context.Context, relationType *model.TopologyRelationType) error
 	UpdateTopologyRelationType(ctx context.Context, relationType *model.TopologyRelationType) error
 	CreateTopologyTypeAudit(ctx context.Context, audit *model.TopologyTypeAudit) error
+	ListTopologySourceConfigs(ctx context.Context) ([]model.TopologySourceConfig, error)
+	FindTopologySourceConfigByID(ctx context.Context, id int64) (*model.TopologySourceConfig, error)
+	CreateTopologySourceConfig(ctx context.Context, source *model.TopologySourceConfig) error
+	UpdateTopologySourceConfig(ctx context.Context, id int64, updates repository.TopologySourceConfigUpdates) (*model.TopologySourceConfig, error)
+	DeleteTopologySourceConfig(ctx context.Context, id int64) error
+	FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error)
 }
 
 type K8sReader interface {
@@ -165,6 +173,27 @@ type RelationTypeInput struct {
 	AllowedTargetTypes json.RawMessage `json:"allowedTargetTypes"`
 	Style              json.RawMessage `json:"style"`
 	Enabled            *bool           `json:"enabled"`
+}
+
+type SourceConfigInput struct {
+	Name               string          `json:"name"`
+	SourceType         string          `json:"sourceType"`
+	DataSourceID       *int64          `json:"dataSourceId"`
+	Enabled            *bool           `json:"enabled"`
+	Priority           *int            `json:"priority"`
+	Schedule           *string         `json:"schedule"`
+	Scope              json.RawMessage `json:"scope"`
+	MappingRules       json.RawMessage `json:"mappingRules"`
+	StaleAfterSeconds  *int            `json:"staleAfterSeconds"`
+	DeleteAfterSeconds *int            `json:"deleteAfterSeconds"`
+	CreatedBy          *int64          `json:"-"`
+}
+
+type SourceConfigTestResult struct {
+	OK           bool   `json:"ok"`
+	SourceType   string `json:"sourceType"`
+	DataSourceID *int64 `json:"dataSourceId,omitempty"`
+	Message      string `json:"message"`
 }
 
 func NewService(repository Repository, k8sReader K8sReader) *Service {
@@ -299,6 +328,77 @@ func (s *Service) SetRelationTypeEnabled(ctx context.Context, id int64, enabled 
 		return nil, err
 	}
 	return relationType, nil
+}
+
+func (s *Service) ListSourceConfigs(ctx context.Context) ([]model.TopologySourceConfig, error) {
+	return s.repository.ListTopologySourceConfigs(ctx)
+}
+
+func (s *Service) GetSourceConfig(ctx context.Context, id int64) (*model.TopologySourceConfig, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.FindTopologySourceConfigByID(ctx, id)
+}
+
+func (s *Service) CreateSourceConfig(ctx context.Context, input SourceConfigInput) (*model.TopologySourceConfig, error) {
+	source, err := s.normalizeSourceConfig(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repository.CreateTopologySourceConfig(ctx, source); err != nil {
+		return nil, err
+	}
+	return source, nil
+}
+
+func (s *Service) UpdateSourceConfig(ctx context.Context, id int64, input SourceConfigInput) (*model.TopologySourceConfig, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	source, err := s.normalizeSourceConfig(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return s.repository.UpdateTopologySourceConfig(ctx, id, repository.TopologySourceConfigUpdates{
+		Name:               &source.Name,
+		SourceType:         &source.SourceType,
+		DataSourceID:       source.DataSourceID,
+		DataSourceIDSet:    true,
+		Enabled:            &source.Enabled,
+		Priority:           &source.Priority,
+		Schedule:           source.Schedule,
+		ScheduleSet:        true,
+		Scope:              source.Scope,
+		ScopeSet:           true,
+		MappingRules:       source.MappingRules,
+		MappingRulesSet:    true,
+		StaleAfterSeconds:  &source.StaleAfterSeconds,
+		DeleteAfterSeconds: &source.DeleteAfterSeconds,
+	})
+}
+
+func (s *Service) DeleteSourceConfig(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return ErrInvalidInput
+	}
+	return s.repository.DeleteTopologySourceConfig(ctx, id)
+}
+
+func (s *Service) TestSourceConfig(ctx context.Context, id int64) (*SourceConfigTestResult, error) {
+	source, err := s.GetSourceConfig(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateSourceDataSource(ctx, source.SourceType, source.DataSourceID); err != nil {
+		return nil, err
+	}
+	return &SourceConfigTestResult{
+		OK:           true,
+		SourceType:   source.SourceType,
+		DataSourceID: source.DataSourceID,
+		Message:      "topology source config validated",
+	}, nil
 }
 
 func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.TopologyNode, error) {
@@ -801,6 +901,209 @@ func normalizeRelationType(input RelationTypeInput) (*model.TopologyRelationType
 		Style:              style,
 		Enabled:            enabled,
 	}, nil
+}
+
+func (s *Service) normalizeSourceConfig(ctx context.Context, input SourceConfigInput) (*model.TopologySourceConfig, error) {
+	name := strings.TrimSpace(input.Name)
+	sourceType := strings.TrimSpace(input.SourceType)
+	if name == "" || len(name) > 120 || !validSourceType(sourceType) {
+		return nil, ErrInvalidInput
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	priority := defaultSourcePriority(sourceType)
+	if input.Priority != nil {
+		priority = *input.Priority
+	}
+	if priority < 0 || priority > 100 {
+		return nil, ErrInvalidInput
+	}
+	schedule := cleanStringPtr(input.Schedule)
+	if schedule != nil && !validSchedule(*schedule) {
+		return nil, ErrInvalidInput
+	}
+	scope := validJSONOrDefault(input.Scope, []byte(`{}`))
+	mappingRules := validJSONOrDefault(input.MappingRules, []byte(`{}`))
+	if scope == nil || mappingRules == nil {
+		return nil, ErrInvalidInput
+	}
+	if containsSensitiveJSON(scope) || containsSensitiveJSON(mappingRules) {
+		return nil, ErrSensitiveConfig
+	}
+	staleAfter := 900
+	if input.StaleAfterSeconds != nil {
+		staleAfter = *input.StaleAfterSeconds
+	}
+	deleteAfter := 604800
+	if input.DeleteAfterSeconds != nil {
+		deleteAfter = *input.DeleteAfterSeconds
+	}
+	if staleAfter <= 0 || deleteAfter < staleAfter {
+		return nil, ErrInvalidInput
+	}
+	if err := s.validateSourceDataSource(ctx, sourceType, input.DataSourceID); err != nil {
+		return nil, err
+	}
+	return &model.TopologySourceConfig{
+		Name:               name,
+		SourceType:         sourceType,
+		DataSourceID:       input.DataSourceID,
+		Enabled:            enabled,
+		Priority:           priority,
+		Schedule:           schedule,
+		Scope:              scope,
+		MappingRules:       mappingRules,
+		StaleAfterSeconds:  staleAfter,
+		DeleteAfterSeconds: deleteAfter,
+		CreatedBy:          input.CreatedBy,
+	}, nil
+}
+
+func (s *Service) validateSourceDataSource(ctx context.Context, sourceType string, dataSourceID *int64) error {
+	if sourceType == model.TopologySourceTypeManual || sourceType == model.TopologySourceTypeEdgeAgent {
+		return nil
+	}
+	if dataSourceID == nil || *dataSourceID <= 0 {
+		return ErrInvalidInput
+	}
+	dataSource, err := s.repository.FindDataSourceByID(ctx, *dataSourceID)
+	if err != nil {
+		return err
+	}
+	if !dataSource.Enabled {
+		return ErrInvalidInput
+	}
+	if !compatibleTopologyDataSource(sourceType, dataSource.SourceType) {
+		return ErrInvalidInput
+	}
+	return nil
+}
+
+func validSourceType(value string) bool {
+	switch value {
+	case model.TopologySourceTypeManual,
+		model.TopologySourceTypeKubernetes,
+		model.TopologySourceTypeTraceServiceGraph,
+		model.TopologySourceTypeCMDB,
+		model.TopologySourceTypeEdgeAgent,
+		model.TopologySourceTypeNacos,
+		model.TopologySourceTypeRedis,
+		model.TopologySourceTypeTiDB,
+		model.TopologySourceTypeNginx,
+		model.TopologySourceTypeGenericHTTP:
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultSourcePriority(sourceType string) int {
+	switch sourceType {
+	case model.TopologySourceTypeManual:
+		return 100
+	case model.TopologySourceTypeCMDB:
+		return 90
+	case model.TopologySourceTypeKubernetes:
+		return 80
+	case model.TopologySourceTypeTraceServiceGraph:
+		return 70
+	case model.TopologySourceTypeNacos:
+		return 68
+	case model.TopologySourceTypeNginx:
+		return 66
+	case model.TopologySourceTypeTiDB:
+		return 64
+	case model.TopologySourceTypeRedis:
+		return 62
+	case model.TopologySourceTypeEdgeAgent:
+		return 60
+	default:
+		return 50
+	}
+}
+
+func compatibleTopologyDataSource(sourceType, dataSourceType string) bool {
+	switch sourceType {
+	case model.TopologySourceTypeKubernetes:
+		return dataSourceType == model.DataSourceTypeKubernetes
+	case model.TopologySourceTypeNacos:
+		return dataSourceType == model.DataSourceTypeNacos
+	case model.TopologySourceTypeRedis:
+		return dataSourceType == model.DataSourceTypeRedis
+	case model.TopologySourceTypeTiDB:
+		return dataSourceType == model.DataSourceTypeTiDB
+	case model.TopologySourceTypeNginx:
+		return dataSourceType == model.DataSourceTypeNginx
+	case model.TopologySourceTypeGenericHTTP, model.TopologySourceTypeCMDB, model.TopologySourceTypeTraceServiceGraph:
+		return dataSourceType == model.DataSourceTypeHTTP || dataSourceType == model.DataSourceTypePrometheus
+	default:
+		return true
+	}
+}
+
+func validSchedule(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "@hourly", "@daily", "@weekly":
+		return true
+	}
+	parts := strings.Fields(value)
+	if len(parts) != 5 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || len(part) > 32 {
+			return false
+		}
+		for _, r := range part {
+			if (r >= '0' && r <= '9') || r == '*' || r == '/' || r == ',' || r == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func containsSensitiveJSON(raw []byte) bool {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return true
+	}
+	return containsSensitiveValue(value)
+}
+
+func containsSensitiveValue(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if sensitiveTopologyKey(key) || containsSensitiveValue(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if containsSensitiveValue(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sensitiveTopologyKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	for _, token := range []string{"password", "token", "secret", "private_key", "authorization", "cookie", "connection_password"} {
+		if strings.Contains(key, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) validateAllowedNodeTypes(ctx context.Context, relationType *model.TopologyRelationType) error {

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"aiops-platform/backend/internal/model"
 	"gorm.io/gorm"
@@ -26,6 +27,12 @@ type TopologyRepository interface {
 	CreateTopologyRelationType(ctx context.Context, relationType *model.TopologyRelationType) error
 	UpdateTopologyRelationType(ctx context.Context, relationType *model.TopologyRelationType) error
 	CreateTopologyTypeAudit(ctx context.Context, audit *model.TopologyTypeAudit) error
+	ListTopologySourceConfigs(ctx context.Context) ([]model.TopologySourceConfig, error)
+	FindTopologySourceConfigByID(ctx context.Context, id int64) (*model.TopologySourceConfig, error)
+	CreateTopologySourceConfig(ctx context.Context, source *model.TopologySourceConfig) error
+	UpdateTopologySourceConfig(ctx context.Context, id int64, updates TopologySourceConfigUpdates) (*model.TopologySourceConfig, error)
+	DeleteTopologySourceConfig(ctx context.Context, id int64) error
+	FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error)
 }
 
 type TopologyFilters struct {
@@ -34,6 +41,23 @@ type TopologyFilters struct {
 	Namespace   string
 	Kind        string
 	Limit       int
+}
+
+type TopologySourceConfigUpdates struct {
+	Name               *string
+	SourceType         *string
+	DataSourceID       *int64
+	DataSourceIDSet    bool
+	Enabled            *bool
+	Priority           *int
+	Schedule           *string
+	ScheduleSet        bool
+	Scope              []byte
+	ScopeSet           bool
+	MappingRules       []byte
+	MappingRulesSet    bool
+	StaleAfterSeconds  *int
+	DeleteAfterSeconds *int
 }
 
 type GORMTopologyRepository struct {
@@ -222,4 +246,94 @@ func (r *GORMTopologyRepository) CreateTopologyTypeAudit(ctx context.Context, au
 		return fmt.Errorf("create topology type audit: %w", err)
 	}
 	return nil
+}
+
+func (r *GORMTopologyRepository) ListTopologySourceConfigs(ctx context.Context) ([]model.TopologySourceConfig, error) {
+	var sources []model.TopologySourceConfig
+	if err := r.db.WithContext(ctx).Order("priority DESC, id ASC").Find(&sources).Error; err != nil {
+		return nil, fmt.Errorf("list topology source configs: %w", err)
+	}
+	return sources, nil
+}
+
+func (r *GORMTopologyRepository) FindTopologySourceConfigByID(ctx context.Context, id int64) (*model.TopologySourceConfig, error) {
+	var source model.TopologySourceConfig
+	if err := r.db.WithContext(ctx).First(&source, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find topology source config: %w", err)
+	}
+	return &source, nil
+}
+
+func (r *GORMTopologyRepository) CreateTopologySourceConfig(ctx context.Context, source *model.TopologySourceConfig) error {
+	if err := r.db.WithContext(ctx).Create(source).Error; err != nil {
+		return fmt.Errorf("create topology source config: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) UpdateTopologySourceConfig(ctx context.Context, id int64, updates TopologySourceConfigUpdates) (*model.TopologySourceConfig, error) {
+	values := map[string]any{"updated_at": time.Now().UTC()}
+	if updates.Name != nil {
+		values["name"] = *updates.Name
+	}
+	if updates.SourceType != nil {
+		values["source_type"] = *updates.SourceType
+	}
+	if updates.DataSourceIDSet {
+		values["data_source_id"] = updates.DataSourceID
+	}
+	if updates.Enabled != nil {
+		values["enabled"] = *updates.Enabled
+	}
+	if updates.Priority != nil {
+		values["priority"] = *updates.Priority
+	}
+	if updates.ScheduleSet {
+		values["schedule"] = updates.Schedule
+	}
+	if updates.ScopeSet {
+		values["scope"] = updates.Scope
+	}
+	if updates.MappingRulesSet {
+		values["mapping_rules"] = updates.MappingRules
+	}
+	if updates.StaleAfterSeconds != nil {
+		values["stale_after_seconds"] = *updates.StaleAfterSeconds
+	}
+	if updates.DeleteAfterSeconds != nil {
+		values["delete_after_seconds"] = *updates.DeleteAfterSeconds
+	}
+	result := r.db.WithContext(ctx).Model(&model.TopologySourceConfig{}).Where("id = ?", id).Updates(values)
+	if result.Error != nil {
+		return nil, fmt.Errorf("update topology source config: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return nil, ErrNotFound
+	}
+	return r.FindTopologySourceConfigByID(ctx, id)
+}
+
+func (r *GORMTopologyRepository) DeleteTopologySourceConfig(ctx context.Context, id int64) error {
+	result := r.db.WithContext(ctx).Delete(&model.TopologySourceConfig{}, id)
+	if result.Error != nil {
+		return fmt.Errorf("delete topology source config: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error) {
+	var dataSource model.DataSource
+	if err := r.db.WithContext(ctx).First(&dataSource, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find data source by id: %w", err)
+	}
+	return &dataSource, nil
 }

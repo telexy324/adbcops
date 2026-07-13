@@ -19,6 +19,19 @@ const (
 )
 
 const (
+	TopologySourceTypeManual            = "manual"
+	TopologySourceTypeKubernetes        = "kubernetes"
+	TopologySourceTypeTraceServiceGraph = "trace_service_graph"
+	TopologySourceTypeCMDB              = "cmdb"
+	TopologySourceTypeEdgeAgent         = "edge_agent"
+	TopologySourceTypeNacos             = "nacos"
+	TopologySourceTypeRedis             = "redis"
+	TopologySourceTypeTiDB              = "tidb"
+	TopologySourceTypeNginx             = "nginx"
+	TopologySourceTypeGenericHTTP       = "generic_http"
+)
+
+const (
 	TopologyRelationSemanticsHardDep       = "hard_dep"
 	TopologyRelationSemanticsRuntimeDep    = "runtime_dep"
 	TopologyRelationSemanticsTraffic       = "traffic"
@@ -130,4 +143,27 @@ type TopologyTypeAudit struct {
 
 func (TopologyTypeAudit) TableName() string {
 	return "topology_type_audit"
+}
+
+type TopologySourceConfig struct {
+	ID                 int64      `gorm:"column:id;primaryKey" json:"id"`
+	Name               string     `gorm:"column:name;size:120;not null;unique" json:"name"`
+	SourceType         string     `gorm:"column:source_type;size:50;not null" json:"sourceType"`
+	DataSourceID       *int64     `gorm:"column:data_source_id" json:"dataSourceId,omitempty"`
+	Enabled            bool       `gorm:"column:enabled;not null" json:"enabled"`
+	Priority           int        `gorm:"column:priority;not null" json:"priority"`
+	Schedule           *string    `gorm:"column:schedule;size:120" json:"schedule,omitempty"`
+	Scope              []byte     `gorm:"column:scope;type:jsonb" json:"scope,omitempty"`
+	MappingRules       []byte     `gorm:"column:mapping_rules;type:jsonb" json:"mappingRules,omitempty"`
+	StaleAfterSeconds  int        `gorm:"column:stale_after_seconds;not null" json:"staleAfterSeconds"`
+	DeleteAfterSeconds int        `gorm:"column:delete_after_seconds;not null" json:"deleteAfterSeconds"`
+	LastSyncAt         *time.Time `gorm:"column:last_sync_at" json:"lastSyncAt,omitempty"`
+	NextSyncAt         *time.Time `gorm:"column:next_sync_at" json:"nextSyncAt,omitempty"`
+	CreatedBy          *int64     `gorm:"column:created_by" json:"createdBy,omitempty"`
+	CreatedAt          time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt          time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+}
+
+func (TopologySourceConfig) TableName() string {
+	return "topology_source_config"
 }

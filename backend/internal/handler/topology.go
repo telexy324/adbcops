@@ -154,6 +154,84 @@ func (h *TopologyHandler) setRelationTypeEnabled(c *gin.Context, enabled bool) {
 	success(c, relationType)
 }
 
+func (h *TopologyHandler) ListSources(c *gin.Context) {
+	sources, err := h.service.ListSourceConfigs(c.Request.Context())
+	if handleTopologyError(c, err, "list topology sources failed") {
+		return
+	}
+	success(c, sources)
+}
+
+func (h *TopologyHandler) GetSource(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	source, err := h.service.GetSourceConfig(c.Request.Context(), id)
+	if handleTopologyError(c, err, "get topology source failed") {
+		return
+	}
+	success(c, source)
+}
+
+func (h *TopologyHandler) CreateSource(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.SourceConfigInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	request.CreatedBy = &actor.ID
+	source, err := h.service.CreateSourceConfig(c.Request.Context(), request)
+	if handleTopologyError(c, err, "create topology source failed") {
+		return
+	}
+	success(c, source)
+}
+
+func (h *TopologyHandler) UpdateSource(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.SourceConfigInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	source, err := h.service.UpdateSourceConfig(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "update topology source failed") {
+		return
+	}
+	success(c, source)
+}
+
+func (h *TopologyHandler) DeleteSource(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteSourceConfig(c.Request.Context(), id); handleTopologyError(c, err, "delete topology source failed") {
+		return
+	}
+	success(c, gin.H{"deleted": true})
+}
+
+func (h *TopologyHandler) TestSource(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.TestSourceConfig(c.Request.Context(), id)
+	if handleTopologyError(c, err, "test topology source failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *TopologyHandler) Upstream(c *gin.Context) {
 	result, err := h.service.Upstream(c.Request.Context(), traversalQueryFromRequest(c))
 	if handleTopologyError(c, err, "query upstream topology failed") {
@@ -278,6 +356,10 @@ func handleTopologyError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40003, "topology type disabled")
 	case errors.Is(err, topologysvc.ErrTopologyTypeBuiltIn):
 		failure(c, http.StatusBadRequest, 40004, "built-in topology type is protected")
+	case errors.Is(err, topologysvc.ErrUnsupportedSource):
+		failure(c, http.StatusBadRequest, 40005, "unsupported topology source")
+	case errors.Is(err, topologysvc.ErrSensitiveConfig):
+		failure(c, http.StatusBadRequest, 40006, "topology config contains sensitive fields")
 	default:
 		failure(c, http.StatusInternalServerError, 50096, fallback)
 	}

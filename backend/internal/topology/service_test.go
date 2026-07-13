@@ -114,6 +114,84 @@ func TestUpdateRelationTypeAuditsPropagationChange(t *testing.T) {
 	}
 }
 
+func TestCreateSourceConfigValidatesDataSourceAndSchedule(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	repo.dataSources[1] = model.DataSource{ID: 1, SourceType: model.DataSourceTypeKubernetes, Enabled: true}
+	service := NewService(repo, nil)
+
+	source, err := service.CreateSourceConfig(context.Background(), SourceConfigInput{
+		Name:         "prod-k8s-topology",
+		SourceType:   model.TopologySourceTypeKubernetes,
+		DataSourceID: ptr(int64(1)),
+		Schedule:     ptr("*/5 * * * *"),
+		Scope:        json.RawMessage(`{"environment":"prod","allowedNamespaces":["pay"]}`),
+	})
+	if err != nil {
+		t.Fatalf("create source config: %v", err)
+	}
+	if source.Priority != 80 || source.StaleAfterSeconds != 900 || source.DeleteAfterSeconds != 604800 {
+		t.Fatalf("unexpected source defaults: %+v", source)
+	}
+	result, err := service.TestSourceConfig(context.Background(), source.ID)
+	if err != nil {
+		t.Fatalf("test source config: %v", err)
+	}
+	if !result.OK || result.SourceType != model.TopologySourceTypeKubernetes {
+		t.Fatalf("unexpected test result: %+v", result)
+	}
+}
+
+func TestCreateSourceConfigRejectsInvalidDataSourceType(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	repo.dataSources[1] = model.DataSource{ID: 1, SourceType: model.DataSourceTypeRedis, Enabled: true}
+	service := NewService(repo, nil)
+
+	_, err := service.CreateSourceConfig(context.Background(), SourceConfigInput{
+		Name:         "bad-k8s-topology",
+		SourceType:   model.TopologySourceTypeKubernetes,
+		DataSourceID: ptr(int64(1)),
+		Schedule:     ptr("*/5 * * * *"),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected incompatible data source error, got %v", err)
+	}
+}
+
+func TestCreateSourceConfigRejectsSensitiveFields(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+
+	_, err := service.CreateSourceConfig(context.Background(), SourceConfigInput{
+		Name:       "manual-secret",
+		SourceType: model.TopologySourceTypeManual,
+		Scope:      json.RawMessage(`{"token":"should-not-be-here"}`),
+	})
+	if !errors.Is(err, ErrSensitiveConfig) {
+		t.Fatalf("expected sensitive config error, got %v", err)
+	}
+}
+
+func TestCreateSourceConfigRejectsUnsupportedSourceAndBadSchedule(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+
+	_, err := service.CreateSourceConfig(context.Background(), SourceConfigInput{
+		Name:       "unsupported",
+		SourceType: "not_real",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid source type, got %v", err)
+	}
+	_, err = service.CreateSourceConfig(context.Background(), SourceConfigInput{
+		Name:       "bad-schedule",
+		SourceType: model.TopologySourceTypeManual,
+		Schedule:   ptr("@reboot"),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid schedule, got %v", err)
+	}
+}
+
 func TestSyncK8sGeneratesDeploymentPodServiceIngressRelations(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	reader := fakeK8sReader{resources: map[string][]k8ssvc.ResourceItem{
@@ -320,6 +398,8 @@ type memoryTopologyRepository struct {
 	nextTypeID    int64
 	nodeTypes     map[string]model.TopologyNodeType
 	relationTypes map[string]model.TopologyRelationType
+	sourceConfigs map[int64]model.TopologySourceConfig
+	dataSources   map[int64]model.DataSource
 	audits        []model.TopologyTypeAudit
 }
 
@@ -330,6 +410,8 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		nextTypeID:    1,
 		nodeTypes:     map[string]model.TopologyNodeType{},
 		relationTypes: map[string]model.TopologyRelationType{},
+		sourceConfigs: map[int64]model.TopologySourceConfig{},
+		dataSources:   map[int64]model.DataSource{},
 	}
 	for _, key := range []string{
 		"service",
@@ -462,6 +544,83 @@ func (r *memoryTopologyRepository) CreateTopologyTypeAudit(_ context.Context, au
 	audit.ID = int64(len(r.audits) + 1)
 	r.audits = append(r.audits, *audit)
 	return nil
+}
+
+func (r *memoryTopologyRepository) ListTopologySourceConfigs(_ context.Context) ([]model.TopologySourceConfig, error) {
+	result := make([]model.TopologySourceConfig, 0, len(r.sourceConfigs))
+	for _, item := range r.sourceConfigs {
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) FindTopologySourceConfigByID(_ context.Context, id int64) (*model.TopologySourceConfig, error) {
+	source, ok := r.sourceConfigs[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &source, nil
+}
+
+func (r *memoryTopologyRepository) CreateTopologySourceConfig(_ context.Context, source *model.TopologySourceConfig) error {
+	source.ID = r.nextID()
+	r.sourceConfigs[source.ID] = *source
+	return nil
+}
+
+func (r *memoryTopologyRepository) UpdateTopologySourceConfig(_ context.Context, id int64, updates repository.TopologySourceConfigUpdates) (*model.TopologySourceConfig, error) {
+	source, ok := r.sourceConfigs[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	if updates.Name != nil {
+		source.Name = *updates.Name
+	}
+	if updates.SourceType != nil {
+		source.SourceType = *updates.SourceType
+	}
+	if updates.DataSourceIDSet {
+		source.DataSourceID = updates.DataSourceID
+	}
+	if updates.Enabled != nil {
+		source.Enabled = *updates.Enabled
+	}
+	if updates.Priority != nil {
+		source.Priority = *updates.Priority
+	}
+	if updates.ScheduleSet {
+		source.Schedule = updates.Schedule
+	}
+	if updates.ScopeSet {
+		source.Scope = updates.Scope
+	}
+	if updates.MappingRulesSet {
+		source.MappingRules = updates.MappingRules
+	}
+	if updates.StaleAfterSeconds != nil {
+		source.StaleAfterSeconds = *updates.StaleAfterSeconds
+	}
+	if updates.DeleteAfterSeconds != nil {
+		source.DeleteAfterSeconds = *updates.DeleteAfterSeconds
+	}
+	r.sourceConfigs[id] = source
+	return &source, nil
+}
+
+func (r *memoryTopologyRepository) DeleteTopologySourceConfig(_ context.Context, id int64) error {
+	if _, ok := r.sourceConfigs[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(r.sourceConfigs, id)
+	return nil
+}
+
+func (r *memoryTopologyRepository) FindDataSourceByID(_ context.Context, id int64) (*model.DataSource, error) {
+	dataSource, ok := r.dataSources[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &dataSource, nil
 }
 
 func (r *memoryTopologyRepository) hasEdge(edgeType string) bool {
