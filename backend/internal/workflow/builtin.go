@@ -25,9 +25,23 @@ func BuiltinDefinitions() []Definition {
 		ingressDiagnosisWorkflow(),
 		alertDiagnosisWorkflow(),
 		nacosDiagnosisWorkflow(),
+		nacosRegistrationWorkflow(),
+		nacosConfigDeliveryWorkflow(),
 		redisDiagnosisWorkflow(),
+		redisMemoryWorkflow(),
+		redisConnectionPoolWorkflow(),
+		redisReplicationWorkflow(),
+		redisClusterWorkflow(),
 		tidbDiagnosisWorkflow(),
+		tidbPerformanceWorkflow(),
+		tidbConnectionPressureWorkflow(),
+		tidbLockContentionWorkflow(),
+		tidbPlanRegressionWorkflow(),
 		nginxDiagnosisWorkflow(),
+		nginxStatusDiagnosisWorkflow("nginx_499_diagnosis_workflow", "Nginx 499 Diagnosis", "Diagnose client aborted Nginx 499 requests.", "diagnose_nginx_499"),
+		nginxStatusDiagnosisWorkflow("nginx_502_diagnosis_workflow", "Nginx 502 Diagnosis", "Diagnose upstream failure Nginx 502 responses.", "diagnose_nginx_502"),
+		nginxStatusDiagnosisWorkflow("nginx_503_diagnosis_workflow", "Nginx 503 Diagnosis", "Diagnose unavailable or overloaded upstream Nginx 503 responses.", "diagnose_nginx_503"),
+		nginxStatusDiagnosisWorkflow("nginx_504_diagnosis_workflow", "Nginx 504 Diagnosis", "Diagnose upstream timeout Nginx 504 responses.", "diagnose_nginx_504"),
 	}
 }
 
@@ -188,6 +202,36 @@ func nacosDiagnosisWorkflow() Definition {
 	)
 }
 
+func nacosRegistrationWorkflow() Definition {
+	return linearWorkflow(
+		"nacos_registration_diagnosis_workflow",
+		"Nacos Registration Diagnosis",
+		"Diagnose Nacos service registration and instance health with namespace/group evidence.",
+		[]Node{
+			componentSkillNode("query_services", "Query services", "query_nacos_services"),
+			componentSkillNode("query_instances", "Query instances", "get_nacos_service_instances"),
+			componentSkillNode("query_client_connections", "Query client connections", "query_nacos_client_connections"),
+			componentSkillNode("diagnose_registration", "Diagnose registration", "diagnose_nacos_registration"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func nacosConfigDeliveryWorkflow() Definition {
+	return linearWorkflow(
+		"nacos_config_delivery_diagnosis_workflow",
+		"Nacos Config Delivery Diagnosis",
+		"Diagnose Nacos config metadata, change history and listener delivery evidence.",
+		[]Node{
+			componentSkillNode("query_config_metadata", "Query config metadata", "query_nacos_config_metadata"),
+			componentSkillNode("query_config_changes", "Query config changes", "query_nacos_config_changes"),
+			componentSkillNode("query_client_connections", "Query client connections and listeners", "query_nacos_client_connections"),
+			componentSkillNode("diagnose_config_delivery", "Diagnose config delivery", "diagnose_nacos_config_delivery"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
 func redisDiagnosisWorkflow() Definition {
 	return linearWorkflow(
 		"redis_diagnosis_workflow",
@@ -207,6 +251,67 @@ func redisDiagnosisWorkflow() Definition {
 			componentSkillNode("diagnose_connection_pool", "Diagnose connection pool", "diagnose_redis_connection_pool"),
 			componentSkillNode("diagnose_replication_or_cluster", "Diagnose replication or cluster", "diagnose_redis_cluster"),
 			controlNode("correlate", "Correlate"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func redisMemoryWorkflow() Definition {
+	return linearWorkflow(
+		"redis_memory_diagnosis_workflow",
+		"Redis Memory Diagnosis",
+		"Diagnose Redis memory pressure using INFO, MEMORY STATS, keyspace summary and slowlog evidence.",
+		[]Node{
+			componentSkillNode("query_info", "Query Redis info", "query_redis_info"),
+			componentSkillNode("query_memory", "Query memory", "query_redis_memory"),
+			componentSkillNode("query_keyspace", "Query keyspace summary", "query_redis_keyspace"),
+			componentSkillNode("query_slowlog", "Query slowlog", "query_redis_slowlog"),
+			componentSkillNode("diagnose_memory", "Diagnose memory", "diagnose_redis_memory"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func redisConnectionPoolWorkflow() Definition {
+	return linearWorkflow(
+		"redis_connection_pool_diagnosis_workflow",
+		"Redis Connection Pool Diagnosis",
+		"Diagnose Redis connection pressure using client summaries, latency and slowlog evidence.",
+		[]Node{
+			componentSkillNode("query_clients", "Query clients", "query_redis_clients"),
+			componentSkillNode("query_latency", "Query latency", "query_redis_latency"),
+			componentSkillNode("query_slowlog", "Query slowlog", "query_redis_slowlog"),
+			componentSkillNode("diagnose_connection_pool", "Diagnose connection pool", "diagnose_redis_connection_pool"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func redisReplicationWorkflow() Definition {
+	return linearWorkflow(
+		"redis_replication_diagnosis_workflow",
+		"Redis Replication Diagnosis",
+		"Diagnose Redis standalone or Sentinel replication problems.",
+		[]Node{
+			componentSkillNode("query_info", "Query Redis info", "query_redis_info"),
+			componentSkillNode("query_replication", "Query replication", "query_redis_replication"),
+			componentSkillNode("query_cluster_or_sentinel", "Query Cluster or Sentinel", "query_redis_cluster"),
+			componentSkillNode("diagnose_replication", "Diagnose replication", "diagnose_redis_replication"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func redisClusterWorkflow() Definition {
+	return linearWorkflow(
+		"redis_cluster_diagnosis_workflow",
+		"Redis Cluster Diagnosis",
+		"Diagnose Redis Cluster slots, nodes and partial node failures.",
+		[]Node{
+			componentSkillNode("query_info", "Query Redis info", "query_redis_info"),
+			componentSkillNode("query_cluster", "Query Redis cluster", "query_redis_cluster"),
+			componentSkillNode("query_latency", "Query latency", "query_redis_latency"),
+			componentSkillNode("diagnose_cluster", "Diagnose cluster", "diagnose_redis_cluster"),
 			controlNode("report", "Report"),
 		},
 	)
@@ -238,6 +343,67 @@ func tidbDiagnosisWorkflow() Definition {
 	)
 }
 
+func tidbPerformanceWorkflow() Definition {
+	return linearWorkflow(
+		"tidb_performance_diagnosis_workflow",
+		"TiDB Performance Diagnosis",
+		"Diagnose TiDB performance using slow SQL, processlist, hot regions, stats health and metrics evidence.",
+		[]Node{
+			componentSkillNode("query_cluster_status", "Query cluster status", "query_tidb_cluster_status"),
+			componentSkillNode("query_slow_queries", "Query slow queries", "query_tidb_slow_queries"),
+			componentSkillNode("query_processlist", "Query processlist", "query_tidb_processlist"),
+			componentSkillNode("query_hot_regions", "Query hot regions", "query_tidb_hot_regions"),
+			componentSkillNode("query_statistics_health", "Query statistics health", "query_tidb_statistics_health"),
+			componentSkillNode("diagnose_performance", "Diagnose performance", "diagnose_tidb_performance"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func tidbConnectionPressureWorkflow() Definition {
+	return linearWorkflow(
+		"tidb_connection_pressure_diagnosis_workflow",
+		"TiDB Connection Pressure Diagnosis",
+		"Diagnose TiDB connection pressure using processlist and cluster status evidence.",
+		[]Node{
+			componentSkillNode("query_cluster_status", "Query cluster status", "query_tidb_cluster_status"),
+			componentSkillNode("query_processlist", "Query processlist", "query_tidb_processlist"),
+			componentSkillNode("diagnose_connection_pressure", "Diagnose connection pressure", "diagnose_tidb_connection_pressure"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func tidbLockContentionWorkflow() Definition {
+	return linearWorkflow(
+		"tidb_lock_contention_diagnosis_workflow",
+		"TiDB Lock Contention Diagnosis",
+		"Diagnose TiDB lock contention using lock wait, processlist and slow SQL evidence.",
+		[]Node{
+			componentSkillNode("query_lock_waits", "Query lock waits", "query_tidb_lock_waits"),
+			componentSkillNode("query_processlist", "Query processlist", "query_tidb_processlist"),
+			componentSkillNode("query_slow_queries", "Query slow queries", "query_tidb_slow_queries"),
+			componentSkillNode("diagnose_lock_contention", "Diagnose lock contention", "diagnose_tidb_lock_contention"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func tidbPlanRegressionWorkflow() Definition {
+	return linearWorkflow(
+		"tidb_plan_regression_diagnosis_workflow",
+		"TiDB Plan Regression Diagnosis",
+		"Diagnose TiDB execution plan regression using controlled EXPLAIN and slow SQL evidence.",
+		[]Node{
+			componentSkillNode("query_slow_queries", "Query slow queries", "query_tidb_slow_queries"),
+			componentSkillNode("optional_explain", "Optional controlled explain", "explain_tidb_sql"),
+			componentSkillNode("query_statistics_health", "Query statistics health", "query_tidb_statistics_health"),
+			componentSkillNode("diagnose_plan_regression", "Diagnose plan regression", "diagnose_tidb_plan_regression"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
 func nginxDiagnosisWorkflow() Definition {
 	return linearWorkflow(
 		"nginx_diagnosis_workflow",
@@ -257,6 +423,23 @@ func nginxDiagnosisWorkflow() Definition {
 			componentSkillNode("diagnose_503", "Diagnose 503", "diagnose_nginx_503"),
 			componentSkillNode("diagnose_504", "Diagnose 504", "diagnose_nginx_504"),
 			controlNode("correlate", "Correlate"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func nginxStatusDiagnosisWorkflow(name, title, description, diagnosisSkill string) Definition {
+	return linearWorkflow(
+		name,
+		title,
+		description,
+		[]Node{
+			componentSkillNode("query_access_logs", "Query access logs", "query_nginx_access_logs"),
+			componentSkillNode("query_error_logs", "Query error logs", "query_nginx_error_logs"),
+			componentSkillNode("query_nginx_metrics", "Query Nginx metrics", "query_nginx_metrics"),
+			componentSkillNode("query_upstreams", "Query upstreams", "query_nginx_upstreams"),
+			componentSkillNode("analyze_status_codes", "Analyze status codes", "analyze_nginx_status_codes"),
+			componentSkillNode("diagnose_status", "Diagnose status", diagnosisSkill),
 			controlNode("report", "Report"),
 		},
 	)

@@ -15,15 +15,48 @@ import (
 
 func TestBuiltinDefinitionsValidate(t *testing.T) {
 	definitions := BuiltinDefinitions()
-	if len(definitions) != 9 {
-		t.Fatalf("builtin workflow count = %d, want 9", len(definitions))
+	if len(definitions) != 23 {
+		t.Fatalf("builtin workflow count = %d, want 23", len(definitions))
 	}
+	assertBuiltinWorkflowNames(t, definitions, []string{
+		"nacos_diagnosis_workflow",
+		"nacos_registration_diagnosis_workflow",
+		"nacos_config_delivery_diagnosis_workflow",
+		"redis_diagnosis_workflow",
+		"redis_memory_diagnosis_workflow",
+		"redis_connection_pool_diagnosis_workflow",
+		"redis_replication_diagnosis_workflow",
+		"redis_cluster_diagnosis_workflow",
+		"tidb_diagnosis_workflow",
+		"tidb_performance_diagnosis_workflow",
+		"tidb_connection_pressure_diagnosis_workflow",
+		"tidb_lock_contention_diagnosis_workflow",
+		"tidb_plan_regression_diagnosis_workflow",
+		"nginx_diagnosis_workflow",
+		"nginx_499_diagnosis_workflow",
+		"nginx_502_diagnosis_workflow",
+		"nginx_503_diagnosis_workflow",
+		"nginx_504_diagnosis_workflow",
+	})
 	agents := builtinTestAgents{}
 	skills := builtinTestSkills{}
 	for _, definition := range definitions {
 		result := Validate(definition, agents, skills)
 		if !result.Valid {
 			t.Fatalf("%s should validate, errors=%+v warnings=%+v", definition.Name, result.Errors, result.Warnings)
+		}
+	}
+}
+
+func assertBuiltinWorkflowNames(t *testing.T, definitions []Definition, expected []string) {
+	t.Helper()
+	names := map[string]bool{}
+	for _, definition := range definitions {
+		names[definition.Name] = true
+	}
+	for _, name := range expected {
+		if !names[name] {
+			t.Fatalf("missing builtin workflow %s in %+v", name, names)
 		}
 	}
 }
