@@ -31,10 +31,14 @@ import (
 	logssvc "aiops-platform/backend/internal/logs"
 	metricssvc "aiops-platform/backend/internal/metrics"
 	appmiddleware "aiops-platform/backend/internal/middleware"
+	nacossvc "aiops-platform/backend/internal/nacos"
+	nginxsvc "aiops-platform/backend/internal/nginx"
 	ragsvc "aiops-platform/backend/internal/rag"
+	redissvc "aiops-platform/backend/internal/redis"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/skillframework"
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
+	tidbsvc "aiops-platform/backend/internal/tidb"
 	timelinesvc "aiops-platform/backend/internal/timeline"
 	"aiops-platform/backend/internal/toolregistry"
 	topologysvc "aiops-platform/backend/internal/topology"
@@ -120,6 +124,10 @@ func run() error {
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
 	metricsService := metricssvc.NewService(dataSourceRepository, credentialManager, nil)
+	nacosService := nacossvc.NewService(dataSourceRepository, credentialManager, nil)
+	nginxService := nginxsvc.NewService(dataSourceRepository, credentialManager, nil)
+	redisService := redissvc.NewService(dataSourceRepository, credentialManager, nil)
+	tidbService := tidbsvc.NewService(dataSourceRepository, credentialManager, nil)
 	changeService := changesvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
 	evidenceService := evidencesvc.NewService(evidenceRepository)
@@ -128,7 +136,9 @@ func run() error {
 	correlationService := correlationsvc.NewService(eventRepository, topologyRepository)
 	incidentService := incidentsvc.NewService(incidentRepository, analysisRepository)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
-	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
+	skills := []skillframework.Skill{skillframework.EchoSkill{}}
+	skills = append(skills, skillframework.ComponentDiagnosisSkillsWithServices(nacosService, redisService, tidbService, nginxService)...)
+	skills = append(skills, skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
 	skills = append(skills, skillframework.ChangeSkills(changeService)...)
 	skills = append(skills, skillframework.IncidentAnalysisSkills(timelineService, correlationService)...)
