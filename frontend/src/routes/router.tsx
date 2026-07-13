@@ -8,6 +8,7 @@ import { LoginPage } from "@/pages/login-page";
 import { NotFoundPage } from "@/pages/not-found-page";
 import { OperationsPage } from "@/pages/operations-page";
 import { SettingsPage } from "@/pages/settings-page";
+import { TopologyPage } from "@/pages/topology-page";
 import { WorkflowPage } from "@/pages/workflow-page";
 
 export const router = createBrowserRouter([
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: "/analysis", element: <AnalysisPage /> },
       { path: "/knowledge", element: <KnowledgePage /> },
       { path: "/workflows", element: <WorkflowPage /> },
+      { path: "/topology", element: <TopologyPage /> },
       { path: "/operations", element: <OperationsPage /> },
       { path: "/settings", element: <SettingsPage /> },
     ],

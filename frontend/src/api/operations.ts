@@ -50,6 +50,69 @@ export type BlastRadius = TopologyGraph & {
   cycleDetected: boolean;
 };
 
+export type TopologyPath = {
+  targetNodeKey: string;
+  via?: string;
+  hops: number;
+  nodeKeys: string[];
+  edgeKeys: string[];
+  confidence: number;
+  impactType: string;
+  evidenceKey?: string;
+};
+
+export type ExpandTopologyResult = TopologyGraph & {
+  rootKey: string;
+  direction: string;
+  depth: number;
+  evidenceKey?: string;
+  paths: TopologyPath[];
+  cycleDetected: boolean;
+  truncated: boolean;
+};
+
+export type TopologyDirection = "both" | "upstream" | "downstream";
+
+export type ExpandTopologyInput = {
+  nodeKey: string;
+  depth?: number;
+  direction?: TopologyDirection;
+  maxNodes?: number;
+  maxEdges?: number;
+  onlyPropagating?: boolean;
+  semantics?: string[];
+  observedNodeKeys?: string[];
+  environment?: string;
+  cluster?: string;
+  namespace?: string;
+};
+
+export type TopologySavedView = {
+  id: number;
+  name: string;
+  description?: string;
+  ownerId: number;
+  visibility: "private" | "team" | "public";
+  centerNodeId?: number;
+  queryConfig: unknown;
+  displayConfig: unknown;
+  layoutData?: unknown;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TopologySavedViewInput = {
+  name: string;
+  description?: string;
+  visibility?: "private" | "team" | "public";
+  centerNodeId?: number;
+  queryConfig?: Record<string, unknown>;
+  displayConfig?: Record<string, unknown>;
+  layoutData?: Record<string, unknown>;
+  isDefault?: boolean;
+};
+
 export type Incident = {
   id: number;
   incidentKey: string;
@@ -160,6 +223,28 @@ export async function getTopologyGraph(limit = 80) {
   return response.data.data;
 }
 
+export async function expandTopology(input: ExpandTopologyInput) {
+  const response = await apiClient.get<ApiEnvelope<ExpandTopologyResult>>(
+    "/api/topology/expand",
+    {
+      params: {
+        nodeKey: input.nodeKey,
+        depth: input.depth ?? 2,
+        direction: input.direction ?? "both",
+        maxNodes: input.maxNodes ?? 200,
+        maxEdges: input.maxEdges ?? 400,
+        onlyPropagating: input.onlyPropagating ?? false,
+        semantics: input.semantics?.join(","),
+        observedNodeKeys: input.observedNodeKeys?.join(","),
+        environment: input.environment,
+        cluster: input.cluster,
+        namespace: input.namespace,
+      },
+    },
+  );
+  return response.data.data;
+}
+
 export async function getBlastRadius(input: {
   nodeKey: string;
   direction?: "both" | "upstream" | "downstream";
@@ -175,6 +260,34 @@ export async function getBlastRadius(input: {
         hops: input.hops ?? 2,
         maxNodes: input.maxNodes ?? 80,
       },
+    },
+  );
+  return response.data.data;
+}
+
+export async function listTopologySavedViews(limit = 30) {
+  const response = await apiClient.get<ApiEnvelope<TopologySavedView[]>>(
+    "/api/topology/views",
+    { params: { limit } },
+  );
+  return response.data.data;
+}
+
+export async function createTopologySavedView(input: TopologySavedViewInput) {
+  const response = await apiClient.post<ApiEnvelope<TopologySavedView>>(
+    "/api/topology/views",
+    {
+      name: input.name,
+      description: input.description,
+      visibility: input.visibility ?? "private",
+      centerNodeId: input.centerNodeId,
+      queryConfig: input.queryConfig ?? {},
+      displayConfig: input.displayConfig ?? {
+        layout: "svg-layered",
+        showLabels: true,
+      },
+      layoutData: input.layoutData,
+      isDefault: input.isDefault ?? false,
     },
   );
   return response.data.data;

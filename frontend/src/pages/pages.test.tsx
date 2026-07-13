@@ -10,6 +10,7 @@ import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
 import { OperationsPage } from "@/pages/operations-page";
 import { SettingsPage } from "@/pages/settings-page";
+import { TopologyPage } from "@/pages/topology-page";
 import { WorkflowPage } from "@/pages/workflow-page";
 
 vi.mock("@/api/auth", () => ({
@@ -84,7 +85,68 @@ vi.mock("@/api/workflows", () => ({
 }));
 
 vi.mock("@/api/operations", () => ({
+  createTopologySavedView: vi.fn().mockResolvedValue({
+    id: 1,
+    name: "生产服务依赖视图",
+    ownerId: 1,
+    visibility: "private",
+    queryConfig: {},
+    displayConfig: {},
+    isDefault: false,
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
   confirmRootCause: vi.fn(),
+  expandTopology: vi.fn().mockResolvedValue({
+    rootKey: "service:payment-api",
+    direction: "both",
+    depth: 2,
+    evidenceKey: "",
+    cycleDetected: false,
+    truncated: false,
+    paths: [
+      {
+        targetNodeKey: "db:orders",
+        hops: 1,
+        nodeKeys: ["service:payment-api", "db:orders"],
+        edgeKeys: ["service:payment-api->db:orders"],
+        confidence: 0.92,
+        impactType: "dependency",
+      },
+    ],
+    nodes: [
+      {
+        id: 1,
+        nodeKey: "service:payment-api",
+        kind: "service",
+        name: "payment-api",
+        sourceType: "manual",
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+      {
+        id: 2,
+        nodeKey: "db:orders",
+        kind: "database",
+        name: "orders",
+        sourceType: "manual",
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+    ],
+    edges: [
+      {
+        id: 1,
+        edgeKey: "service:payment-api->db:orders",
+        fromNodeKey: "service:payment-api",
+        toNodeKey: "db:orders",
+        edgeType: "depends_on",
+        sourceType: "manual",
+        createdAt: "2026-07-12T10:00:00Z",
+        updatedAt: "2026-07-12T10:00:00Z",
+      },
+    ],
+  }),
   getBlastRadius: vi.fn().mockResolvedValue({
     rootKey: "service:payment-api",
     direction: "both",
@@ -202,6 +264,19 @@ vi.mock("@/api/operations", () => ({
       },
     ],
   }),
+  listTopologySavedViews: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      name: "生产服务依赖视图",
+      ownerId: 1,
+      visibility: "private",
+      queryConfig: { nodeKey: "service:payment-api", depth: 2 },
+      displayConfig: { layout: "svg-layered" },
+      isDefault: false,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
   listIncidents: vi.fn().mockResolvedValue([
     {
       id: 1,
@@ -428,9 +503,30 @@ describe("OperationsPage", () => {
     expect(
       await screen.findByRole("heading", { name: "历史相似 Incident" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("仅供参考，不自动确认历史根因。")).toBeInTheDocument();
+    expect(
+      screen.getByText("仅供参考，不自动确认历史根因。"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "报告导出 Markdown" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("TopologyPage", () => {
+  it("renders topology map filters, legends and drawer placeholder", async () => {
+    renderWithQueryClient(<TopologyPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "拓扑地图" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Topology Map" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Filter / Expand")).toBeInTheDocument();
+    expect(screen.getByText("Saved View")).toBeInTheDocument();
+    expect(screen.getByText("图例")).toBeInTheDocument();
+    expect(
+      screen.getByText("点击拓扑图中的节点查看详情。"),
     ).toBeInTheDocument();
   });
 });
