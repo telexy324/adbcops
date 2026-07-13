@@ -388,6 +388,23 @@ func (h *TopologyHandler) SyncK8s(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *TopologyHandler) SyncTrace(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.TraceServiceGraphInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.SyncTraceServiceGraph(c.Request.Context(), actor, request)
+	if handleTopologyError(c, err, "sync trace service graph failed") {
+		return
+	}
+	success(c, result)
+}
+
 func idFromParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

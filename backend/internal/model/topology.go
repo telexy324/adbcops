@@ -18,6 +18,7 @@ const (
 	TopologyEdgeTypeDependsOn = "depends_on"
 	TopologyEdgeTypeRunsOn    = "runs_on"
 	TopologyEdgeTypeStoresIn  = "stores_in"
+	TopologyEdgeTypeCalls     = "calls"
 
 	TopologySourceManual = "manual"
 	TopologySourceK8s    = "kubernetes"

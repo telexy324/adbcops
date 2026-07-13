@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -75,9 +78,14 @@ type K8sReader interface {
 	Resources(ctx context.Context, actor *model.AppUser, input k8ssvc.ResourceInput) (*k8ssvc.ResourceResult, error)
 }
 
+type TraceGraphReader interface {
+	ReadTraceServiceGraph(ctx context.Context, actor *model.AppUser, input TraceServiceGraphInput) (*TraceServiceGraph, error)
+}
+
 type Service struct {
-	repository Repository
-	k8sReader  K8sReader
+	repository       Repository
+	k8sReader        K8sReader
+	traceGraphReader TraceGraphReader
 }
 
 type NodeInput struct {
@@ -167,6 +175,32 @@ type SyncK8sInput struct {
 	Cluster      string `json:"cluster"`
 	Namespace    string `json:"namespace"`
 	Limit        int    `json:"limit"`
+}
+
+type TraceServiceGraphInput struct {
+	DataSourceID    int64  `json:"dataSourceId"`
+	Environment     string `json:"environment"`
+	System          string `json:"system"`
+	Cluster         string `json:"cluster"`
+	Namespace       string `json:"namespace"`
+	Path            string `json:"path"`
+	MinRequestCount int64  `json:"minRequestCount"`
+	TTLSeconds      int    `json:"ttlSeconds"`
+	Limit           int    `json:"limit"`
+}
+
+type TraceServiceGraph struct {
+	Edges []TraceServiceGraphEdge `json:"edges"`
+}
+
+type TraceServiceGraphEdge struct {
+	Source       string  `json:"source"`
+	Target       string  `json:"target"`
+	Route        string  `json:"route,omitempty"`
+	RequestCount int64   `json:"requestCount"`
+	ErrorCount   int64   `json:"errorCount,omitempty"`
+	LatencyP95Ms float64 `json:"latencyP95Ms,omitempty"`
+	Confidence   float64 `json:"confidence,omitempty"`
 }
 
 type SyncResult struct {
@@ -302,7 +336,13 @@ type FindNodeResult struct {
 }
 
 func NewService(repository Repository, k8sReader K8sReader) *Service {
-	return &Service{repository: repository, k8sReader: k8sReader}
+	service := &Service{repository: repository, k8sReader: k8sReader}
+	service.traceGraphReader = httpTraceGraphReader{repository: repository, client: &http.Client{Timeout: 10 * time.Second}}
+	return service
+}
+
+func (s *Service) SetTraceGraphReader(reader TraceGraphReader) {
+	s.traceGraphReader = reader
 }
 
 func (s *Service) ListNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error) {
@@ -1194,6 +1234,97 @@ func (s *Service) SyncK8s(ctx context.Context, actor *model.AppUser, input SyncK
 	return &SyncResult{Nodes: len(builder.nodes), Edges: len(builder.edges)}, nil
 }
 
+func (s *Service) SyncTraceServiceGraph(ctx context.Context, actor *model.AppUser, input TraceServiceGraphInput) (*SyncResult, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	if s.traceGraphReader == nil {
+		return nil, ErrInvalidInput
+	}
+	if input.DataSourceID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	minRequestCount := input.MinRequestCount
+	if minRequestCount <= 0 {
+		minRequestCount = 1
+	}
+	ttlSeconds := input.TTLSeconds
+	if ttlSeconds <= 0 {
+		ttlSeconds = 900
+	}
+	graph, err := s.traceGraphReader.ReadTraceServiceGraph(ctx, actor, input)
+	if err != nil {
+		return nil, err
+	}
+	if graph == nil || len(graph.Edges) == 0 {
+		return &SyncResult{}, nil
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second)
+	result := &SyncResult{}
+	for _, item := range graph.Edges {
+		if result.Edges >= limit {
+			break
+		}
+		sourceName := strings.TrimSpace(item.Source)
+		targetName := strings.TrimSpace(item.Target)
+		if sourceName == "" || targetName == "" {
+			continue
+		}
+		sourceNode, sourceCreated, err := s.resolveTraceServiceNode(ctx, sourceName, input)
+		if err != nil {
+			return nil, err
+		}
+		targetNode, targetCreated, err := s.resolveTraceServiceNode(ctx, targetName, input)
+		if err != nil {
+			return nil, err
+		}
+		if sourceCreated {
+			result.Nodes++
+		}
+		if targetCreated {
+			result.Nodes++
+		}
+		confidence := traceEdgeConfidence(item, minRequestCount)
+		properties, _ := json.Marshal(map[string]any{
+			"route":           item.Route,
+			"requestCount":    item.RequestCount,
+			"errorCount":      item.ErrorCount,
+			"latencyP95Ms":    item.LatencyP95Ms,
+			"minRequestCount": minRequestCount,
+		})
+		sourceRef, _ := json.Marshal(map[string]any{
+			"dataSourceId": input.DataSourceID,
+			"source":       sourceName,
+			"target":       targetName,
+			"route":        item.Route,
+		})
+		recordKey := fmt.Sprintf("%d:%s:%s:%s", input.DataSourceID, sourceName, targetName, item.Route)
+		edgeType := model.TopologyEdgeTypeCalls
+		if strings.TrimSpace(item.Route) != "" {
+			edgeType = model.TopologyEdgeTypeRoutesTo
+		}
+		if _, err := s.UpsertEdge(ctx, EdgeInput{
+			FromNodeKey:     sourceNode.NodeKey,
+			ToNodeKey:       targetNode.NodeKey,
+			EdgeType:        edgeType,
+			Confidence:      &confidence,
+			SourceType:      model.TopologySourceTypeTraceServiceGraph,
+			SourceRecordKey: &recordKey,
+			ExpiresAt:       &expiresAt,
+			Properties:      properties,
+			SourceRef:       sourceRef,
+		}); err != nil {
+			return nil, err
+		}
+		result.Edges++
+	}
+	return result, nil
+}
+
 func (s *Service) readK8sResource(ctx context.Context, actor *model.AppUser, dataSourceID int64, namespace, resource string, limit int) (*k8ssvc.ResourceResult, error) {
 	return s.k8sReader.Resources(ctx, actor, k8ssvc.ResourceInput{
 		DataSourceID: dataSourceID,
@@ -1226,6 +1357,159 @@ func (s *Service) validateK8sTopologyNamespaceScope(ctx context.Context, dataSou
 		return ErrForbidden
 	}
 	return nil
+}
+
+func (s *Service) resolveTraceServiceNode(ctx context.Context, serviceName string, input TraceServiceGraphInput) (*model.TopologyNode, bool, error) {
+	result, err := s.FindNode(ctx, FindNodeInput{
+		Query:       serviceName,
+		Environment: input.Environment,
+		NodeTypes:   []string{"service", "application", model.TopologyNodeKindK8sService},
+		Limit:       5,
+	})
+	if err == nil && result.Matched && result.Node != nil {
+		return result.Node, false, nil
+	}
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, false, err
+	}
+	node, err := s.UpsertNode(ctx, NodeInput{
+		NodeKey:     externalKey(input.Environment, "service", model.TopologySourceTypeTraceServiceGraph, serviceName),
+		Kind:        "service",
+		Name:        serviceName,
+		Environment: input.Environment,
+		Cluster:     input.Cluster,
+		Namespace:   input.Namespace,
+		SourceType:  model.TopologySourceTypeTraceServiceGraph,
+		Properties:  traceServiceNodeProperties(input),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return node, true, nil
+}
+
+func traceServiceNodeProperties(input TraceServiceGraphInput) json.RawMessage {
+	raw, _ := json.Marshal(map[string]any{
+		"system": input.System,
+	})
+	return raw
+}
+
+func traceEdgeConfidence(edge TraceServiceGraphEdge, minRequestCount int64) float64 {
+	if edge.Confidence > 0 {
+		if edge.Confidence > 1 {
+			return 1
+		}
+		return edge.Confidence
+	}
+	if minRequestCount <= 0 {
+		minRequestCount = 1
+	}
+	if edge.RequestCount <= 0 {
+		return 0.1
+	}
+	ratio := float64(edge.RequestCount) / float64(minRequestCount)
+	if ratio >= 1 {
+		return 0.9
+	}
+	confidence := 0.2 + ratio*0.6
+	if confidence < 0.1 {
+		return 0.1
+	}
+	if confidence > 0.8 {
+		return 0.8
+	}
+	return confidence
+}
+
+type httpTraceGraphReader struct {
+	repository Repository
+	client     *http.Client
+}
+
+func (r httpTraceGraphReader) ReadTraceServiceGraph(ctx context.Context, _ *model.AppUser, input TraceServiceGraphInput) (*TraceServiceGraph, error) {
+	dataSource, err := r.repository.FindDataSourceByID(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	if !dataSource.Enabled || !dataSource.ReadOnly {
+		return nil, ErrForbidden
+	}
+	if dataSource.SourceType != model.DataSourceTypeHTTP && dataSource.SourceType != model.DataSourceTypePrometheus {
+		return nil, ErrUnsupportedSource
+	}
+	endpoint, err := traceGraphEndpoint(dataSource.Config, input.Path)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+	response, err := r.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("trace service graph http status %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	return decodeTraceServiceGraph(body)
+}
+
+func traceGraphEndpoint(raw []byte, overridePath string) (string, error) {
+	var config struct {
+		BaseURL          string `json:"baseUrl"`
+		ServiceGraphPath string `json:"serviceGraphPath"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return "", ErrInvalidInput
+	}
+	baseURL := strings.TrimSpace(config.BaseURL)
+	if baseURL == "" {
+		return "", ErrInvalidInput
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", ErrInvalidInput
+	}
+	path := strings.TrimSpace(overridePath)
+	if path == "" {
+		path = strings.TrimSpace(config.ServiceGraphPath)
+	}
+	if path == "" {
+		path = "/service-graph"
+	}
+	relative, err := url.Parse(path)
+	if err != nil {
+		return "", ErrInvalidInput
+	}
+	return parsed.ResolveReference(relative).String(), nil
+}
+
+func decodeTraceServiceGraph(raw []byte) (*TraceServiceGraph, error) {
+	var graph TraceServiceGraph
+	if err := json.Unmarshal(raw, &graph); err == nil && len(graph.Edges) > 0 {
+		return &graph, nil
+	}
+	var wrapped struct {
+		Data struct {
+			Edges []TraceServiceGraphEdge `json:"edges"`
+			Calls []TraceServiceGraphEdge `json:"calls"`
+		} `json:"data"`
+		Calls []TraceServiceGraphEdge `json:"calls"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, ErrInvalidInput
+	}
+	graph.Edges = append(graph.Edges, wrapped.Calls...)
+	graph.Edges = append(graph.Edges, wrapped.Data.Edges...)
+	graph.Edges = append(graph.Edges, wrapped.Data.Calls...)
+	return &graph, nil
 }
 
 type graphIndex struct {

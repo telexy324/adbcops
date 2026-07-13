@@ -547,6 +547,80 @@ func TestSyncK8sHonorsTopologyNamespaceScope(t *testing.T) {
 	}
 }
 
+func TestSyncTraceServiceGraphMergesNodesAndAppliesConfidenceAndTTL(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	service.SetTraceGraphReader(fakeTraceGraphReader{graph: &TraceServiceGraph{Edges: []TraceServiceGraphEdge{{
+		Source:       "payment-api",
+		Target:       "orders-api",
+		RequestCount: 2,
+	}}}})
+	if _, err := service.UpsertNode(context.Background(), NodeInput{
+		NodeKey:     "k8s:prod-a:payment:k8s_service:payment-api",
+		Kind:        model.TopologyNodeKindK8sService,
+		Name:        "payment-api",
+		Environment: "prod",
+		Cluster:     "prod-a",
+		Namespace:   "payment",
+		SourceType:  model.TopologySourceTypeKubernetes,
+	}); err != nil {
+		t.Fatalf("upsert existing k8s service: %v", err)
+	}
+
+	result, err := service.SyncTraceServiceGraph(context.Background(), &model.AppUser{ID: 1}, TraceServiceGraphInput{
+		DataSourceID:    1,
+		Environment:     "prod",
+		Cluster:         "prod-a",
+		Namespace:       "payment",
+		MinRequestCount: 10,
+		TTLSeconds:      60,
+	})
+	if err != nil {
+		t.Fatalf("sync trace graph: %v", err)
+	}
+	if result.Nodes != 1 || result.Edges != 1 {
+		t.Fatalf("expected one new target node and one edge, got %+v", result)
+	}
+	var edge model.TopologyEdge
+	for _, candidate := range repo.edges {
+		edge = candidate
+	}
+	if edge.FromNodeKey != "k8s:prod-a:payment:k8s_service:payment-api" {
+		t.Fatalf("expected trace to merge with existing k8s service, got %+v", edge)
+	}
+	if edge.Confidence == nil || *edge.Confidence >= 0.8 {
+		t.Fatalf("expected low traffic edge to have reduced confidence, got %+v", edge.Confidence)
+	}
+	if edge.StaleAt == nil || !edge.StaleAt.After(time.Now()) {
+		t.Fatalf("expected trace TTL to set stale_at in the future, got %+v", edge.StaleAt)
+	}
+}
+
+func TestSyncTraceServiceGraphEmptyResultDoesNotDeleteExistingEdges(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	service.SetTraceGraphReader(fakeTraceGraphReader{graph: &TraceServiceGraph{Edges: []TraceServiceGraphEdge{{
+		Source:       "payment-api",
+		Target:       "orders-api",
+		RequestCount: 20,
+	}}}})
+	if _, err := service.SyncTraceServiceGraph(context.Background(), &model.AppUser{ID: 1}, TraceServiceGraphInput{DataSourceID: 1}); err != nil {
+		t.Fatalf("initial trace sync: %v", err)
+	}
+	if len(repo.edges) != 1 {
+		t.Fatalf("expected one edge before empty sync, got %+v", repo.edges)
+	}
+
+	service.SetTraceGraphReader(fakeTraceGraphReader{graph: &TraceServiceGraph{}})
+	result, err := service.SyncTraceServiceGraph(context.Background(), &model.AppUser{ID: 1}, TraceServiceGraphInput{DataSourceID: 1})
+	if err != nil {
+		t.Fatalf("empty trace sync: %v", err)
+	}
+	if result.Edges != 0 || len(repo.edges) != 1 {
+		t.Fatalf("empty trace sync should not delete existing edges, result=%+v edges=%+v", result, repo.edges)
+	}
+}
+
 func TestTopologyTraversalDetectsCycleAndHonorsHops(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	seedManualGraph(t, repo,
@@ -771,6 +845,18 @@ func (r fakeK8sReader) Resources(_ context.Context, _ *model.AppUser, input k8ss
 	return &k8ssvc.ResourceResult{DataSourceID: input.DataSourceID, Resource: input.Resource, Namespace: input.Namespace, Items: r.resources[input.Resource]}, nil
 }
 
+type fakeTraceGraphReader struct {
+	graph *TraceServiceGraph
+	err   error
+}
+
+func (r fakeTraceGraphReader) ReadTraceServiceGraph(_ context.Context, _ *model.AppUser, _ TraceServiceGraphInput) (*TraceServiceGraph, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.graph, nil
+}
+
 type memoryTopologyRepository struct {
 	nodes            map[string]model.TopologyNode
 	edges            map[string]model.TopologyEdge
@@ -817,6 +903,7 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		model.TopologyEdgeTypeDependsOn,
 		model.TopologyEdgeTypeRunsOn,
 		model.TopologyEdgeTypeStoresIn,
+		model.TopologyEdgeTypeCalls,
 	} {
 		repo.seedRelationType(key)
 	}
