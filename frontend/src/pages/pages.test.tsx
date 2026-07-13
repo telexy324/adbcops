@@ -218,6 +218,7 @@ vi.mock("@/api/config", () => ({
       provider: "openai-compatible",
       baseUrl: "https://api.openai.example/v1",
       model: "ops-model",
+      purpose: "chat",
       temperature: 0.2,
       enabled: true,
       isDefault: true,

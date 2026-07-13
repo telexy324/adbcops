@@ -83,6 +83,54 @@ func TestServiceTestUsesDecryptedAPIKey(t *testing.T) {
 	}
 }
 
+func TestServiceTestUsesEmbeddingAndRerankEndpointsByPurpose(t *testing.T) {
+	store := newFakeRepository()
+	secrets := &fakeSecrets{}
+	client := &fakeClient{}
+	service := NewService(store, secrets, client)
+	embedding, err := service.Create(context.Background(), SaveInput{
+		Name:        "embedding",
+		Provider:    model.ProviderOpenAICompatible,
+		BaseURL:     "https://llm.example",
+		Model:       "embed-model",
+		Purpose:     model.LLMPurposeEmbedding,
+		APIKey:      ptr("secret-key"),
+		Temperature: 0.2,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("Create(embedding) error = %v", err)
+	}
+	rerank, err := service.Create(context.Background(), SaveInput{
+		Name:        "rerank",
+		Provider:    model.ProviderOpenAICompatible,
+		BaseURL:     "https://llm.example",
+		Model:       "rerank-model",
+		Purpose:     model.LLMPurposeRerank,
+		APIKey:      ptr("secret-key"),
+		Temperature: 0.2,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("Create(rerank) error = %v", err)
+	}
+
+	embeddingResult, err := service.Test(context.Background(), embedding.ID, "ping")
+	if err != nil {
+		t.Fatalf("Test(embedding) error = %v", err)
+	}
+	if !embeddingResult.OK || !strings.Contains(embeddingResult.Content, "dimension=2") || client.embedCalls != 1 {
+		t.Fatalf("embedding result=%+v embedCalls=%d", embeddingResult, client.embedCalls)
+	}
+	rerankResult, err := service.Test(context.Background(), rerank.ID, "ping")
+	if err != nil {
+		t.Fatalf("Test(rerank) error = %v", err)
+	}
+	if !rerankResult.OK || !strings.Contains(rerankResult.Content, "results=1") || client.rerankCalls != 1 {
+		t.Fatalf("rerank result=%+v rerankCalls=%d", rerankResult, client.rerankCalls)
+	}
+}
+
 type fakeRepository struct {
 	nextID  int64
 	configs map[int64]*model.LLMConfig
@@ -110,7 +158,7 @@ func (f *fakeRepository) FindLLMConfigByID(_ context.Context, id int64) (*model.
 
 func (f *fakeRepository) CreateLLMConfig(_ context.Context, config *model.LLMConfig) error {
 	if config.IsDefault {
-		f.clearDefault()
+		f.clearDefault(config.Purpose)
 	}
 	config.ID = f.nextID
 	f.nextID++
@@ -124,7 +172,11 @@ func (f *fakeRepository) UpdateLLMConfig(_ context.Context, id int64, updates re
 		return nil, repository.ErrNotFound
 	}
 	if updates.IsDefault != nil && *updates.IsDefault {
-		f.clearDefault()
+		purpose := config.Purpose
+		if updates.Purpose != nil {
+			purpose = *updates.Purpose
+		}
+		f.clearDefault(purpose)
 	}
 	if updates.Name != nil {
 		config.Name = *updates.Name
@@ -137,6 +189,9 @@ func (f *fakeRepository) UpdateLLMConfig(_ context.Context, id int64, updates re
 	}
 	if updates.Model != nil {
 		config.Model = *updates.Model
+	}
+	if updates.Purpose != nil {
+		config.Purpose = *updates.Purpose
 	}
 	if updates.APIKeyRefSet {
 		config.APIKeyRef = updates.APIKeyRef
@@ -165,9 +220,20 @@ func (f *fakeRepository) SetDefaultLLMConfig(ctx context.Context, id int64) (*mo
 	return f.UpdateLLMConfig(ctx, id, repository.LLMConfigUpdates{IsDefault: ptr(true)})
 }
 
-func (f *fakeRepository) clearDefault() {
+func (f *fakeRepository) FindDefaultEnabledLLMConfigByPurpose(_ context.Context, purpose string) (*model.LLMConfig, error) {
 	for _, config := range f.configs {
-		config.IsDefault = false
+		if config.Enabled && config.IsDefault && config.Purpose == purpose {
+			return config, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *fakeRepository) clearDefault(purpose string) {
+	for _, config := range f.configs {
+		if config.Purpose == purpose {
+			config.IsDefault = false
+		}
 	}
 }
 
@@ -186,12 +252,24 @@ func (f *fakeSecrets) Decrypt(value string) (string, error) {
 }
 
 type fakeClient struct {
-	last ChatRequest
+	last        ChatRequest
+	embedCalls  int
+	rerankCalls int
 }
 
 func (f *fakeClient) Chat(_ context.Context, req ChatRequest) (*ChatResult, error) {
 	f.last = req
 	return &ChatResult{Content: "ok", Model: req.Model, Usage: Usage{TotalTokens: 2}}, nil
+}
+
+func (f *fakeClient) Embed(_ context.Context, req EmbeddingRequest) (*EmbeddingResult, error) {
+	f.embedCalls++
+	return &EmbeddingResult{Model: req.Model, Embedding: []float64{1, 0}, Embeddings: [][]float64{{1, 0}}, Usage: Usage{TotalTokens: 1}}, nil
+}
+
+func (f *fakeClient) Rerank(_ context.Context, req RerankRequest) (*RerankResult, error) {
+	f.rerankCalls++
+	return &RerankResult{Model: req.Model, Results: []RerankItem{{Index: 0, RelevanceScore: 0.9}}, Usage: Usage{TotalTokens: 1}}, nil
 }
 
 func ptr[T any](value T) *T {

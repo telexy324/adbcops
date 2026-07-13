@@ -12,6 +12,7 @@ import (
 type LLMRepository interface {
 	ListLLMConfigs(ctx context.Context) ([]model.LLMConfig, error)
 	FindLLMConfigByID(ctx context.Context, id int64) (*model.LLMConfig, error)
+	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateLLMConfig(ctx context.Context, config *model.LLMConfig) error
 	UpdateLLMConfig(ctx context.Context, id int64, updates LLMConfigUpdates) (*model.LLMConfig, error)
 	DeleteLLMConfig(ctx context.Context, id int64) error
@@ -23,6 +24,7 @@ type LLMConfigUpdates struct {
 	Provider     *string
 	BaseURL      *string
 	Model        *string
+	Purpose      *string
 	APIKeyRef    *string
 	APIKeyRefSet bool
 	Temperature  *float64
@@ -54,10 +56,20 @@ func (r *GORMLLMRepository) FindLLMConfigByID(ctx context.Context, id int64) (*m
 	return &config, nil
 }
 
+func (r *GORMLLMRepository) FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error) {
+	var config model.LLMConfig
+	if err := r.db.WithContext(ctx).
+		Where("enabled = ? AND is_default = ? AND purpose = ?", true, true, purpose).
+		First(&config).Error; err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	return &config, nil
+}
+
 func (r *GORMLLMRepository) CreateLLMConfig(ctx context.Context, config *model.LLMConfig) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if config.IsDefault {
-			if err := clearDefaultLLMConfig(tx); err != nil {
+			if err := clearDefaultLLMConfig(tx, config.Purpose); err != nil {
 				return err
 			}
 		}
@@ -72,7 +84,17 @@ func (r *GORMLLMRepository) UpdateLLMConfig(ctx context.Context, id int64, updat
 	var updated model.LLMConfig
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if updates.IsDefault != nil && *updates.IsDefault {
-			if err := clearDefaultLLMConfig(tx); err != nil {
+			purpose := model.LLMPurposeChat
+			if updates.Purpose != nil {
+				purpose = *updates.Purpose
+			} else {
+				var existing model.LLMConfig
+				if err := tx.First(&existing, id).Error; err != nil {
+					return mapRepositoryError(err)
+				}
+				purpose = existing.Purpose
+			}
+			if err := clearDefaultLLMConfig(tx, purpose); err != nil {
 				return err
 			}
 		}
@@ -88,6 +110,9 @@ func (r *GORMLLMRepository) UpdateLLMConfig(ctx context.Context, id int64, updat
 		}
 		if updates.Model != nil {
 			values["model"] = *updates.Model
+		}
+		if updates.Purpose != nil {
+			values["purpose"] = *updates.Purpose
 		}
 		if updates.APIKeyRefSet {
 			values["api_key_ref"] = updates.APIKeyRef
@@ -134,9 +159,9 @@ func (r *GORMLLMRepository) SetDefaultLLMConfig(ctx context.Context, id int64) (
 	return r.UpdateLLMConfig(ctx, id, LLMConfigUpdates{IsDefault: ptr(true)})
 }
 
-func clearDefaultLLMConfig(tx *gorm.DB) error {
+func clearDefaultLLMConfig(tx *gorm.DB, purpose string) error {
 	if err := tx.Model(&model.LLMConfig{}).
-		Where("is_default = ?", true).
+		Where("is_default = ? AND purpose = ?", true, purpose).
 		Update("is_default", false).Error; err != nil {
 		return fmt.Errorf("clear default llm config: %w", err)
 	}

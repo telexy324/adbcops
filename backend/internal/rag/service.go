@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -32,7 +33,9 @@ type Repository interface {
 	FindConversationByID(ctx context.Context, id int64) (*model.Conversation, error)
 	CreateMessage(ctx context.Context, message *model.Message) error
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
+	ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
+	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
 }
 
@@ -94,12 +97,21 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	if err != nil {
 		return nil, err
 	}
+	embeddingConfig, embeddingAPIKey, embeddingReady := s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
+	rerankConfig, rerankAPIKey, rerankReady := s.loadOptionalModel(ctx, model.LLMPurposeRerank)
 	rewritten := s.rewriteQuery(ctx, question, llmConfig, apiKey, llmReady)
-	chunks, err := s.recall(ctx, question, rewritten, limit*2)
+	chunks, err := s.recall(ctx, question, rewritten, limit*4)
 	if err != nil {
 		return nil, fmt.Errorf("recall knowledge chunks: %w", err)
 	}
-	chunks = rerankChunks(question, rewritten, chunks, limit)
+	if embeddingReady {
+		chunks = s.embeddingRank(ctx, rewritten, chunks, limit*3, embeddingConfig, embeddingAPIKey)
+	}
+	if rerankReady {
+		chunks = s.modelRerank(ctx, question, chunks, limit, rerankConfig, rerankAPIKey)
+	} else {
+		chunks = lexicalRerankChunks(question, rewritten, chunks, limit)
+	}
 	citations := buildCitations(chunks)
 	answer, err := s.answer(ctx, question, rewritten, chunks, citations, llmConfig, apiKey, llmReady)
 	if err != nil {
@@ -119,7 +131,12 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	if err := s.repository.CreateMessage(ctx, userMessage); err != nil {
 		return nil, fmt.Errorf("create user message: %w", err)
 	}
-	assistantMetadata, _ := json.Marshal(map[string]any{"source": "rag", "recallCount": len(chunks)})
+	assistantMetadata, _ := json.Marshal(map[string]any{
+		"source":         "rag",
+		"recallCount":    len(chunks),
+		"embeddingModel": modelName(embeddingConfig, embeddingReady),
+		"rerankModel":    modelName(rerankConfig, rerankReady),
+	})
 	assistantMessage := &model.Message{
 		ConversationID: conversation.ID,
 		Role:           model.MessageRoleAssistant,
@@ -239,6 +256,121 @@ func (s *Service) recall(ctx context.Context, question, rewritten string, limit 
 	return recalled, nil
 }
 
+func (s *Service) loadOptionalModel(ctx context.Context, purpose string) (*model.LLMConfig, string, bool) {
+	if s.client == nil {
+		return nil, "", false
+	}
+	if purpose == model.LLMPurposeEmbedding {
+		if _, ok := s.client.(llmsvc.EmbeddingClient); !ok {
+			return nil, "", false
+		}
+	}
+	if purpose == model.LLMPurposeRerank {
+		if _, ok := s.client.(llmsvc.RerankClient); !ok {
+			return nil, "", false
+		}
+	}
+	config, err := s.repository.FindDefaultEnabledLLMConfigByPurpose(ctx, purpose)
+	if err != nil {
+		return nil, "", false
+	}
+	apiKey := ""
+	if config.APIKeyRef != nil && *config.APIKeyRef != "" && s.secrets != nil {
+		decrypted, err := s.secrets.Decrypt(*config.APIKeyRef)
+		if err != nil {
+			return nil, "", false
+		}
+		apiKey = decrypted
+	}
+	return config, apiKey, true
+}
+
+func (s *Service) embeddingRank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, apiKey string) []model.KBChunk {
+	client, ok := s.client.(llmsvc.EmbeddingClient)
+	if !ok || config == nil {
+		return chunks
+	}
+	candidates := dedupeChunks(chunks)
+	if len(candidates) < limit {
+		all, err := s.repository.ListPublishedChunks(ctx, 200)
+		if err == nil {
+			candidates = dedupeChunks(append(candidates, all...))
+		}
+	}
+	if len(candidates) == 0 {
+		return chunks
+	}
+	inputs := make([]string, 0, len(candidates)+1)
+	inputs = append(inputs, query)
+	for _, chunk := range candidates {
+		inputs = append(inputs, chunk.Content)
+	}
+	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
+		BaseURL: config.BaseURL,
+		APIKey:  apiKey,
+		Model:   config.Model,
+		Input:   inputs,
+	})
+	if err != nil || result == nil || len(result.Embeddings) != len(inputs) {
+		return chunks
+	}
+	queryEmbedding := result.Embeddings[0]
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return cosine(queryEmbedding, result.Embeddings[i+1]) > cosine(queryEmbedding, result.Embeddings[j+1])
+	})
+	if len(candidates) > limit {
+		return candidates[:limit]
+	}
+	return candidates
+}
+
+func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, apiKey string) []model.KBChunk {
+	client, ok := s.client.(llmsvc.RerankClient)
+	if !ok || config == nil || len(chunks) == 0 {
+		return lexicalRerankChunks(query, query, chunks, limit)
+	}
+	documents := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		documents = append(documents, chunk.Content)
+	}
+	result, err := client.Rerank(ctx, llmsvc.RerankRequest{
+		BaseURL:   config.BaseURL,
+		APIKey:    apiKey,
+		Model:     config.Model,
+		Query:     query,
+		Documents: documents,
+		TopN:      limit,
+	})
+	if err != nil || len(result.Results) == 0 {
+		return lexicalRerankChunks(query, query, chunks, limit)
+	}
+	ranked := make([]model.KBChunk, 0, len(result.Results))
+	seen := map[int]struct{}{}
+	for _, item := range result.Results {
+		if item.Index < 0 || item.Index >= len(chunks) {
+			continue
+		}
+		if _, ok := seen[item.Index]; ok {
+			continue
+		}
+		seen[item.Index] = struct{}{}
+		ranked = append(ranked, chunks[item.Index])
+		if len(ranked) >= limit {
+			return ranked
+		}
+	}
+	for index, chunk := range chunks {
+		if _, ok := seen[index]; ok {
+			continue
+		}
+		ranked = append(ranked, chunk)
+		if len(ranked) >= limit {
+			return ranked
+		}
+	}
+	return ranked
+}
+
 func (s *Service) rewriteQuery(ctx context.Context, question string, config *model.LLMConfig, apiKey string, ready bool) string {
 	fallback := ruleBasedRewrite(question)
 	if !ready || config == nil {
@@ -315,7 +447,7 @@ func ruleBasedRewrite(question string) string {
 	return strings.Join(strings.Fields(replacer.Replace(question)), " ")
 }
 
-func rerankChunks(question, rewritten string, chunks []model.KBChunk, limit int) []model.KBChunk {
+func lexicalRerankChunks(question, rewritten string, chunks []model.KBChunk, limit int) []model.KBChunk {
 	terms := tokenize(question + " " + rewritten)
 	sort.SliceStable(chunks, func(i, j int) bool {
 		return chunkScore(chunks[i], terms) > chunkScore(chunks[j], terms)
@@ -324,6 +456,42 @@ func rerankChunks(question, rewritten string, chunks []model.KBChunk, limit int)
 		return chunks[:limit]
 	}
 	return chunks
+}
+
+func dedupeChunks(chunks []model.KBChunk) []model.KBChunk {
+	seen := map[int64]struct{}{}
+	result := make([]model.KBChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if _, ok := seen[chunk.ID]; ok {
+			continue
+		}
+		seen[chunk.ID] = struct{}{}
+		result = append(result, chunk)
+	}
+	return result
+}
+
+func cosine(a, b []float64) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0
+	}
+	var dot, normA, normB float64
+	for index := range a {
+		dot += a[index] * b[index]
+		normA += a[index] * a[index]
+		normB += b[index] * b[index]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+func modelName(config *model.LLMConfig, ready bool) string {
+	if !ready || config == nil {
+		return ""
+	}
+	return config.Model
 }
 
 func chunkScore(chunk model.KBChunk, terms []string) int {

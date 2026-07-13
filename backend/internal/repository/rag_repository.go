@@ -14,7 +14,9 @@ type RAGRepository interface {
 	FindConversationByID(ctx context.Context, id int64) (*model.Conversation, error)
 	CreateMessage(ctx context.Context, message *model.Message) error
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
+	ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
+	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
 }
 
@@ -65,14 +67,16 @@ func (r *GORMRAGRepository) SearchChunks(ctx context.Context, query string, limi
 	return (&GORMUserRepository{db: r.db}).SearchChunks(ctx, query, limit)
 }
 
+func (r *GORMRAGRepository) ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error) {
+	return (&GORMUserRepository{db: r.db}).ListPublishedChunks(ctx, limit)
+}
+
 func (r *GORMRAGRepository) FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error) {
-	var config model.LLMConfig
-	if err := r.db.WithContext(ctx).
-		Where("enabled = ? AND is_default = ?", true, true).
-		First(&config).Error; err != nil {
-		return nil, mapRepositoryError(err)
-	}
-	return &config, nil
+	return r.FindDefaultEnabledLLMConfigByPurpose(ctx, model.LLMPurposeChat)
+}
+
+func (r *GORMRAGRepository) FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error) {
+	return (&GORMLLMRepository{db: r.db}).FindDefaultEnabledLLMConfigByPurpose(ctx, purpose)
 }
 
 func (r *GORMRAGRepository) CreateQARecord(ctx context.Context, record *model.QARecord) error {

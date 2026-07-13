@@ -30,6 +30,7 @@ type SecretManager interface {
 type Repository interface {
 	ListLLMConfigs(ctx context.Context) ([]model.LLMConfig, error)
 	FindLLMConfigByID(ctx context.Context, id int64) (*model.LLMConfig, error)
+	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateLLMConfig(ctx context.Context, config *model.LLMConfig) error
 	UpdateLLMConfig(ctx context.Context, id int64, updates repository.LLMConfigUpdates) (*model.LLMConfig, error)
 	DeleteLLMConfig(ctx context.Context, id int64) error
@@ -47,6 +48,7 @@ type SaveInput struct {
 	Provider    string
 	BaseURL     string
 	Model       string
+	Purpose     string
 	APIKey      *string
 	Temperature float64
 	Enabled     bool
@@ -59,6 +61,7 @@ type UpdateInput struct {
 	Provider    *string
 	BaseURL     *string
 	Model       *string
+	Purpose     *string
 	APIKey      *string
 	Temperature *float64
 	Enabled     *bool
@@ -105,6 +108,7 @@ func (s *Service) Create(ctx context.Context, input SaveInput) (*model.LLMConfig
 		Provider:    normalized.Provider,
 		BaseURL:     normalized.BaseURL,
 		Model:       normalized.Model,
+		Purpose:     normalized.Purpose,
 		APIKeyRef:   apiKeyRef,
 		Temperature: normalized.Temperature,
 		Enabled:     normalized.Enabled,
@@ -149,6 +153,13 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*mod
 			return nil, err
 		}
 		updates.Model = &modelName
+	}
+	if input.Purpose != nil {
+		purpose, err := normalizePurpose(*input.Purpose)
+		if err != nil {
+			return nil, err
+		}
+		updates.Purpose = &purpose
 	}
 	if input.APIKey != nil {
 		updates.APIKeyRefSet = true
@@ -200,6 +211,57 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 	if prompt == "" {
 		prompt = model.DefaultLLMTestPrompt
 	}
+	switch config.Purpose {
+	case model.LLMPurposeEmbedding:
+		client, ok := s.client.(EmbeddingClient)
+		if !ok {
+			return nil, ErrInvalidInput
+		}
+		result, err := client.Embed(ctx, EmbeddingRequest{
+			BaseURL: config.BaseURL,
+			APIKey:  apiKey,
+			Model:   config.Model,
+			Input:   []string{prompt},
+		})
+		if err != nil {
+			return nil, err
+		}
+		dimension := 0
+		if result != nil {
+			dimension = len(result.Embedding)
+			if dimension == 0 && len(result.Embeddings) > 0 {
+				dimension = len(result.Embeddings[0])
+			}
+		}
+		if result == nil {
+			return &TestResult{OK: false, Model: config.Model, Content: "embedding dimension=0"}, nil
+		}
+		return &TestResult{OK: dimension > 0, Model: result.Model, Content: fmt.Sprintf("embedding dimension=%d", dimension), Usage: result.Usage}, nil
+	case model.LLMPurposeRerank:
+		client, ok := s.client.(RerankClient)
+		if !ok {
+			return nil, ErrInvalidInput
+		}
+		result, err := client.Rerank(ctx, RerankRequest{
+			BaseURL:   config.BaseURL,
+			APIKey:    apiKey,
+			Model:     config.Model,
+			Query:     prompt,
+			Documents: []string{prompt, "unrelated document"},
+			TopN:      1,
+		})
+		if err != nil {
+			return nil, err
+		}
+		count := 0
+		if result != nil {
+			count = len(result.Results)
+		}
+		if result == nil {
+			return &TestResult{OK: false, Model: config.Model, Content: "rerank results=0"}, nil
+		}
+		return &TestResult{OK: count > 0, Model: result.Model, Content: fmt.Sprintf("rerank results=%d", count), Usage: result.Usage}, nil
+	}
 	result, err := s.client.Chat(ctx, ChatRequest{
 		BaseURL:     config.BaseURL,
 		APIKey:      apiKey,
@@ -237,6 +299,11 @@ func normalizeSaveInput(input SaveInput) (SaveInput, error) {
 	input.Provider = provider
 	input.BaseURL = baseURL
 	input.Model = modelName
+	purpose, err := normalizePurpose(input.Purpose)
+	if err != nil {
+		return SaveInput{}, err
+	}
+	input.Purpose = purpose
 	return input, nil
 }
 
@@ -266,5 +333,18 @@ func validateProvider(provider string) error {
 		return nil
 	default:
 		return ErrInvalidInput
+	}
+}
+
+func normalizePurpose(value string) (string, error) {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return model.LLMPurposeChat, nil
+	}
+	switch normalized {
+	case model.LLMPurposeChat, model.LLMPurposeEmbedding, model.LLMPurposeRerank:
+		return normalized, nil
+	default:
+		return "", ErrInvalidInput
 	}
 }

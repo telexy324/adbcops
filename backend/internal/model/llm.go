@@ -6,6 +6,9 @@ const (
 	ProviderDeepSeek         = "deepseek"
 	ProviderQwen             = "qwen"
 	ProviderOpenAICompatible = "openai-compatible"
+	LLMPurposeChat           = "chat"
+	LLMPurposeEmbedding      = "embedding"
+	LLMPurposeRerank         = "rerank"
 	DefaultLLMTestPrompt     = "Say ok."
 )
 
@@ -15,6 +18,7 @@ type LLMConfig struct {
 	Provider    string    `gorm:"column:provider;size:50;not null" json:"provider"`
 	BaseURL     string    `gorm:"column:base_url;not null" json:"baseUrl"`
 	Model       string    `gorm:"column:model;size:120;not null" json:"model"`
+	Purpose     string    `gorm:"column:purpose;size:30;not null" json:"purpose"`
 	APIKeyRef   *string   `gorm:"column:api_key_ref" json:"-"`
 	Temperature float64   `gorm:"column:temperature;not null" json:"temperature"`
 	Enabled     bool      `gorm:"column:enabled;not null" json:"enabled"`

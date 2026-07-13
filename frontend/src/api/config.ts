@@ -13,6 +13,7 @@ export type LLMConfig = {
   provider: string;
   baseUrl: string;
   model: string;
+  purpose: "chat" | "embedding" | "rerank";
   temperature: number;
   enabled: boolean;
   isDefault: boolean;
@@ -26,6 +27,7 @@ export type SaveLLMConfigInput = {
   provider: string;
   baseUrl: string;
   model: string;
+  purpose: "chat" | "embedding" | "rerank";
   apiKey?: string;
   temperature: number;
   enabled: boolean;

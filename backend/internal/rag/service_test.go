@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
+	llmsvc "aiops-platform/backend/internal/llm"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 )
@@ -66,6 +68,29 @@ func TestAskRejectsForeignConversation(t *testing.T) {
 	}
 }
 
+func TestAskWorksWithEmbeddingAndRerankModels(t *testing.T) {
+	store := newFakeRepository()
+	store.llmConfigs[model.LLMPurposeEmbedding] = &model.LLMConfig{ID: 2, Purpose: model.LLMPurposeEmbedding, BaseURL: "https://embed.example", Model: "embed-model", Enabled: true, IsDefault: true}
+	store.llmConfigs[model.LLMPurposeRerank] = &model.LLMConfig{ID: 3, Purpose: model.LLMPurposeRerank, BaseURL: "https://rerank.example", Model: "rerank-model", Enabled: true, IsDefault: true}
+	firstID := store.addDocument(model.DocumentStatusPublished)
+	secondID := store.addDocument(model.DocumentStatusPublished)
+	store.addChunk(firstID, "缓存容量规划和淘汰策略。")
+	store.addChunk(secondID, "数据库连接池耗尽时先查看活跃连接和慢查询。")
+	client := &semanticFakeClient{}
+	service := NewService(store, nil, client)
+
+	result, err := service.Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "连接池耗尽怎么排查？", Limit: 1})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.RecallCount != 1 || result.Citations[0].DocumentID != secondID {
+		t.Fatalf("result = %+v", result)
+	}
+	if client.embedCalls == 0 || client.rerankCalls == 0 {
+		t.Fatalf("embedCalls=%d rerankCalls=%d", client.embedCalls, client.rerankCalls)
+	}
+}
+
 type fakeRepository struct {
 	nextConversationID int64
 	nextMessageID      int64
@@ -77,6 +102,7 @@ type fakeRepository struct {
 	documents          map[int64]string
 	chunks             map[int64][]model.KBChunk
 	qaRecords          []model.QARecord
+	llmConfigs         map[string]*model.LLMConfig
 }
 
 func newFakeRepository() *fakeRepository {
@@ -90,6 +116,7 @@ func newFakeRepository() *fakeRepository {
 		messages:           make(map[int64][]model.Message),
 		documents:          make(map[int64]string),
 		chunks:             make(map[int64][]model.KBChunk),
+		llmConfigs:         make(map[string]*model.LLMConfig),
 	}
 }
 
@@ -162,8 +189,30 @@ func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int
 	return results, nil
 }
 
+func (f *fakeRepository) ListPublishedChunks(_ context.Context, limit int) ([]model.KBChunk, error) {
+	var results []model.KBChunk
+	for documentID, chunks := range f.chunks {
+		if f.documents[documentID] != model.DocumentStatusPublished {
+			continue
+		}
+		results = append(results, chunks...)
+		if len(results) >= limit {
+			return results[:limit], nil
+		}
+	}
+	return results, nil
+}
+
 func (f *fakeRepository) FindDefaultEnabledLLMConfig(_ context.Context) (*model.LLMConfig, error) {
-	return nil, repository.ErrNotFound
+	return f.FindDefaultEnabledLLMConfigByPurpose(context.Background(), model.LLMPurposeChat)
+}
+
+func (f *fakeRepository) FindDefaultEnabledLLMConfigByPurpose(_ context.Context, purpose string) (*model.LLMConfig, error) {
+	config, ok := f.llmConfigs[purpose]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return config, nil
 }
 
 func (f *fakeRepository) CreateQARecord(_ context.Context, record *model.QARecord) error {
@@ -171,4 +220,42 @@ func (f *fakeRepository) CreateQARecord(_ context.Context, record *model.QARecor
 	f.nextQARecordID++
 	f.qaRecords = append(f.qaRecords, *record)
 	return nil
+}
+
+type semanticFakeClient struct {
+	embedCalls  int
+	rerankCalls int
+}
+
+func (f *semanticFakeClient) Chat(_ context.Context, req llmsvc.ChatRequest) (*llmsvc.ChatResult, error) {
+	return &llmsvc.ChatResult{Content: "answer", Model: req.Model}, nil
+}
+
+func (f *semanticFakeClient) Embed(_ context.Context, req llmsvc.EmbeddingRequest) (*llmsvc.EmbeddingResult, error) {
+	f.embedCalls++
+	embeddings := make([][]float64, 0, len(req.Input))
+	for _, input := range req.Input {
+		if strings.Contains(input, "连接池") || strings.Contains(input, "数据库") {
+			embeddings = append(embeddings, []float64{1, 0})
+			continue
+		}
+		embeddings = append(embeddings, []float64{0, 1})
+	}
+	return &llmsvc.EmbeddingResult{Model: req.Model, Embeddings: embeddings}, nil
+}
+
+func (f *semanticFakeClient) Rerank(_ context.Context, req llmsvc.RerankRequest) (*llmsvc.RerankResult, error) {
+	f.rerankCalls++
+	results := make([]llmsvc.RerankItem, 0, len(req.Documents))
+	for index, document := range req.Documents {
+		score := 0.1
+		if strings.Contains(document, "连接池") {
+			score = 0.9
+		}
+		results = append(results, llmsvc.RerankItem{Index: index, RelevanceScore: score})
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].RelevanceScore > results[j].RelevanceScore
+	})
+	return &llmsvc.RerankResult{Model: req.Model, Results: results}, nil
 }

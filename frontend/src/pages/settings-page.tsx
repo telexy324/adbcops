@@ -78,11 +78,14 @@ const defaultLLMForm = {
   provider: "openai-compatible",
   baseUrl: "https://api.openai.example/v1",
   model: "gpt-compatible-model",
+  purpose: "chat" as LLMPurpose,
   apiKey: "",
   temperature: "0.2",
   enabled: true,
   isDefault: true,
 };
+
+type LLMPurpose = "chat" | "embedding" | "rerank";
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
@@ -161,6 +164,7 @@ export function SettingsPage() {
       provider: llmForm.provider,
       baseUrl: llmForm.baseUrl,
       model: llmForm.model,
+      purpose: llmForm.purpose,
       apiKey: llmForm.apiKey,
       temperature: Number(llmForm.temperature),
       enabled: llmForm.enabled,
@@ -295,6 +299,24 @@ export function SettingsPage() {
                     }
                     required
                   />
+                </Field>
+                <Field label="用途">
+                  <select
+                    className={selectClassName}
+                    value={llmForm.purpose}
+                    onChange={(event) =>
+                      setLLMForm((current) => ({
+                        ...current,
+                        purpose: event.target.value as
+                          "chat" | "embedding" | "rerank",
+                        isDefault: true,
+                      }))
+                    }
+                  >
+                    <option value="chat">LLM / Chat</option>
+                    <option value="embedding">Embedding</option>
+                    <option value="rerank">Rerank</option>
+                  </select>
                 </Field>
                 <Field label="API Key">
                   <Input
@@ -557,7 +579,7 @@ function LLMConfigRow({
         <div>
           <p className="font-semibold text-slate-950">{item.name}</p>
           <p className="mt-1 text-sm text-slate-500">
-            {item.provider} · {item.model} · {item.baseUrl}
+            {item.provider} · {item.purpose} · {item.model} · {item.baseUrl}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Badge active={item.enabled}>enabled</Badge>

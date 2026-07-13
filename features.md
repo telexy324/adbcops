@@ -578,6 +578,14 @@ evidence_references
 - Qwen
 - OpenAI-compatible
 
+模型用途：
+
+- chat：查询改写、RAG 回答、Agent 分析；
+- embedding：知识库语义召回与语义排序；
+- rerank：知识库候选片段精排。
+
+同一用途最多一个默认启用模型。Embedding 和 Rerank 是可选增强能力，缺失时知识库必须自动降级。
+
 统一接口：
 
 ```go
@@ -609,6 +617,7 @@ type LLMClient interface {
 - 文档质检；
 - 检索增强信息生成；
 - 查询改写；
+- Embedding 语义召回；
 - 候选重排；
 - RAG 回答；
 - Coordinator 计划；
@@ -621,6 +630,7 @@ type LLMClient interface {
 ## 13. 模型调用约束
 
 - 默认 temperature 0.1～0.3；
+- Embedding 和 Rerank 调用失败不得导致知识库问答整体不可用；
 - JSON 输出必须 Schema 校验；
 - JSON 解析失败允许最多一次修复请求；
 - 超时后不得无限重试；
@@ -3006,15 +3016,18 @@ GET /api/health
 实现：
 
 - llm_config；
+- 模型用途 purpose：chat / embedding / rerank；
 - API Key 加密；
-- 默认模型；
+- 每种用途独立默认模型；
 - OpenAI-compatible client；
+- Embedding API；
+- Rerank API；
 - Test API。
 
 验收：
 
 - 不返回明文 key；
-- 默认模型唯一；
+- 每种用途默认模型唯一；
 - Mock LLM 测试通过。
 
 ### Task 1.5：文档上传
@@ -3095,7 +3108,9 @@ GET /api/health
 
 - query rewrite；
 - recall；
+- 可选 embedding 语义排序；
 - rerank；
+- 可选 rerank 模型精排；
 - answer；
 - citations；
 - qa_record；
@@ -3103,6 +3118,9 @@ GET /api/health
 
 验收：
 
+- 只有 LLM 时可基于文本检索运行；
+- LLM + Embedding 时可使用语义排序并在失败时降级；
+- LLM + Embedding + Rerank 时可使用精排并在失败时降级；
 - 无依据明确说明；
 - citation 指向真实 chunk；
 - 非 published 不出现。
@@ -3298,7 +3316,7 @@ GET /api/health
 
 实现：
 
-- LLM 配置页面；
+- LLM / Embedding / Rerank 配置页面；
 - 日志数据源配置；
 - K8s 数据源配置；
 - Prometheus 数据源配置；
@@ -3308,6 +3326,7 @@ GET /api/health
 验收：
 
 - LLM API Key 不在页面明文回显；
+- Embedding 和 Rerank API Key 不在页面明文回显；
 - 数据源凭据不在页面明文回显；
 - 配置后可在分析页面使用数据源 ID。
 

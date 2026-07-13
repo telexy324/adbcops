@@ -50,3 +50,75 @@ func (c *LimitedClient) Chat(ctx context.Context, req ChatRequest) (*ChatResult,
 	observability.ObserveLLM(model, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, err, time.Since(startedAt))
 	return result, err
 }
+
+func (c *LimitedClient) Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingResult, error) {
+	startedAt := time.Now()
+	if c == nil || c.next == nil {
+		err := fmt.Errorf("llm client is not configured")
+		observability.ObserveLLM(req.Model, 0, 0, 0, err, time.Since(startedAt))
+		return nil, err
+	}
+	next, ok := c.next.(EmbeddingClient)
+	if !ok {
+		err := fmt.Errorf("embedding client is not configured")
+		observability.ObserveLLM(req.Model, 0, 0, 0, err, time.Since(startedAt))
+		return nil, err
+	}
+	release, err := c.limiter.Acquire(ctx)
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			observability.ObserveLLM(req.Model, 0, 0, 0, ErrLLMLimited, time.Since(startedAt))
+			return nil, ErrLLMLimited
+		}
+		observability.ObserveLLM(req.Model, 0, 0, 0, err, time.Since(startedAt))
+		return nil, err
+	}
+	defer release()
+	result, err := next.Embed(ctx, req)
+	usage := Usage{}
+	model := req.Model
+	if result != nil {
+		usage = result.Usage
+		if result.Model != "" {
+			model = result.Model
+		}
+	}
+	observability.ObserveLLM(model, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, err, time.Since(startedAt))
+	return result, err
+}
+
+func (c *LimitedClient) Rerank(ctx context.Context, req RerankRequest) (*RerankResult, error) {
+	startedAt := time.Now()
+	if c == nil || c.next == nil {
+		err := fmt.Errorf("llm client is not configured")
+		observability.ObserveLLM(req.Model, 0, 0, 0, err, time.Since(startedAt))
+		return nil, err
+	}
+	next, ok := c.next.(RerankClient)
+	if !ok {
+		err := fmt.Errorf("rerank client is not configured")
+		observability.ObserveLLM(req.Model, 0, 0, 0, err, time.Since(startedAt))
+		return nil, err
+	}
+	release, err := c.limiter.Acquire(ctx)
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			observability.ObserveLLM(req.Model, 0, 0, 0, ErrLLMLimited, time.Since(startedAt))
+			return nil, ErrLLMLimited
+		}
+		observability.ObserveLLM(req.Model, 0, 0, 0, err, time.Since(startedAt))
+		return nil, err
+	}
+	defer release()
+	result, err := next.Rerank(ctx, req)
+	usage := Usage{}
+	model := req.Model
+	if result != nil {
+		usage = result.Usage
+		if result.Model != "" {
+			model = result.Model
+		}
+	}
+	observability.ObserveLLM(model, usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, err, time.Since(startedAt))
+	return result, err
+}

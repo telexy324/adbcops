@@ -26,6 +26,7 @@ type saveLLMConfigRequest struct {
 	Provider    string   `json:"provider" binding:"required"`
 	BaseURL     string   `json:"baseUrl" binding:"required"`
 	Model       string   `json:"model" binding:"required"`
+	Purpose     string   `json:"purpose"`
 	APIKey      *string  `json:"apiKey"`
 	Temperature *float64 `json:"temperature"`
 	Enabled     *bool    `json:"enabled"`
@@ -37,6 +38,7 @@ type updateLLMConfigRequest struct {
 	Provider    *string  `json:"provider"`
 	BaseURL     *string  `json:"baseUrl"`
 	Model       *string  `json:"model"`
+	Purpose     *string  `json:"purpose"`
 	APIKey      *string  `json:"apiKey"`
 	Temperature *float64 `json:"temperature"`
 	Enabled     *bool    `json:"enabled"`
@@ -53,6 +55,7 @@ type llmConfigResponse struct {
 	Provider         string  `json:"provider"`
 	BaseURL          string  `json:"baseUrl"`
 	Model            string  `json:"model"`
+	Purpose          string  `json:"purpose"`
 	Temperature      float64 `json:"temperature"`
 	Enabled          bool    `json:"enabled"`
 	IsDefault        bool    `json:"isDefault"`
@@ -98,6 +101,7 @@ func (h *LLMHandler) Create(c *gin.Context) {
 		Provider:    request.Provider,
 		BaseURL:     request.BaseURL,
 		Model:       request.Model,
+		Purpose:     request.Purpose,
 		APIKey:      request.APIKey,
 		Temperature: temperature,
 		Enabled:     enabled,
@@ -137,6 +141,7 @@ func (h *LLMHandler) Update(c *gin.Context) {
 		Provider:    request.Provider,
 		BaseURL:     request.BaseURL,
 		Model:       request.Model,
+		Purpose:     request.Purpose,
 		APIKey:      request.APIKey,
 		Temperature: request.Temperature,
 		Enabled:     request.Enabled,
@@ -222,6 +227,7 @@ func toLLMConfigResponse(config *model.LLMConfig) llmConfigResponse {
 		Provider:         config.Provider,
 		BaseURL:          config.BaseURL,
 		Model:            config.Model,
+		Purpose:          config.Purpose,
 		Temperature:      config.Temperature,
 		Enabled:          config.Enabled,
 		IsDefault:        config.IsDefault,

@@ -151,3 +151,19 @@ func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, lim
 	}
 	return chunks, nil
 }
+
+func (r *GORMUserRepository) ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error) {
+	var chunks []model.KBChunk
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	if err := r.db.WithContext(ctx).
+		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
+		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Order("kb_chunk.id DESC").
+		Limit(limit).
+		Find(&chunks).Error; err != nil {
+		return nil, fmt.Errorf("list published kb chunks: %w", err)
+	}
+	return chunks, nil
+}
