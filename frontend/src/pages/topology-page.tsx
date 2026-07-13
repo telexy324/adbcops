@@ -243,10 +243,18 @@ export function TopologyPage() {
             画布承载 200 节点内交互，后续可平滑替换为 React Flow。
           </p>
         </div>
-        <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-center shadow-sm">
-          <Metric label="节点" value={activeGraph.nodes.length} />
-          <Metric label="关系" value={activeGraph.edges.length} />
-          <Metric label="视图" value={viewsQuery.data?.length ?? 0} />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <Link
+            className={cn(buttonVariants({ variant: "outline" }))}
+            to="/topology/configuration"
+          >
+            拓扑配置
+          </Link>
+          <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-center shadow-sm">
+            <Metric label="节点" value={activeGraph.nodes.length} />
+            <Metric label="关系" value={activeGraph.edges.length} />
+            <Metric label="视图" value={viewsQuery.data?.length ?? 0} />
+          </div>
         </div>
       </section>
 

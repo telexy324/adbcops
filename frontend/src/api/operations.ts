@@ -113,6 +113,150 @@ export type TopologySavedViewInput = {
   isDefault?: boolean;
 };
 
+export type TopologyNodeType = {
+  id: number;
+  typeKey: string;
+  displayName: string;
+  category?: string;
+  icon?: string;
+  defaultColor?: string;
+  identityFields?: unknown;
+  searchableFields?: unknown;
+  defaultLabelTemplate?: string;
+  detailFields?: unknown;
+  enabled: boolean;
+  builtIn: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TopologyRelationType = {
+  id: number;
+  typeKey: string;
+  displayName: string;
+  semantics: string;
+  failurePropagation: string;
+  defaultDirection: string;
+  propagatesFailure: boolean;
+  allowedSourceTypes?: unknown;
+  allowedTargetTypes?: unknown;
+  style?: unknown;
+  enabled: boolean;
+  builtIn: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TopologyRelationTypeInput = {
+  typeKey: string;
+  displayName: string;
+  semantics: string;
+  failurePropagation: string;
+  defaultDirection: string;
+  propagatesFailure?: boolean;
+  allowedSourceTypes?: unknown;
+  allowedTargetTypes?: unknown;
+  style?: unknown;
+  enabled?: boolean;
+};
+
+export type TopologySourceConfig = {
+  id: number;
+  name: string;
+  sourceType: string;
+  dataSourceId?: number;
+  enabled: boolean;
+  priority: number;
+  schedule?: string;
+  scope?: unknown;
+  mappingRules?: unknown;
+  staleAfterSeconds: number;
+  deleteAfterSeconds: number;
+  lastSyncAt?: string;
+  nextSyncAt?: string;
+  createdBy?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TopologySourceConfigInput = {
+  name: string;
+  sourceType: string;
+  dataSourceId?: number;
+  enabled?: boolean;
+  priority?: number;
+  schedule?: string;
+  scope?: unknown;
+  mappingRules?: unknown;
+  staleAfterSeconds?: number;
+  deleteAfterSeconds?: number;
+};
+
+export type MappingPreviewResult = {
+  nodes: Array<{
+    nodeKey: string;
+    nodeType: string;
+    name: string;
+    attributes?: Record<string, unknown>;
+    aliases?: string[];
+  }>;
+  edges: Array<{
+    fromNodeKey: string;
+    toNodeKey: string;
+    relationType: string;
+    confidence?: number;
+  }>;
+  unresolved: string[];
+  warnings: string[];
+  truncated: boolean;
+};
+
+export type TopologySyncRun = {
+  id: number;
+  sourceConfigId: number;
+  triggerType: string;
+  status: string;
+  discoveredNodes: number;
+  discoveredEdges: number;
+  createdNodes: number;
+  updatedNodes: number;
+  staleNodes: number;
+  createdEdges: number;
+  updatedEdges: number;
+  staleEdges: number;
+  conflictCount: number;
+  warningCount: number;
+  errorMessage?: string;
+  detail?: unknown;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+};
+
+export type TopologyConflict = {
+  id: number;
+  conflictType: string;
+  status: string;
+  nodeId?: number;
+  edgeId?: number;
+  sourceConfigId?: number;
+  description: string;
+  candidates?: unknown;
+  resolution?: unknown;
+  resolvedBy?: number;
+  resolvedAt?: string;
+  createdAt: string;
+};
+
+export type ResolveTopologyConflictInput = {
+  conflictId: number;
+  action: "prefer" | "merge" | "manual" | "ignore";
+  note?: string;
+  prefer?: string;
+  manualValue?: unknown;
+  mergePatch?: unknown;
+};
+
 export type Incident = {
   id: number;
   incidentKey: string;
@@ -288,6 +432,161 @@ export async function createTopologySavedView(input: TopologySavedViewInput) {
       },
       layoutData: input.layoutData,
       isDefault: input.isDefault ?? false,
+    },
+  );
+  return response.data.data;
+}
+
+export async function listTopologyNodeTypes() {
+  const response = await apiClient.get<ApiEnvelope<TopologyNodeType[]>>(
+    "/api/topology/node-types",
+  );
+  return response.data.data;
+}
+
+export async function listTopologyRelationTypes() {
+  const response = await apiClient.get<ApiEnvelope<TopologyRelationType[]>>(
+    "/api/topology/relation-types",
+  );
+  return response.data.data;
+}
+
+export async function updateTopologyRelationType(input: {
+  id: number;
+  data: TopologyRelationTypeInput;
+}) {
+  const response = await apiClient.put<ApiEnvelope<TopologyRelationType>>(
+    `/api/topology/relation-types/${input.id}`,
+    input.data,
+  );
+  return response.data.data;
+}
+
+export async function listTopologySources() {
+  const response = await apiClient.get<ApiEnvelope<TopologySourceConfig[]>>(
+    "/api/topology/sources",
+  );
+  return response.data.data;
+}
+
+export async function createTopologySource(input: TopologySourceConfigInput) {
+  const response = await apiClient.post<ApiEnvelope<TopologySourceConfig>>(
+    "/api/topology/sources",
+    {
+      name: input.name,
+      sourceType: input.sourceType,
+      dataSourceId: input.dataSourceId,
+      enabled: input.enabled ?? true,
+      priority: input.priority ?? 100,
+      schedule: input.schedule,
+      scope: input.scope ?? {},
+      mappingRules: input.mappingRules ?? {},
+      staleAfterSeconds: input.staleAfterSeconds ?? 86_400,
+      deleteAfterSeconds: input.deleteAfterSeconds ?? 604_800,
+    },
+  );
+  return response.data.data;
+}
+
+export async function updateTopologySource(input: {
+  id: number;
+  data: TopologySourceConfigInput;
+}) {
+  const response = await apiClient.put<ApiEnvelope<TopologySourceConfig>>(
+    `/api/topology/sources/${input.id}`,
+    {
+      name: input.data.name,
+      sourceType: input.data.sourceType,
+      dataSourceId: input.data.dataSourceId,
+      enabled: input.data.enabled ?? true,
+      priority: input.data.priority ?? 100,
+      schedule: input.data.schedule,
+      scope: input.data.scope ?? {},
+      mappingRules: input.data.mappingRules ?? {},
+      staleAfterSeconds: input.data.staleAfterSeconds ?? 86_400,
+      deleteAfterSeconds: input.data.deleteAfterSeconds ?? 604_800,
+    },
+  );
+  return response.data.data;
+}
+
+export async function previewTopologySourceMapping(input: {
+  sourceId: number;
+  mappingRules: unknown;
+  sampleData: unknown;
+  limit?: number;
+}) {
+  const response = await apiClient.post<ApiEnvelope<MappingPreviewResult>>(
+    `/api/topology/sources/${input.sourceId}/preview`,
+    {
+      mappingRules: input.mappingRules,
+      sampleData: input.sampleData,
+      limit: input.limit ?? 20,
+    },
+  );
+  return response.data.data;
+}
+
+export async function runTopologySourceSync(input: {
+  sourceId: number;
+  triggerType?: "manual" | "scheduled";
+  dryRun?: boolean;
+}) {
+  const response = await apiClient.post<ApiEnvelope<TopologySyncRun>>(
+    `/api/topology/sources/${input.sourceId}/run`,
+    {
+      triggerType: input.triggerType ?? "manual",
+      dryRun: input.dryRun ?? false,
+    },
+  );
+  return response.data.data;
+}
+
+export async function listTopologySyncRuns(input?: {
+  sourceConfigId?: number;
+  limit?: number;
+}) {
+  const response = await apiClient.get<ApiEnvelope<TopologySyncRun[]>>(
+    "/api/topology/sync-runs",
+    {
+      params: {
+        sourceConfigId: input?.sourceConfigId,
+        limit: input?.limit ?? 20,
+      },
+    },
+  );
+  return response.data.data;
+}
+
+export async function listTopologyConflicts(input?: {
+  status?: string;
+  conflictType?: string;
+  limit?: number;
+}) {
+  const response = await apiClient.get<ApiEnvelope<TopologyConflict[]>>(
+    "/api/topology/conflicts",
+    {
+      params: {
+        status: input?.status,
+        conflictType: input?.conflictType,
+        limit: input?.limit ?? 30,
+      },
+    },
+  );
+  return response.data.data;
+}
+
+export async function resolveTopologyConflict(
+  input: ResolveTopologyConflictInput,
+) {
+  const response = await apiClient.post<ApiEnvelope<TopologyConflict>>(
+    `/api/topology/conflicts/${input.conflictId}/resolve`,
+    {
+      action: input.action,
+      note: input.note,
+      prefer: input.prefer,
+      manualValue: input.manualValue,
+      mergePatch: input.mergePatch,
     },
   );
   return response.data.data;

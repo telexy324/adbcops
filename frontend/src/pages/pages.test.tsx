@@ -10,6 +10,7 @@ import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
 import { OperationsPage } from "@/pages/operations-page";
 import { SettingsPage } from "@/pages/settings-page";
+import { TopologyConfigurationPage } from "@/pages/topology-configuration-page";
 import { TopologyPage } from "@/pages/topology-page";
 import { WorkflowPage } from "@/pages/workflow-page";
 
@@ -264,6 +265,80 @@ vi.mock("@/api/operations", () => ({
       },
     ],
   }),
+  listTopologyConflicts: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      conflictType: "node_attribute",
+      status: "open",
+      description: "payment-api owner differs across sources",
+      candidates: [{ owner: "team-a", token: "secret-token" }],
+      createdAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  listTopologyNodeTypes: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      typeKey: "service",
+      displayName: "Service",
+      category: "runtime",
+      enabled: true,
+      builtIn: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  listTopologyRelationTypes: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      typeKey: "depends_on",
+      displayName: "Depends On",
+      semantics: "runtime_dep",
+      failurePropagation: "src_to_dst",
+      defaultDirection: "outbound",
+      propagatesFailure: true,
+      enabled: true,
+      builtIn: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  listTopologySources: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      name: "prod-cmdb",
+      sourceType: "cmdb",
+      enabled: true,
+      priority: 100,
+      scope: {},
+      mappingRules: {
+        nodeMappings: [],
+        edgeMappings: [],
+      },
+      staleAfterSeconds: 86400,
+      deleteAfterSeconds: 604800,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  listTopologySyncRuns: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      sourceConfigId: 1,
+      triggerType: "manual",
+      status: "success",
+      discoveredNodes: 2,
+      discoveredEdges: 1,
+      createdNodes: 1,
+      updatedNodes: 1,
+      staleNodes: 0,
+      createdEdges: 1,
+      updatedEdges: 0,
+      staleEdges: 0,
+      conflictCount: 1,
+      warningCount: 0,
+      createdAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
   listTopologySavedViews: vi.fn().mockResolvedValue([
     {
       id: 1,
@@ -288,7 +363,64 @@ vi.mock("@/api/operations", () => ({
       updatedAt: "2026-07-12T10:00:00Z",
     },
   ]),
+  previewTopologySourceMapping: vi.fn().mockResolvedValue({
+    nodes: [
+      {
+        nodeKey: "service:payment-api",
+        nodeType: "service",
+        name: "payment-api",
+        attributes: { namespace: "prod", token: "secret-token" },
+      },
+    ],
+    edges: [
+      {
+        fromNodeKey: "service:payment-api",
+        toNodeKey: "service:orders-api",
+        relationType: "depends_on",
+        confidence: 0.85,
+      },
+    ],
+    unresolved: [],
+    warnings: [],
+    truncated: false,
+  }),
+  resolveTopologyConflict: vi.fn().mockResolvedValue({
+    id: 1,
+    conflictType: "node_attribute",
+    status: "resolved",
+    description: "resolved",
+    createdAt: "2026-07-12T10:00:00Z",
+  }),
+  runTopologySourceSync: vi.fn().mockResolvedValue({
+    id: 2,
+    sourceConfigId: 1,
+    triggerType: "manual",
+    status: "running",
+    discoveredNodes: 0,
+    discoveredEdges: 0,
+    createdNodes: 0,
+    updatedNodes: 0,
+    staleNodes: 0,
+    createdEdges: 0,
+    updatedEdges: 0,
+    staleEdges: 0,
+    conflictCount: 0,
+    warningCount: 0,
+    createdAt: "2026-07-12T10:00:00Z",
+  }),
   toAPIErrorMessage: vi.fn(() => "请求失败"),
+  updateTopologyRelationType: vi.fn(),
+  updateTopologySource: vi.fn().mockResolvedValue({
+    id: 1,
+    name: "prod-cmdb",
+    sourceType: "cmdb",
+    enabled: true,
+    priority: 100,
+    staleAfterSeconds: 86400,
+    deleteAfterSeconds: 604800,
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
 }));
 
 vi.mock("@/api/config", () => ({
@@ -528,6 +660,28 @@ describe("TopologyPage", () => {
     expect(
       screen.getByText("点击拓扑图中的节点查看详情。"),
     ).toBeInTheDocument();
+  });
+});
+
+describe("TopologyConfigurationPage", () => {
+  it("renders type catalog, source wizard, sync runs and conflict center", async () => {
+    renderWithQueryClient(<TopologyConfigurationPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "拓扑配置中心" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Type Catalog")).toBeInTheDocument();
+    expect(
+      screen.getByText("Source Wizard / Mapping Preview"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Preview 后才能保存 Mapping；Mapping 修改后需要重新 Preview。",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("同步进度")).toBeInTheDocument();
+    expect(screen.getByText("Conflict Center")).toBeInTheDocument();
+    expect(await screen.findByText("prod-cmdb · cmdb")).toBeInTheDocument();
   });
 });
 
