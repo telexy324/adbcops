@@ -105,6 +105,34 @@ func BuiltinTools() []Tool {
 			ReadOnly:     true,
 			Capabilities: []string{"get", "recent_release", "config_change", "git_change", "time_range"},
 		}),
+		NewReadOnlyTool(ToolDefinition{
+			Name:         "nacos",
+			Type:         "service_config",
+			Description:  "Read Nacos services, instances, config metadata, config history and client connections inside allowed namespace/group scopes.",
+			ReadOnly:     true,
+			Capabilities: []string{"test", "list_services", "list_instances", "config_metadata", "config_history", "listeners", "client_connections", "namespace_group_allowlist"},
+		}),
+		NewReadOnlyTool(ToolDefinition{
+			Name:         "redis",
+			Type:         "cache",
+			Description:  "Read Redis standalone, Sentinel and Cluster health using strict read-only command allowlist without reading business values.",
+			ReadOnly:     true,
+			Capabilities: []string{"test", "info", "memory_stats", "client_summary", "slowlog", "latency", "replication", "sentinel", "cluster", "scan_summary"},
+		}),
+		NewReadOnlyTool(ToolDefinition{
+			Name:         "tidb",
+			Type:         "database",
+			Description:  "Read TiDB cluster status, slow SQL, processlist, lock waits, statistics health, hot regions and controlled EXPLAIN with SQL AST validation.",
+			ReadOnly:     true,
+			Capabilities: []string{"test", "cluster_status", "slow_queries", "processlist", "lock_waits", "statistics_health", "hot_regions", "controlled_explain", "sql_ast_readonly"},
+		}),
+		NewReadOnlyTool(ToolDefinition{
+			Name:         "nginx",
+			Type:         "gateway",
+			Description:  "Read Nginx access logs, error logs, metrics, upstream status and safe config metadata for 499/502/503/504 diagnosis.",
+			ReadOnly:     true,
+			Capabilities: []string{"test", "access_logs", "error_logs", "metrics", "upstream_status", "config_metadata", "status_code_diagnosis"},
+		}),
 	}
 }
 

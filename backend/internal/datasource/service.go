@@ -382,7 +382,7 @@ func validateConfigByType(sourceType string, raw []byte) error {
 		return ErrInvalidInput
 	}
 	switch sourceType {
-	case model.DataSourceTypeElasticsearch, model.DataSourceTypeOpenSearch, model.DataSourceTypePrometheus, model.DataSourceTypeHTTP:
+	case model.DataSourceTypeElasticsearch, model.DataSourceTypeOpenSearch, model.DataSourceTypePrometheus, model.DataSourceTypeHTTP, model.DataSourceTypeNacos, model.DataSourceTypeNginx:
 		if endpoint, ok := config["baseUrl"].(string); ok && strings.TrimSpace(endpoint) != "" {
 			return validateEndpoint(endpoint)
 		}
@@ -392,6 +392,18 @@ func validateConfigByType(sourceType string, raw []byte) error {
 		}
 	case model.DataSourceTypeSSH:
 		if host, ok := config["host"].(string); ok && strings.TrimSpace(host) == "" {
+			return ErrInvalidInput
+		}
+	case model.DataSourceTypeRedis:
+		mode, _ := config["mode"].(string)
+		if mode != "" && mode != "standalone" && mode != "sentinel" && mode != "cluster" {
+			return ErrInvalidInput
+		}
+		if endpoints, ok := config["endpoints"].([]any); ok && len(endpoints) == 0 {
+			return ErrInvalidInput
+		}
+	case model.DataSourceTypeTiDB:
+		if dsn, ok := config["dsn"].(string); ok && strings.TrimSpace(dsn) == "" {
 			return ErrInvalidInput
 		}
 	}
@@ -457,7 +469,16 @@ func containsSensitiveKey(value any) bool {
 func normalizeSourceType(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch normalized {
-	case model.DataSourceTypeElasticsearch, model.DataSourceTypeOpenSearch, model.DataSourceTypePrometheus, model.DataSourceTypeKubernetes, model.DataSourceTypeSSH, model.DataSourceTypeHTTP:
+	case model.DataSourceTypeElasticsearch,
+		model.DataSourceTypeOpenSearch,
+		model.DataSourceTypePrometheus,
+		model.DataSourceTypeKubernetes,
+		model.DataSourceTypeSSH,
+		model.DataSourceTypeHTTP,
+		model.DataSourceTypeNacos,
+		model.DataSourceTypeRedis,
+		model.DataSourceTypeTiDB,
+		model.DataSourceTypeNginx:
 		return normalized, nil
 	default:
 		return "", ErrInvalidInput

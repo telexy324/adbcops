@@ -24,6 +24,10 @@ func BuiltinDefinitions() []Definition {
 		podDiagnosisWorkflow(),
 		ingressDiagnosisWorkflow(),
 		alertDiagnosisWorkflow(),
+		nacosDiagnosisWorkflow(),
+		redisDiagnosisWorkflow(),
+		tidbDiagnosisWorkflow(),
+		nginxDiagnosisWorkflow(),
 	}
 }
 
@@ -162,6 +166,102 @@ func alertDiagnosisWorkflow() Definition {
 	)
 }
 
+func nacosDiagnosisWorkflow() Definition {
+	return linearWorkflow(
+		"nacos_diagnosis_workflow",
+		"Nacos Diagnosis",
+		"Diagnose Nacos service registration and configuration delivery issues.",
+		[]Node{
+			componentSkillNode("query_services", "Query services", "query_nacos_services"),
+			componentSkillNode("query_instances", "Query instances", "get_nacos_service_instances"),
+			componentSkillNode("query_config_metadata", "Query config metadata", "query_nacos_config_metadata"),
+			componentSkillNode("query_recent_config_changes", "Query config changes", "query_nacos_config_changes"),
+			componentSkillNode("query_client_connections", "Query client connections", "query_nacos_client_connections"),
+			controlNode("query_application_logs", "Query application logs"),
+			controlNode("query_recent_releases", "Query recent releases"),
+			componentSkillNode("diagnose_registration", "Diagnose registration", "diagnose_nacos_registration"),
+			componentSkillNode("diagnose_config_delivery", "Diagnose config delivery", "diagnose_nacos_config_delivery"),
+			controlNode("build_timeline", "Build timeline"),
+			controlNode("correlate", "Correlate"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func redisDiagnosisWorkflow() Definition {
+	return linearWorkflow(
+		"redis_diagnosis_workflow",
+		"Redis Diagnosis",
+		"Diagnose Redis memory, connection pool, replication and cluster problems.",
+		[]Node{
+			componentSkillNode("query_redis_info", "Query Redis info", "query_redis_info"),
+			componentSkillNode("query_memory", "Query memory", "query_redis_memory"),
+			componentSkillNode("query_clients", "Query clients", "query_redis_clients"),
+			componentSkillNode("query_slowlog", "Query slowlog", "query_redis_slowlog"),
+			componentSkillNode("query_replication_or_cluster", "Query replication or cluster", "query_redis_cluster"),
+			controlNode("query_prometheus_metrics", "Query Prometheus metrics"),
+			controlNode("query_application_logs", "Query application logs"),
+			{ID: "search_knowledge", Type: NodeTypeSkill, Name: "Search Redis knowledge", SkillName: "search_knowledge", Config: rawConfig(map[string]any{"input": map[string]any{"query": "redis diagnosis", "limit": 5}})},
+			componentSkillNode("diagnose_health", "Diagnose health", "diagnose_redis_health"),
+			componentSkillNode("diagnose_memory", "Diagnose memory", "diagnose_redis_memory"),
+			componentSkillNode("diagnose_connection_pool", "Diagnose connection pool", "diagnose_redis_connection_pool"),
+			componentSkillNode("diagnose_replication_or_cluster", "Diagnose replication or cluster", "diagnose_redis_cluster"),
+			controlNode("correlate", "Correlate"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func tidbDiagnosisWorkflow() Definition {
+	return linearWorkflow(
+		"tidb_diagnosis_workflow",
+		"TiDB Diagnosis",
+		"Diagnose TiDB performance, connection pressure, lock contention and plan regression.",
+		[]Node{
+			componentSkillNode("query_cluster_status", "Query cluster status", "query_tidb_cluster_status"),
+			componentSkillNode("query_tidb_metrics", "Query TiDB metrics", "query_tidb_metrics"),
+			componentSkillNode("query_slow_queries", "Query slow queries", "query_tidb_slow_queries"),
+			componentSkillNode("query_processlist", "Query processlist", "query_tidb_processlist"),
+			componentSkillNode("query_lock_waits", "Query lock waits", "query_tidb_lock_waits"),
+			componentSkillNode("query_hot_regions", "Query hot regions", "query_tidb_hot_regions"),
+			componentSkillNode("query_statistics_health", "Query statistics health", "query_tidb_statistics_health"),
+			componentSkillNode("optional_explain", "Optional explain", "explain_tidb_sql"),
+			controlNode("query_recent_changes", "Query recent changes"),
+			{ID: "search_knowledge", Type: NodeTypeSkill, Name: "Search TiDB knowledge", SkillName: "search_knowledge", Config: rawConfig(map[string]any{"input": map[string]any{"query": "tidb diagnosis", "limit": 5}})},
+			componentSkillNode("diagnose_performance", "Diagnose performance", "diagnose_tidb_performance"),
+			componentSkillNode("diagnose_connection_pressure", "Diagnose connection pressure", "diagnose_tidb_connection_pressure"),
+			componentSkillNode("diagnose_lock_contention", "Diagnose lock contention", "diagnose_tidb_lock_contention"),
+			componentSkillNode("diagnose_plan_regression", "Diagnose plan regression", "diagnose_tidb_plan_regression"),
+			controlNode("correlate", "Correlate"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
+func nginxDiagnosisWorkflow() Definition {
+	return linearWorkflow(
+		"nginx_diagnosis_workflow",
+		"Nginx Diagnosis",
+		"Diagnose Nginx 499, 502, 503 and 504 problems with logs, metrics, upstreams and topology.",
+		[]Node{
+			componentSkillNode("query_access_logs", "Query access logs", "query_nginx_access_logs"),
+			componentSkillNode("query_error_logs", "Query error logs", "query_nginx_error_logs"),
+			componentSkillNode("query_nginx_metrics", "Query Nginx metrics", "query_nginx_metrics"),
+			componentSkillNode("get_upstream_status", "Get upstream status", "query_nginx_upstreams"),
+			controlNode("get_topology", "Get topology"),
+			controlNode("query_backend_k8s_context", "Query backend K8s context"),
+			controlNode("query_recent_changes", "Query recent changes"),
+			componentSkillNode("analyze_status_codes", "Analyze status codes", "analyze_nginx_status_codes"),
+			componentSkillNode("diagnose_499", "Diagnose 499", "diagnose_nginx_499"),
+			componentSkillNode("diagnose_502", "Diagnose 502", "diagnose_nginx_502"),
+			componentSkillNode("diagnose_503", "Diagnose 503", "diagnose_nginx_503"),
+			componentSkillNode("diagnose_504", "Diagnose 504", "diagnose_nginx_504"),
+			controlNode("correlate", "Correlate"),
+			controlNode("report", "Report"),
+		},
+	)
+}
+
 func linearWorkflow(name, title, description string, body []Node) Definition {
 	nodes := []Node{{ID: "start", Type: NodeTypeStart, Name: "Start"}}
 	nodes = append(nodes, body...)
@@ -175,6 +275,10 @@ func linearWorkflow(name, title, description string, body []Node) Definition {
 
 func controlNode(id, name string) Node {
 	return Node{ID: id, Type: NodeTypeCondition, Name: name}
+}
+
+func componentSkillNode(id, name, skillName string) Node {
+	return Node{ID: id, Type: NodeTypeSkill, Name: name, SkillName: skillName, Config: rawConfig(map[string]any{"input": map[string]any{"dataSourceId": 1, "limit": 20}})}
 }
 
 func k8sPodConfig() json.RawMessage {

@@ -49,6 +49,19 @@ func TestBuiltinToolsAreReadOnly(t *testing.T) {
 	}
 }
 
+func TestBuiltinRegistryIncludesComponentTools(t *testing.T) {
+	registry := NewBuiltinRegistry()
+	for _, name := range []string{"nacos", "redis", "tidb", "nginx"} {
+		definition, err := registry.Get(name)
+		if err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		if !definition.ReadOnly || len(definition.Capabilities) == 0 {
+			t.Fatalf("component tool %s definition = %+v", name, definition)
+		}
+	}
+}
+
 func TestReadOnlyToolDoesNotExposeGenericInvoke(t *testing.T) {
 	registry := NewBuiltinRegistry()
 

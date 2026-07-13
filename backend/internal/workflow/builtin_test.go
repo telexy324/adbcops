@@ -15,8 +15,8 @@ import (
 
 func TestBuiltinDefinitionsValidate(t *testing.T) {
 	definitions := BuiltinDefinitions()
-	if len(definitions) != 5 {
-		t.Fatalf("builtin workflow count = %d, want 5", len(definitions))
+	if len(definitions) != 9 {
+		t.Fatalf("builtin workflow count = %d, want 9", len(definitions))
 	}
 	agents := builtinTestAgents{}
 	skills := builtinTestSkills{}
@@ -101,6 +101,11 @@ func (builtinTestSkills) Get(name string) (skillframework.SkillDefinition, error
 		"echo_safe":
 		return skillframework.SkillDefinition{Name: name, Enabled: true}, nil
 	default:
+		for _, skill := range skillframework.ComponentDiagnosisSkills() {
+			if skill.Definition().Name == name {
+				return skillframework.SkillDefinition{Name: name, Enabled: true}, nil
+			}
+		}
 		return skillframework.SkillDefinition{}, errors.New("skill not found")
 	}
 }

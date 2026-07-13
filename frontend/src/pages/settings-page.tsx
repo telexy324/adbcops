@@ -71,6 +71,61 @@ const dataSourceKinds: Array<{
     config: { baseUrl: "https://prometheus.example.com" },
     credential: { bearerToken: "replace-me" },
   },
+  {
+    type: "nacos",
+    title: "Nacos 数据源",
+    description: "只读 Nacos OpenAPI，用于服务实例、配置元数据、配置变更和客户端连接诊断。",
+    icon: Network,
+    config: {
+      baseUrl: "https://nacos.example.com",
+      namespace: "prod",
+      defaultGroup: "DEFAULT_GROUP",
+      allowedNamespaces: ["prod"],
+      allowedGroups: ["DEFAULT_GROUP"],
+      allowConfigContent: false,
+    },
+    credential: { username: "readonly", password: "replace-me" },
+  },
+  {
+    type: "redis",
+    title: "Redis 数据源",
+    description: "只读 Redis standalone / Sentinel / Cluster，用于内存、连接池、主从和集群诊断。",
+    icon: DatabaseZap,
+    config: {
+      mode: "cluster",
+      endpoints: ["redis-1.example.com:6379"],
+      allowValueRead: false,
+      scanMaxIterations: 20,
+      scanMaxKeys: 1000,
+    },
+    credential: { username: "readonly", password: "replace-me" },
+  },
+  {
+    type: "tidb",
+    title: "TiDB 数据源",
+    description: "只读 TiDB SQL / Status API，用于慢 SQL、Processlist、锁等待、热点 Region 和 EXPLAIN。",
+    icon: DatabaseZap,
+    config: {
+      dsn: "readonly@tcp(tidb.example.com:4000)/information_schema",
+      statusBaseUrl: "https://tidb-status.example.com",
+      explainAnalyzeEnabled: false,
+      maxRows: 500,
+    },
+    credential: { username: "readonly", password: "replace-me" },
+  },
+  {
+    type: "nginx",
+    title: "Nginx 数据源",
+    description: "只读 Nginx 日志、指标、Upstream 状态和配置元数据，用于 499/502/503/504 诊断。",
+    icon: ServerCog,
+    config: {
+      baseUrl: "https://nginx-metadata.example.com",
+      maskClientIp: true,
+      configContentEnabled: false,
+      logIndex: "nginx-*",
+    },
+    credential: { bearerToken: "replace-me" },
+  },
 ];
 
 const defaultLLMForm = {

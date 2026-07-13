@@ -8,9 +8,11 @@ import (
 )
 
 func BuiltinSkills() []Skill {
-	return []Skill{
+	skills := []Skill{
 		EchoSkill{},
 	}
+	skills = append(skills, ComponentDiagnosisSkills()...)
+	return skills
 }
 
 type EchoSkill struct{}

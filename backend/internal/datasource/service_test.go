@@ -77,6 +77,37 @@ func TestCreateRejectsUnsafeEndpointsForSSRF(t *testing.T) {
 	}
 }
 
+func TestCreateAcceptsComponentDataSourceTypesAsReadOnly(t *testing.T) {
+	service := NewService(newFakeRepository(), &fakeSecrets{}, "v1")
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	cases := []struct {
+		sourceType string
+		config     json.RawMessage
+	}{
+		{sourceType: model.DataSourceTypeNacos, config: json.RawMessage(`{"baseUrl":"https://nacos.example.com","allowedNamespaces":["prod"],"allowedGroups":["DEFAULT_GROUP"]}`)},
+		{sourceType: model.DataSourceTypeRedis, config: json.RawMessage(`{"mode":"cluster","endpoints":["redis.example.com:6379"],"allowValueRead":false}`)},
+		{sourceType: model.DataSourceTypeTiDB, config: json.RawMessage(`{"dsn":"readonly@tcp(tidb.example.com:4000)/information_schema","explainAnalyzeEnabled":false}`)},
+		{sourceType: model.DataSourceTypeNginx, config: json.RawMessage(`{"baseUrl":"https://nginx.example.com","maskClientIp":true,"configContentEnabled":false}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.sourceType, func(t *testing.T) {
+			created, err := service.Create(context.Background(), admin, SaveInput{
+				Name:       tc.sourceType,
+				SourceType: tc.sourceType,
+				Config:     tc.config,
+				Enabled:    true,
+				ReadOnly:   false,
+			})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			if !created.ReadOnly {
+				t.Fatalf("created data source is not read-only: %+v", created)
+			}
+		})
+	}
+}
+
 func TestUserListsOnlyEnabledSanitizedDataSources(t *testing.T) {
 	store := newFakeRepository()
 	service := NewService(store, &fakeSecrets{}, "v1")

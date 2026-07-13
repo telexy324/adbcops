@@ -22,7 +22,7 @@ CREATE TABLE data_source (
     created_by BIGINT REFERENCES app_user(id),
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
-    CONSTRAINT chk_data_source_type CHECK (source_type IN ('elasticsearch', 'opensearch', 'prometheus', 'kubernetes', 'ssh', 'http'))
+    CONSTRAINT chk_data_source_type CHECK (source_type IN ('elasticsearch', 'opensearch', 'prometheus', 'kubernetes', 'ssh', 'http', 'nacos', 'redis', 'tidb', 'nginx'))
 );
 
 CREATE INDEX idx_data_source_enabled_type

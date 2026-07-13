@@ -9,6 +9,10 @@ const (
 	DataSourceTypeKubernetes    = "kubernetes"
 	DataSourceTypeSSH           = "ssh"
 	DataSourceTypeHTTP          = "http"
+	DataSourceTypeNacos         = "nacos"
+	DataSourceTypeRedis         = "redis"
+	DataSourceTypeTiDB          = "tidb"
+	DataSourceTypeNginx         = "nginx"
 )
 
 type CredentialSecret struct {

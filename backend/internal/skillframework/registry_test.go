@@ -89,6 +89,23 @@ func TestDisabledRequiredToolBlocksExecution(t *testing.T) {
 	}
 }
 
+func TestComponentSkillsAreRegisteredAndReadOnly(t *testing.T) {
+	tools := toolregistry.NewBuiltinRegistry()
+	registry, err := NewRegistry(tools, nil, ComponentDiagnosisSkills()...)
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	for _, name := range []string{"diagnose_nacos_registration", "diagnose_redis_memory", "diagnose_tidb_plan_regression", "diagnose_nginx_504"} {
+		definition, err := registry.Get(name)
+		if err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		if !definition.ReadOnly || definition.RiskLevel != model.SkillRiskSensitiveRead {
+			t.Fatalf("definition %s = %+v", name, definition)
+		}
+	}
+}
+
 func TestExecuteAuditsSkillRun(t *testing.T) {
 	audit := newMemoryAudit()
 	registry, err := NewRegistry(toolregistry.NewBuiltinRegistry(), audit, testSkill{name: "safe_skill", risk: model.SkillRiskSafeRead})

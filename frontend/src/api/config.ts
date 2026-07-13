@@ -34,7 +34,14 @@ export type SaveLLMConfigInput = {
   isDefault: boolean;
 };
 
-export type DataSourceType = "elasticsearch" | "kubernetes" | "prometheus";
+export type DataSourceType =
+  | "elasticsearch"
+  | "kubernetes"
+  | "prometheus"
+  | "nacos"
+  | "redis"
+  | "tidb"
+  | "nginx";
 
 export type DataSource = {
   id: number;
