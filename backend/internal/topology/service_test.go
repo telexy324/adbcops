@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
+	"time"
 
 	k8ssvc "aiops-platform/backend/internal/k8s"
 	"aiops-platform/backend/internal/model"
@@ -113,6 +115,117 @@ func TestUpdateRelationTypeAuditsPropagationChange(t *testing.T) {
 	}
 	if len(repo.audits) != 1 || repo.audits[0].ActorID == nil || *repo.audits[0].ActorID != actorID {
 		t.Fatalf("expected propagation audit, got %+v", repo.audits)
+	}
+}
+
+func TestEdgeResolverFusesMultiSourceConfidenceWithoutDuplicateEdge(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	if _, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: "service:payment-api", Kind: "service", Name: "payment-api"}); err != nil {
+		t.Fatalf("upsert service node: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: "database:payment-db", Kind: "database", Name: "payment-db"}); err != nil {
+		t.Fatalf("upsert database node: %v", err)
+	}
+
+	edge, err := service.UpsertEdge(context.Background(), EdgeInput{
+		FromNodeKey:     "service:payment-api",
+		ToNodeKey:       "database:payment-db",
+		EdgeType:        model.TopologyEdgeTypeDependsOn,
+		SourceType:      model.TopologySourceTypeCMDB,
+		SourceRecordKey: ptr("cmdb-rel-1"),
+		Confidence:      ptr(0.5),
+	})
+	if err != nil {
+		t.Fatalf("upsert cmdb edge: %v", err)
+	}
+	edge, err = service.UpsertEdge(context.Background(), EdgeInput{
+		FromNodeKey:     "service:payment-api",
+		ToNodeKey:       "database:payment-db",
+		EdgeType:        model.TopologyEdgeTypeDependsOn,
+		SourceType:      model.TopologySourceTypeTraceServiceGraph,
+		SourceRecordKey: ptr("trace-rel-1"),
+		Confidence:      ptr(0.8),
+	})
+	if err != nil {
+		t.Fatalf("upsert trace edge: %v", err)
+	}
+
+	if len(repo.edges) != 1 {
+		t.Fatalf("expected one deduplicated edge, got %d", len(repo.edges))
+	}
+	observations, err := repo.ListTopologyEdgeObservations(context.Background(), edge.ID)
+	if err != nil {
+		t.Fatalf("list observations: %v", err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("expected two source observations, got %+v", observations)
+	}
+	if edge.ResolvedConfidence == nil || math.Abs(*edge.ResolvedConfidence-0.9) > 0.0001 {
+		t.Fatalf("expected fused confidence 0.9, got %+v", edge.ResolvedConfidence)
+	}
+}
+
+func TestObservationRelationDoesNotPropagateFailure(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+
+	relation, err := service.CreateRelationType(context.Background(), RelationTypeInput{
+		TypeKey:            "observed_with",
+		DisplayName:        "Observed With",
+		Semantics:          model.TopologyRelationSemanticsObservation,
+		FailurePropagation: model.TopologyFailurePropagationNone,
+		DefaultDirection:   "downstream",
+	})
+	if err != nil {
+		t.Fatalf("create observation relation: %v", err)
+	}
+	if relation.PropagatesFailure || relation.FailurePropagation != model.TopologyFailurePropagationNone {
+		t.Fatalf("observation relation should not propagate failure: %+v", relation)
+	}
+}
+
+func TestEdgeResolverMarksExpiredTraceStaleAndKeepsManualActive(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	if _, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: "service:api", Kind: "service", Name: "api"}); err != nil {
+		t.Fatalf("upsert service node: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: "database:db", Kind: "database", Name: "db"}); err != nil {
+		t.Fatalf("upsert database node: %v", err)
+	}
+
+	expiredAt := time.Now().Add(-time.Hour)
+	edge, err := service.UpsertEdge(context.Background(), EdgeInput{
+		FromNodeKey:     "service:api",
+		ToNodeKey:       "database:db",
+		EdgeType:        model.TopologyEdgeTypeDependsOn,
+		SourceType:      model.TopologySourceTypeTraceServiceGraph,
+		SourceRecordKey: ptr("trace-expired"),
+		Confidence:      ptr(0.6),
+		ExpiresAt:       &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("upsert expired trace edge: %v", err)
+	}
+	if edge.Status != edgeStatusStale {
+		t.Fatalf("expected expired trace edge to be stale, got %+v", edge)
+	}
+
+	edge, err = service.UpsertEdge(context.Background(), EdgeInput{
+		FromNodeKey:     "service:api",
+		ToNodeKey:       "database:db",
+		EdgeType:        model.TopologyEdgeTypeDependsOn,
+		SourceType:      model.TopologySourceManual,
+		SourceRecordKey: ptr("manual-confirmed"),
+		Confidence:      ptr(1.0),
+		ExpiresAt:       &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("upsert manual edge: %v", err)
+	}
+	if edge.Status != edgeStatusActive {
+		t.Fatalf("expected manual edge to stay active, got %+v", edge)
 	}
 }
 
@@ -374,10 +487,14 @@ func TestNodeMergeProtectsLockedFieldsAndRecordsConflict(t *testing.T) {
 func TestSyncK8sGeneratesDeploymentPodServiceIngressRelations(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	reader := fakeK8sReader{resources: map[string][]k8ssvc.ResourceItem{
-		"deployments": {rawK8sItem(t, "Deployment", deploymentFixture())},
-		"pods":        {rawK8sItem(t, "Pod", podFixture())},
-		"services":    {rawK8sItem(t, "Service", serviceFixture())},
-		"ingresses":   {rawK8sItem(t, "Ingress", ingressFixture())},
+		"namespaces":             {rawK8sItem(t, "Namespace", namespaceFixture())},
+		"nodes":                  {rawK8sItem(t, "Node", nodeFixture())},
+		"deployments":            {rawK8sItem(t, "Deployment", deploymentFixture())},
+		"pods":                   {rawK8sItem(t, "Pod", podFixture())},
+		"services":               {rawK8sItem(t, "Service", serviceFixture())},
+		"ingresses":              {rawK8sItem(t, "Ingress", ingressFixture())},
+		"endpoints":              {rawK8sItem(t, "Endpoints", endpointFixture())},
+		"persistentvolumeclaims": {rawK8sItem(t, "PersistentVolumeClaim", pvcFixture())},
 	}}
 	service := NewService(repo, reader)
 
@@ -390,11 +507,43 @@ func TestSyncK8sGeneratesDeploymentPodServiceIngressRelations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync k8s topology: %v", err)
 	}
-	if result.Nodes != 4 {
-		t.Fatalf("expected 4 nodes, got %+v", result)
+	if result.Nodes != 9 {
+		t.Fatalf("expected cluster/namespace/workload/pod/node/service/endpoint/ingress/pvc nodes, got %+v", result)
 	}
-	if !repo.hasEdge(model.TopologyEdgeTypeOwns) || !repo.hasEdge(model.TopologyEdgeTypeSelects) || !repo.hasEdge(model.TopologyEdgeTypeRoutesTo) || !repo.hasEdge(model.TopologyEdgeTypeDependsOn) {
-		t.Fatalf("expected deployment/pod/service/ingress edges, got %+v", repo.edges)
+	for _, edgeType := range []string{
+		model.TopologyEdgeTypeOwns,
+		model.TopologyEdgeTypeSelects,
+		model.TopologyEdgeTypeRoutesTo,
+		model.TopologyEdgeTypeDependsOn,
+		model.TopologyEdgeTypeRunsOn,
+		model.TopologyEdgeTypeStoresIn,
+	} {
+		if !repo.hasEdge(edgeType) {
+			t.Fatalf("expected edge type %s, got %+v", edgeType, repo.edges)
+		}
+	}
+}
+
+func TestSyncK8sHonorsTopologyNamespaceScope(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	dataSourceID := int64(1)
+	repo.sourceConfigs[1] = model.TopologySourceConfig{
+		ID:           1,
+		Name:         "prod-k8s",
+		SourceType:   model.TopologySourceTypeKubernetes,
+		DataSourceID: &dataSourceID,
+		Enabled:      true,
+		Scope:        []byte(`{"allowedNamespaces":["payment"]}`),
+	}
+	service := NewService(repo, fakeK8sReader{resources: map[string][]k8ssvc.ResourceItem{}})
+
+	_, err := service.SyncK8s(context.Background(), &model.AppUser{ID: 1}, SyncK8sInput{
+		DataSourceID: dataSourceID,
+		Cluster:      "prod-a",
+		Namespace:    "risk",
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected namespace scope forbidden error, got %v", err)
 	}
 }
 
@@ -507,10 +656,33 @@ func deploymentFixture() *appsv1.Deployment {
 	}
 }
 
+func namespaceFixture() *corev1.Namespace {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "payment"},
+		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+	}
+}
+
+func nodeFixture() *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-a", Labels: map[string]string{"nodepool": "default"}},
+		Spec:       corev1.NodeSpec{ProviderID: "kind://worker-a"},
+	}
+}
+
 func podFixture() *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "payment-api-0", Namespace: "payment", Labels: map[string]string{"app": "payment-api"}},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.10"},
+		Spec: corev1.PodSpec{
+			NodeName: "worker-a",
+			Volumes: []corev1.Volume{{
+				Name: "data",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "payment-data"},
+				},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.10"},
 	}
 }
 
@@ -541,8 +713,36 @@ func ingressFixture() *networkingv1.Ingress {
 	}
 }
 
+func endpointFixture() *corev1.Endpoints {
+	return &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "payment-api", Namespace: "payment"},
+		Subsets: []corev1.EndpointSubset{{
+			Addresses: []corev1.EndpointAddress{{
+				IP:        "10.0.0.10",
+				TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "payment-api-0", Namespace: "payment"},
+			}},
+		}},
+	}
+}
+
+func pvcFixture() *corev1.PersistentVolumeClaim {
+	storageClass := "standard"
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "payment-data", Namespace: "payment"},
+		Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: &storageClass, VolumeName: "pv-payment-data"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+}
+
 func ptr[T any](value T) *T {
 	return &value
+}
+
+func sameStringPtr(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func seedManualGraph(t *testing.T, repo *memoryTopologyRepository, nodeKeys []string, edges [][3]string) {
@@ -572,28 +772,30 @@ func (r fakeK8sReader) Resources(_ context.Context, _ *model.AppUser, input k8ss
 }
 
 type memoryTopologyRepository struct {
-	nodes         map[string]model.TopologyNode
-	edges         map[string]model.TopologyEdge
-	nextTypeID    int64
-	nodeTypes     map[string]model.TopologyNodeType
-	relationTypes map[string]model.TopologyRelationType
-	sourceConfigs map[int64]model.TopologySourceConfig
-	dataSources   map[int64]model.DataSource
-	aliases       map[int64]model.TopologyNodeAlias
-	conflicts     []model.TopologyConflict
-	audits        []model.TopologyTypeAudit
+	nodes            map[string]model.TopologyNode
+	edges            map[string]model.TopologyEdge
+	edgeObservations map[int64][]model.TopologyEdgeObservation
+	nextTypeID       int64
+	nodeTypes        map[string]model.TopologyNodeType
+	relationTypes    map[string]model.TopologyRelationType
+	sourceConfigs    map[int64]model.TopologySourceConfig
+	dataSources      map[int64]model.DataSource
+	aliases          map[int64]model.TopologyNodeAlias
+	conflicts        []model.TopologyConflict
+	audits           []model.TopologyTypeAudit
 }
 
 func newMemoryTopologyRepository() *memoryTopologyRepository {
 	repo := &memoryTopologyRepository{
-		nodes:         map[string]model.TopologyNode{},
-		edges:         map[string]model.TopologyEdge{},
-		nextTypeID:    1,
-		nodeTypes:     map[string]model.TopologyNodeType{},
-		relationTypes: map[string]model.TopologyRelationType{},
-		sourceConfigs: map[int64]model.TopologySourceConfig{},
-		dataSources:   map[int64]model.DataSource{},
-		aliases:       map[int64]model.TopologyNodeAlias{},
+		nodes:            map[string]model.TopologyNode{},
+		edges:            map[string]model.TopologyEdge{},
+		edgeObservations: map[int64][]model.TopologyEdgeObservation{},
+		nextTypeID:       1,
+		nodeTypes:        map[string]model.TopologyNodeType{},
+		relationTypes:    map[string]model.TopologyRelationType{},
+		sourceConfigs:    map[int64]model.TopologySourceConfig{},
+		dataSources:      map[int64]model.DataSource{},
+		aliases:          map[int64]model.TopologyNodeAlias{},
 	}
 	for _, key := range []string{
 		"service",
@@ -602,6 +804,9 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		model.TopologyNodeKindK8sPod,
 		model.TopologyNodeKindK8sService,
 		model.TopologyNodeKindK8sIngress,
+		model.TopologyNodeKindK8sEndpoint,
+		model.TopologyNodeKindK8sNode,
+		model.TopologyNodeKindK8sPVC,
 	} {
 		repo.seedNodeType(key)
 	}
@@ -610,6 +815,8 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		model.TopologyEdgeTypeSelects,
 		model.TopologyEdgeTypeRoutesTo,
 		model.TopologyEdgeTypeDependsOn,
+		model.TopologyEdgeTypeRunsOn,
+		model.TopologyEdgeTypeStoresIn,
 	} {
 		repo.seedRelationType(key)
 	}
@@ -629,8 +836,51 @@ func (r *memoryTopologyRepository) UpsertNode(_ context.Context, node *model.Top
 }
 
 func (r *memoryTopologyRepository) UpsertEdge(_ context.Context, edge *model.TopologyEdge) error {
+	if existing, ok := r.edges[edge.EdgeKey]; ok {
+		edge.ID = existing.ID
+	} else if edge.ID == 0 {
+		edge.ID = r.nextID()
+	}
 	r.edges[edge.EdgeKey] = *edge
 	return nil
+}
+
+func (r *memoryTopologyRepository) FindEdgeByKey(_ context.Context, edgeKey string) (*model.TopologyEdge, error) {
+	edge, ok := r.edges[edgeKey]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &edge, nil
+}
+
+func (r *memoryTopologyRepository) UpdateTopologyEdge(_ context.Context, edge *model.TopologyEdge) error {
+	if _, ok := r.edges[edge.EdgeKey]; !ok {
+		return repository.ErrNotFound
+	}
+	r.edges[edge.EdgeKey] = *edge
+	return nil
+}
+
+func (r *memoryTopologyRepository) UpsertTopologyEdgeObservation(_ context.Context, observation *model.TopologyEdgeObservation) error {
+	if observation.ID == 0 {
+		observation.ID = r.nextID()
+	}
+	existing := r.edgeObservations[observation.EdgeID]
+	for index := range existing {
+		if existing[index].SourceType == observation.SourceType && sameStringPtr(existing[index].SourceRecordKey, observation.SourceRecordKey) {
+			observation.ID = existing[index].ID
+			existing[index] = *observation
+			r.edgeObservations[observation.EdgeID] = existing
+			return nil
+		}
+	}
+	r.edgeObservations[observation.EdgeID] = append(existing, *observation)
+	return nil
+}
+
+func (r *memoryTopologyRepository) ListTopologyEdgeObservations(_ context.Context, edgeID int64) ([]model.TopologyEdgeObservation, error) {
+	observations := append([]model.TopologyEdgeObservation{}, r.edgeObservations[edgeID]...)
+	return observations, nil
 }
 
 func (r *memoryTopologyRepository) FindNodeByKey(_ context.Context, nodeKey string) (*model.TopologyNode, error) {

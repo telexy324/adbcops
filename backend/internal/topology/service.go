@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	k8ssvc "aiops-platform/backend/internal/k8s"
 	"aiops-platform/backend/internal/model"
@@ -29,9 +30,19 @@ var (
 	ErrSensitiveConfig      = errors.New("topology config contains sensitive fields")
 )
 
+const (
+	edgeStatusActive  = "active"
+	edgeStatusStale   = "stale"
+	edgeStatusExpired = "expired"
+)
+
 type Repository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
+	FindEdgeByKey(ctx context.Context, edgeKey string) (*model.TopologyEdge, error)
+	UpdateTopologyEdge(ctx context.Context, edge *model.TopologyEdge) error
+	UpsertTopologyEdgeObservation(ctx context.Context, observation *model.TopologyEdgeObservation) error
+	ListTopologyEdgeObservations(ctx context.Context, edgeID int64) ([]model.TopologyEdgeObservation, error)
 	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
 	FindNodeByID(ctx context.Context, id int64) (*model.TopologyNode, error)
 	FindTopologyNodes(ctx context.Context, filters repository.TopologyNodeLookupFilters) ([]model.TopologyNode, error)
@@ -87,14 +98,19 @@ type NodeInput struct {
 }
 
 type EdgeInput struct {
-	EdgeKey     string          `json:"edgeKey"`
-	FromNodeKey string          `json:"fromNodeKey"`
-	ToNodeKey   string          `json:"toNodeKey"`
-	EdgeType    string          `json:"edgeType"`
-	Confidence  *float64        `json:"confidence"`
-	Properties  json.RawMessage `json:"properties"`
-	SourceType  string          `json:"sourceType"`
-	SourceRef   json.RawMessage `json:"sourceRef"`
+	EdgeKey         string          `json:"edgeKey"`
+	FromNodeKey     string          `json:"fromNodeKey"`
+	ToNodeKey       string          `json:"toNodeKey"`
+	EdgeType        string          `json:"edgeType"`
+	Confidence      *float64        `json:"confidence"`
+	SourcePriority  int             `json:"sourcePriority"`
+	SourceConfigID  *int64          `json:"sourceConfigId"`
+	SourceRecordKey *string         `json:"sourceRecordKey"`
+	ObservedAt      *time.Time      `json:"observedAt"`
+	ExpiresAt       *time.Time      `json:"expiresAt"`
+	Properties      json.RawMessage `json:"properties"`
+	SourceType      string          `json:"sourceType"`
+	SourceRef       json.RawMessage `json:"sourceRef"`
 }
 
 type Query struct {
@@ -777,7 +793,155 @@ func (s *Service) UpsertEdge(ctx context.Context, input EdgeInput) (*model.Topol
 	if err := s.repository.UpsertEdge(ctx, edge); err != nil {
 		return nil, err
 	}
-	return edge, nil
+	persisted, err := s.repository.FindEdgeByKey(ctx, edge.EdgeKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.upsertEdgeObservation(ctx, persisted, input); err != nil {
+		return nil, err
+	}
+	if err := s.resolveEdge(ctx, persisted, relationType); err != nil {
+		return nil, err
+	}
+	return persisted, nil
+}
+
+func (s *Service) upsertEdgeObservation(ctx context.Context, edge *model.TopologyEdge, input EdgeInput) error {
+	sourceType := strings.TrimSpace(input.SourceType)
+	if sourceType == "" {
+		sourceType = model.TopologySourceManual
+	}
+	observedAt := time.Now().UTC()
+	if input.ObservedAt != nil {
+		observedAt = input.ObservedAt.UTC()
+	}
+	sourceRecordKey := edgeObservationRecordKey(input, edge)
+	observation := &model.TopologyEdgeObservation{
+		EdgeID:             edge.ID,
+		SourceConfigID:     input.SourceConfigID,
+		SourceType:         sourceType,
+		SourceRecordKey:    &sourceRecordKey,
+		SourcePriority:     normalizeInputSourcePriority(input.SourcePriority, sourceType),
+		ObservedAttributes: edge.Properties,
+		Confidence:         edge.Confidence,
+		ObservedAt:         observedAt,
+		ExpiresAt:          input.ExpiresAt,
+		RawRef:             edge.SourceRef,
+	}
+	return s.repository.UpsertTopologyEdgeObservation(ctx, observation)
+}
+
+func (s *Service) resolveEdge(ctx context.Context, edge *model.TopologyEdge, relationType *model.TopologyRelationType) error {
+	observations, err := s.repository.ListTopologyEdgeObservations(ctx, edge.ID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	edge.Status = edgeStatusFromObservations(edge, observations, now)
+	edge.ResolvedConfidence = fusedConfidence(observations)
+	if edge.ResolvedConfidence == nil {
+		edge.ResolvedConfidence = edge.Confidence
+	}
+	if relationType != nil && relationType.Semantics == model.TopologyRelationSemanticsObservation {
+		edge.Status = edgeStatusActive
+	}
+	for index := range observations {
+		observation := observations[index]
+		if edge.FirstObservedAt == nil || observation.ObservedAt.Before(*edge.FirstObservedAt) {
+			observedAt := observation.ObservedAt
+			edge.FirstObservedAt = &observedAt
+		}
+		if edge.LastObservedAt == nil || observation.ObservedAt.After(*edge.LastObservedAt) {
+			observedAt := observation.ObservedAt
+			edge.LastObservedAt = &observedAt
+		}
+		if observation.ExpiresAt != nil && edge.StaleAt == nil {
+			expiresAt := observation.ExpiresAt.UTC()
+			edge.StaleAt = &expiresAt
+		}
+		if observation.ExpiresAt != nil && edge.StaleAt != nil && observation.ExpiresAt.Before(*edge.StaleAt) {
+			expiresAt := observation.ExpiresAt.UTC()
+			edge.StaleAt = &expiresAt
+		}
+		if observation.SourcePriority > edge.SourcePriority {
+			edge.SourcePriority = observation.SourcePriority
+			edge.SourceType = observation.SourceType
+			edge.Confidence = observation.Confidence
+			edge.SourceRef = observation.RawRef
+		}
+	}
+	return s.repository.UpdateTopologyEdge(ctx, edge)
+}
+
+func edgeStatusFromObservations(edge *model.TopologyEdge, observations []model.TopologyEdgeObservation, now time.Time) string {
+	if edge.SourceType == model.TopologySourceTypeManual || edge.SourceType == model.TopologySourceManual {
+		return edgeStatusActive
+	}
+	if len(observations) == 0 {
+		return edgeStatusActive
+	}
+	active := false
+	hasExpiringObservation := false
+	for _, observation := range observations {
+		if observation.SourceType == model.TopologySourceTypeManual || observation.SourceType == model.TopologySourceManual {
+			return edgeStatusActive
+		}
+		if observation.ExpiresAt == nil {
+			active = true
+			continue
+		}
+		hasExpiringObservation = true
+		if observation.ExpiresAt.After(now) {
+			active = true
+		}
+	}
+	if active {
+		return edgeStatusActive
+	}
+	if hasExpiringObservation {
+		return edgeStatusStale
+	}
+	return edgeStatusActive
+}
+
+func fusedConfidence(observations []model.TopologyEdgeObservation) *float64 {
+	if len(observations) == 0 {
+		return nil
+	}
+	missProbability := 1.0
+	seen := false
+	for _, observation := range observations {
+		if observation.Confidence == nil {
+			continue
+		}
+		confidence := *observation.Confidence
+		if confidence < 0 {
+			confidence = 0
+		}
+		if confidence > 1 {
+			confidence = 1
+		}
+		missProbability *= 1 - confidence
+		seen = true
+	}
+	if !seen {
+		return nil
+	}
+	value := 1 - missProbability
+	return &value
+}
+
+func edgeObservationRecordKey(input EdgeInput, edge *model.TopologyEdge) string {
+	if input.SourceRecordKey != nil {
+		if value := strings.TrimSpace(*input.SourceRecordKey); value != "" {
+			return value
+		}
+	}
+	sourceType := strings.TrimSpace(input.SourceType)
+	if sourceType == "" {
+		sourceType = edge.SourceType
+	}
+	return fmt.Sprintf("%s:%s", sourceType, edge.EdgeKey)
 }
 
 func (s *Service) Graph(ctx context.Context, query Query) (*Graph, error) {
@@ -925,11 +1089,22 @@ func (s *Service) SyncK8s(ctx context.Context, actor *model.AppUser, input SyncK
 	if input.DataSourceID <= 0 || namespace == "" {
 		return nil, ErrInvalidInput
 	}
+	if err := s.validateK8sTopologyNamespaceScope(ctx, input.DataSourceID, namespace); err != nil {
+		return nil, err
+	}
 	limit := input.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
 
+	namespaces, err := s.readK8sResource(ctx, actor, input.DataSourceID, "", "namespaces", limit)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := s.readK8sResource(ctx, actor, input.DataSourceID, "", "nodes", limit)
+	if err != nil {
+		return nil, err
+	}
 	deployments, err := s.readK8sResource(ctx, actor, input.DataSourceID, namespace, "deployments", limit)
 	if err != nil {
 		return nil, err
@@ -946,8 +1121,28 @@ func (s *Service) SyncK8s(ctx context.Context, actor *model.AppUser, input SyncK
 	if err != nil {
 		return nil, err
 	}
+	endpoints, err := s.readK8sResource(ctx, actor, input.DataSourceID, namespace, "endpoints", limit)
+	if err != nil {
+		return nil, err
+	}
+	pvcs, err := s.readK8sResource(ctx, actor, input.DataSourceID, namespace, "persistentvolumeclaims", limit)
+	if err != nil {
+		return nil, err
+	}
 
 	builder := newK8sGraphBuilder(input.Environment, cluster, namespace)
+	for _, item := range namespaces.Items {
+		var namespaceObject corev1.Namespace
+		if decodeK8s(item.Raw, &namespaceObject) == nil {
+			builder.addNamespace(&namespaceObject)
+		}
+	}
+	for _, item := range nodes.Items {
+		var node corev1.Node
+		if decodeK8s(item.Raw, &node) == nil {
+			builder.addNode(&node)
+		}
+	}
 	for _, item := range deployments.Items {
 		var deployment appsv1.Deployment
 		if decodeK8s(item.Raw, &deployment) == nil {
@@ -972,6 +1167,18 @@ func (s *Service) SyncK8s(ctx context.Context, actor *model.AppUser, input SyncK
 			builder.addIngress(&ingress)
 		}
 	}
+	for _, item := range endpoints.Items {
+		var endpoint corev1.Endpoints
+		if decodeK8s(item.Raw, &endpoint) == nil {
+			builder.addEndpoint(&endpoint)
+		}
+	}
+	for _, item := range pvcs.Items {
+		var pvc corev1.PersistentVolumeClaim
+		if decodeK8s(item.Raw, &pvc) == nil {
+			builder.addPVC(&pvc)
+		}
+	}
 	builder.linkK8sResources()
 
 	for index := range builder.nodes {
@@ -994,6 +1201,31 @@ func (s *Service) readK8sResource(ctx context.Context, actor *model.AppUser, dat
 		Resource:     resource,
 		Limit:        limit,
 	})
+}
+
+func (s *Service) validateK8sTopologyNamespaceScope(ctx context.Context, dataSourceID int64, namespace string) error {
+	sources, err := s.repository.ListTopologySourceConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	hasScopedConfig := false
+	for _, source := range sources {
+		if !source.Enabled || source.SourceType != model.TopologySourceTypeKubernetes || source.DataSourceID == nil || *source.DataSourceID != dataSourceID {
+			continue
+		}
+		allowed := allowedNamespacesFromScope(source.Scope)
+		if len(allowed) == 0 {
+			continue
+		}
+		hasScopedConfig = true
+		if stringInSlice(namespace, allowed) {
+			return nil
+		}
+	}
+	if hasScopedConfig {
+		return ErrForbidden
+	}
+	return nil
 }
 
 type graphIndex struct {
@@ -1360,6 +1592,46 @@ func defaultSourcePriority(sourceType string) int {
 	default:
 		return 50
 	}
+}
+
+func normalizeInputSourcePriority(sourcePriority int, sourceType string) int {
+	if sourcePriority == 0 {
+		return defaultSourcePriority(sourceType)
+	}
+	return sourcePriority
+}
+
+func allowedNamespacesFromScope(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var scope struct {
+		AllowedNamespaces []string `json:"allowedNamespaces"`
+		Namespaces        []string `json:"namespaces"`
+		Namespace         string   `json:"namespace"`
+	}
+	if err := json.Unmarshal(raw, &scope); err != nil {
+		return nil
+	}
+	candidates := append([]string{}, scope.AllowedNamespaces...)
+	candidates = append(candidates, scope.Namespaces...)
+	if strings.TrimSpace(scope.Namespace) != "" {
+		candidates = append(candidates, scope.Namespace)
+	}
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, namespace := range candidates {
+		namespace = strings.TrimSpace(namespace)
+		if namespace == "" || namespace == "*" {
+			continue
+		}
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		result = append(result, namespace)
+	}
+	return result
 }
 
 func compatibleTopologyDataSource(sourceType, dataSourceType string) bool {
@@ -1776,15 +2048,29 @@ func normalizeEdge(input EdgeInput) (*model.TopologyEdge, error) {
 	if sourceType == "" {
 		sourceType = model.TopologySourceManual
 	}
+	if !validSourceType(sourceType) || input.SourcePriority < 0 || input.SourcePriority > 100 {
+		return nil, ErrInvalidInput
+	}
+	sourcePriority := normalizeInputSourcePriority(input.SourcePriority, sourceType)
+	observedAt := time.Now().UTC()
+	if input.ObservedAt != nil {
+		observedAt = input.ObservedAt.UTC()
+	}
 	return &model.TopologyEdge{
-		EdgeKey:     edgeKey,
-		FromNodeKey: from,
-		ToNodeKey:   to,
-		EdgeType:    edgeType,
-		Confidence:  input.Confidence,
-		Properties:  propertiesJSON,
-		SourceType:  sourceType,
-		SourceRef:   sourceRef,
+		EdgeKey:            edgeKey,
+		FromNodeKey:        from,
+		ToNodeKey:          to,
+		EdgeType:           edgeType,
+		Confidence:         input.Confidence,
+		Status:             edgeStatusActive,
+		SourcePriority:     sourcePriority,
+		ResolvedConfidence: input.Confidence,
+		FirstObservedAt:    &observedAt,
+		LastObservedAt:     &observedAt,
+		StaleAt:            input.ExpiresAt,
+		Properties:         propertiesJSON,
+		SourceType:         sourceType,
+		SourceRef:          sourceRef,
 	}, nil
 }
 
@@ -1947,17 +2233,49 @@ type k8sGraphBuilder struct {
 	namespace   string
 	nodes       []model.TopologyNode
 	edges       []model.TopologyEdge
+	namespaces  []corev1.Namespace
+	k8sNodes    []corev1.Node
 	deployments []appsv1.Deployment
 	pods        []corev1.Pod
 	services    []corev1.Service
+	endpoints   []corev1.Endpoints
+	pvcs        []corev1.PersistentVolumeClaim
 }
 
 func newK8sGraphBuilder(environment, cluster, namespace string) *k8sGraphBuilder {
-	return &k8sGraphBuilder{
+	builder := &k8sGraphBuilder{
 		environment: strings.TrimSpace(environment),
 		cluster:     strings.TrimSpace(cluster),
 		namespace:   strings.TrimSpace(namespace),
 	}
+	if builder.cluster != "" {
+		builder.nodes = append(builder.nodes, builder.syntheticNode("cluster", "", builder.cluster, map[string]any{
+			"cluster": builder.cluster,
+		}))
+	}
+	return builder
+}
+
+func (b *k8sGraphBuilder) addNamespace(namespace *corev1.Namespace) {
+	b.namespaces = append(b.namespaces, *namespace)
+	b.nodes = append(b.nodes, b.syntheticNode("namespace", namespace.Name, namespace.Name, map[string]any{
+		"phase": string(namespace.Status.Phase),
+	}))
+	if b.cluster != "" {
+		b.edges = append(b.edges, b.syntheticEdge(
+			k8sNodeKey(b.cluster, "", "cluster", b.cluster),
+			k8sNodeKey(b.cluster, namespace.Name, "namespace", namespace.Name),
+			model.TopologyEdgeTypeOwns,
+			namespace,
+		))
+	}
+}
+
+func (b *k8sGraphBuilder) addNode(node *corev1.Node) {
+	b.k8sNodes = append(b.k8sNodes, *node)
+	b.nodes = append(b.nodes, b.node(model.TopologyNodeKindK8sNode, node.Name, node.Labels, map[string]any{
+		"providerId": node.Spec.ProviderID,
+	}, node))
 }
 
 func (b *k8sGraphBuilder) addDeployment(deployment *appsv1.Deployment) {
@@ -1966,6 +2284,7 @@ func (b *k8sGraphBuilder) addDeployment(deployment *appsv1.Deployment) {
 		"replicas":      deployment.Status.Replicas,
 		"readyReplicas": deployment.Status.ReadyReplicas,
 	}, deployment))
+	b.addNamespaceOwnerEdge(model.TopologyNodeKindK8sDeployment, deployment.Name, deployment)
 }
 
 func (b *k8sGraphBuilder) addPod(pod *corev1.Pod) {
@@ -1975,6 +2294,26 @@ func (b *k8sGraphBuilder) addPod(pod *corev1.Pod) {
 		"podIp":    pod.Status.PodIP,
 		"nodeName": pod.Spec.NodeName,
 	}, pod))
+	b.addNamespaceOwnerEdge(model.TopologyNodeKindK8sPod, pod.Name, pod)
+	if strings.TrimSpace(pod.Spec.NodeName) != "" {
+		b.edges = append(b.edges, b.edge(
+			k8sNodeKey(b.cluster, pod.Namespace, model.TopologyNodeKindK8sPod, pod.Name),
+			k8sNodeKey(b.cluster, "", model.TopologyNodeKindK8sNode, pod.Spec.NodeName),
+			model.TopologyEdgeTypeRunsOn,
+			pod,
+		))
+	}
+	for _, volume := range pod.Spec.Volumes {
+		if volume.PersistentVolumeClaim == nil || strings.TrimSpace(volume.PersistentVolumeClaim.ClaimName) == "" {
+			continue
+		}
+		b.edges = append(b.edges, b.edge(
+			k8sNodeKey(b.cluster, pod.Namespace, model.TopologyNodeKindK8sPod, pod.Name),
+			k8sNodeKey(b.cluster, pod.Namespace, model.TopologyNodeKindK8sPVC, volume.PersistentVolumeClaim.ClaimName),
+			model.TopologyEdgeTypeStoresIn,
+			pod,
+		))
+	}
 }
 
 func (b *k8sGraphBuilder) addService(service *corev1.Service) {
@@ -1983,6 +2322,7 @@ func (b *k8sGraphBuilder) addService(service *corev1.Service) {
 		"type":      string(service.Spec.Type),
 		"clusterIp": service.Spec.ClusterIP,
 	}, service))
+	b.addNamespaceOwnerEdge(model.TopologyNodeKindK8sService, service.Name, service)
 }
 
 func (b *k8sGraphBuilder) addIngress(ingress *networkingv1.Ingress) {
@@ -1990,6 +2330,7 @@ func (b *k8sGraphBuilder) addIngress(ingress *networkingv1.Ingress) {
 		"class": ingressClass(ingress),
 		"hosts": ingressHosts(ingress),
 	}, ingress))
+	b.addNamespaceOwnerEdge(model.TopologyNodeKindK8sIngress, ingress.Name, ingress)
 	for _, serviceName := range ingressServiceBackends(ingress) {
 		b.edges = append(b.edges, b.edge(
 			k8sNodeKey(b.cluster, ingress.Namespace, model.TopologyNodeKindK8sIngress, ingress.Name),
@@ -1998,6 +2339,43 @@ func (b *k8sGraphBuilder) addIngress(ingress *networkingv1.Ingress) {
 			ingress,
 		))
 	}
+}
+
+func (b *k8sGraphBuilder) addEndpoint(endpoint *corev1.Endpoints) {
+	b.endpoints = append(b.endpoints, *endpoint)
+	b.nodes = append(b.nodes, b.node(model.TopologyNodeKindK8sEndpoint, endpoint.Name, endpoint.Labels, map[string]any{
+		"subsets": len(endpoint.Subsets),
+	}, endpoint))
+	b.addNamespaceOwnerEdge(model.TopologyNodeKindK8sEndpoint, endpoint.Name, endpoint)
+	b.edges = append(b.edges, b.edge(
+		k8sNodeKey(b.cluster, endpoint.Namespace, model.TopologyNodeKindK8sService, endpoint.Name),
+		k8sNodeKey(b.cluster, endpoint.Namespace, model.TopologyNodeKindK8sEndpoint, endpoint.Name),
+		model.TopologyEdgeTypeRoutesTo,
+		endpoint,
+	))
+	for _, subset := range endpoint.Subsets {
+		for _, address := range subset.Addresses {
+			if address.TargetRef == nil || address.TargetRef.Kind != "Pod" || strings.TrimSpace(address.TargetRef.Name) == "" {
+				continue
+			}
+			b.edges = append(b.edges, b.edge(
+				k8sNodeKey(b.cluster, endpoint.Namespace, model.TopologyNodeKindK8sEndpoint, endpoint.Name),
+				k8sNodeKey(b.cluster, endpoint.Namespace, model.TopologyNodeKindK8sPod, address.TargetRef.Name),
+				model.TopologyEdgeTypeSelects,
+				endpoint,
+			))
+		}
+	}
+}
+
+func (b *k8sGraphBuilder) addPVC(pvc *corev1.PersistentVolumeClaim) {
+	b.pvcs = append(b.pvcs, *pvc)
+	b.nodes = append(b.nodes, b.node(model.TopologyNodeKindK8sPVC, pvc.Name, pvc.Labels, map[string]any{
+		"phase":       string(pvc.Status.Phase),
+		"volumeName":  pvc.Spec.VolumeName,
+		"storageName": pvc.Spec.StorageClassName,
+	}, pvc))
+	b.addNamespaceOwnerEdge(model.TopologyNodeKindK8sPVC, pvc.Name, pvc)
 }
 
 func (b *k8sGraphBuilder) linkK8sResources() {
@@ -2062,21 +2440,44 @@ func (b *k8sGraphBuilder) node(kind, name string, labelMap map[string]string, pr
 		"resourceVersion": object.GetResourceVersion(),
 	})
 	return model.TopologyNode{
-		NodeKey:     k8sNodeKey(b.cluster, object.GetNamespace(), kind, name),
-		Kind:        kind,
-		Name:        name,
-		Environment: cleanString(b.environment),
-		Cluster:     cleanString(b.cluster),
-		Namespace:   cleanString(object.GetNamespace()),
-		Labels:      labelsJSON,
-		Properties:  propertiesJSON,
-		SourceType:  model.TopologySourceK8s,
-		SourceRef:   sourceRef,
+		NodeKey:        k8sNodeKey(b.cluster, object.GetNamespace(), kind, name),
+		Kind:           kind,
+		Name:           name,
+		Environment:    cleanString(b.environment),
+		Cluster:        cleanString(b.cluster),
+		Namespace:      cleanString(object.GetNamespace()),
+		Labels:         labelsJSON,
+		Properties:     propertiesJSON,
+		SourceType:     model.TopologySourceK8s,
+		SourcePriority: defaultSourcePriority(model.TopologySourceK8s),
+		SourceRef:      sourceRef,
 	}
 }
 
 func (b *k8sGraphBuilder) edge(from, to, edgeType string, object metav1.Object) model.TopologyEdge {
+	return b.syntheticEdge(from, to, edgeType, object)
+}
+
+func (b *k8sGraphBuilder) syntheticNode(kind, namespace, name string, properties map[string]any) model.TopologyNode {
+	propertiesJSON, _ := json.Marshal(properties)
+	return model.TopologyNode{
+		NodeKey:        k8sNodeKey(b.cluster, namespace, kind, name),
+		Kind:           kind,
+		Name:           name,
+		Environment:    cleanString(b.environment),
+		Cluster:        cleanString(b.cluster),
+		Namespace:      cleanString(namespace),
+		Labels:         []byte(`{}`),
+		Properties:     propertiesJSON,
+		SourceType:     model.TopologySourceK8s,
+		SourcePriority: defaultSourcePriority(model.TopologySourceK8s),
+		SourceRef:      []byte(`{}`),
+	}
+}
+
+func (b *k8sGraphBuilder) syntheticEdge(from, to, edgeType string, object metav1.Object) model.TopologyEdge {
 	confidence := 1.0
+	observedAt := time.Now().UTC()
 	sourceRef, _ := json.Marshal(map[string]any{
 		"kind":      k8sObjectKind(object),
 		"namespace": object.GetNamespace(),
@@ -2084,25 +2485,50 @@ func (b *k8sGraphBuilder) edge(from, to, edgeType string, object metav1.Object) 
 		"uid":       string(object.GetUID()),
 	})
 	return model.TopologyEdge{
-		EdgeKey:     edgeKeyFor(from, to, edgeType),
-		FromNodeKey: from,
-		ToNodeKey:   to,
-		EdgeType:    edgeType,
-		Confidence:  &confidence,
-		Properties:  []byte(`{}`),
-		SourceType:  model.TopologySourceK8s,
-		SourceRef:   sourceRef,
+		EdgeKey:            edgeKeyFor(from, to, edgeType),
+		FromNodeKey:        from,
+		ToNodeKey:          to,
+		EdgeType:           edgeType,
+		Confidence:         &confidence,
+		Status:             edgeStatusActive,
+		SourcePriority:     defaultSourcePriority(model.TopologySourceK8s),
+		ResolvedConfidence: &confidence,
+		FirstObservedAt:    &observedAt,
+		LastObservedAt:     &observedAt,
+		Properties:         []byte(`{}`),
+		SourceType:         model.TopologySourceK8s,
+		SourceRef:          sourceRef,
 	}
+}
+
+func (b *k8sGraphBuilder) addNamespaceOwnerEdge(kind, name string, object metav1.Object) {
+	if strings.TrimSpace(object.GetNamespace()) == "" {
+		return
+	}
+	b.edges = append(b.edges, b.syntheticEdge(
+		k8sNodeKey(b.cluster, object.GetNamespace(), "namespace", object.GetNamespace()),
+		k8sNodeKey(b.cluster, object.GetNamespace(), kind, name),
+		model.TopologyEdgeTypeOwns,
+		object,
+	))
 }
 
 func k8sObjectKind(object metav1.Object) string {
 	switch object.(type) {
+	case *corev1.Namespace:
+		return "Namespace"
+	case *corev1.Node:
+		return "Node"
 	case *appsv1.Deployment:
 		return "Deployment"
 	case *corev1.Pod:
 		return "Pod"
 	case *corev1.Service:
 		return "Service"
+	case *corev1.Endpoints:
+		return "Endpoints"
+	case *corev1.PersistentVolumeClaim:
+		return "PersistentVolumeClaim"
 	case *networkingv1.Ingress:
 		return "Ingress"
 	default:

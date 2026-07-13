@@ -7,12 +7,17 @@ const (
 	TopologyNodeKindK8sPod        = "k8s_pod"
 	TopologyNodeKindK8sService    = "k8s_service"
 	TopologyNodeKindK8sIngress    = "k8s_ingress"
+	TopologyNodeKindK8sEndpoint   = "k8s_endpoint"
+	TopologyNodeKindK8sNode       = "k8s_node"
+	TopologyNodeKindK8sPVC        = "k8s_pvc"
 	TopologyNodeKindManual        = "manual"
 
 	TopologyEdgeTypeOwns      = "owns"
 	TopologyEdgeTypeSelects   = "selects"
 	TopologyEdgeTypeRoutesTo  = "routes_to"
 	TopologyEdgeTypeDependsOn = "depends_on"
+	TopologyEdgeTypeRunsOn    = "runs_on"
+	TopologyEdgeTypeStoresIn  = "stores_in"
 
 	TopologySourceManual = "manual"
 	TopologySourceK8s    = "kubernetes"
@@ -73,22 +78,48 @@ func (TopologyNode) TableName() string {
 }
 
 type TopologyEdge struct {
-	ID             int64     `gorm:"column:id;primaryKey" json:"id"`
-	EdgeKey        string    `gorm:"column:edge_key;size:255;not null;unique" json:"edgeKey"`
-	FromNodeKey    string    `gorm:"column:from_node_key;size:255;not null" json:"fromNodeKey"`
-	ToNodeKey      string    `gorm:"column:to_node_key;size:255;not null" json:"toNodeKey"`
-	EdgeType       string    `gorm:"column:edge_type;size:80;not null" json:"edgeType"`
-	RelationTypeID *int64    `gorm:"column:relation_type_id" json:"relationTypeId,omitempty"`
-	Confidence     *float64  `gorm:"column:confidence" json:"confidence,omitempty"`
-	Properties     []byte    `gorm:"column:properties;type:jsonb" json:"properties,omitempty"`
-	SourceType     string    `gorm:"column:source_type;size:50;not null" json:"sourceType"`
-	SourceRef      []byte    `gorm:"column:source_ref;type:jsonb" json:"sourceRef,omitempty"`
-	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ID                 int64      `gorm:"column:id;primaryKey" json:"id"`
+	EdgeKey            string     `gorm:"column:edge_key;size:255;not null;unique" json:"edgeKey"`
+	FromNodeKey        string     `gorm:"column:from_node_key;size:255;not null" json:"fromNodeKey"`
+	ToNodeKey          string     `gorm:"column:to_node_key;size:255;not null" json:"toNodeKey"`
+	EdgeType           string     `gorm:"column:edge_type;size:80;not null" json:"edgeType"`
+	RelationTypeID     *int64     `gorm:"column:relation_type_id" json:"relationTypeId,omitempty"`
+	Confidence         *float64   `gorm:"column:confidence" json:"confidence,omitempty"`
+	Status             string     `gorm:"column:status;size:30;not null" json:"status"`
+	SourcePriority     int        `gorm:"column:source_priority;not null" json:"sourcePriority"`
+	ResolvedConfidence *float64   `gorm:"column:resolved_confidence" json:"resolvedConfidence,omitempty"`
+	FirstObservedAt    *time.Time `gorm:"column:first_observed_at" json:"firstObservedAt,omitempty"`
+	LastObservedAt     *time.Time `gorm:"column:last_observed_at" json:"lastObservedAt,omitempty"`
+	StaleAt            *time.Time `gorm:"column:stale_at" json:"staleAt,omitempty"`
+	DeletedAt          *time.Time `gorm:"column:deleted_at" json:"deletedAt,omitempty"`
+	Properties         []byte     `gorm:"column:properties;type:jsonb" json:"properties,omitempty"`
+	SourceType         string     `gorm:"column:source_type;size:50;not null" json:"sourceType"`
+	SourceRef          []byte     `gorm:"column:source_ref;type:jsonb" json:"sourceRef,omitempty"`
+	CreatedAt          time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt          time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
 }
 
 func (TopologyEdge) TableName() string {
 	return "topology_edge"
+}
+
+type TopologyEdgeObservation struct {
+	ID                 int64      `gorm:"column:id;primaryKey" json:"id"`
+	EdgeID             int64      `gorm:"column:edge_id;not null" json:"edgeId"`
+	SourceConfigID     *int64     `gorm:"column:source_config_id" json:"sourceConfigId,omitempty"`
+	SourceType         string     `gorm:"column:source_type;size:50;not null" json:"sourceType"`
+	SourceRecordKey    *string    `gorm:"column:source_record_key;size:255" json:"sourceRecordKey,omitempty"`
+	SourcePriority     int        `gorm:"column:source_priority;not null" json:"sourcePriority"`
+	ObservedAttributes []byte     `gorm:"column:observed_attributes;type:jsonb" json:"observedAttributes,omitempty"`
+	Confidence         *float64   `gorm:"column:confidence" json:"confidence,omitempty"`
+	ObservedAt         time.Time  `gorm:"column:observed_at;not null" json:"observedAt"`
+	ExpiresAt          *time.Time `gorm:"column:expires_at" json:"expiresAt,omitempty"`
+	RawRef             []byte     `gorm:"column:raw_ref;type:jsonb" json:"rawRef,omitempty"`
+	CreatedAt          time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+}
+
+func (TopologyEdgeObservation) TableName() string {
+	return "topology_edge_observation"
 }
 
 type TopologyNodeType struct {

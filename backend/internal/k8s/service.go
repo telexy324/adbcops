@@ -288,7 +288,7 @@ func (s *Service) Resources(ctx context.Context, actor *model.AppUser, input Res
 	if resource == "" {
 		return nil, ErrInvalidInput
 	}
-	if resource != "namespaces" {
+	if resource != "namespaces" && resource != "nodes" {
 		if namespace == "" {
 			return nil, ErrInvalidInput
 		}
@@ -482,6 +482,26 @@ func readResources(ctx context.Context, client kubernetes.Interface, resource, n
 			items = append(items, objectItem("Service", &list.Items[index], ""))
 		}
 		return items, nil
+	case "endpoints":
+		list, err := client.CoreV1().Endpoints(namespace).List(ctx, metav1.ListOptions{Limit: int64(limit)})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceItem, 0, len(list.Items))
+		for index := range list.Items {
+			items = append(items, objectItem("Endpoints", &list.Items[index], ""))
+		}
+		return items, nil
+	case "persistentvolumeclaims", "pvcs":
+		list, err := client.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{Limit: int64(limit)})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceItem, 0, len(list.Items))
+		for index := range list.Items {
+			items = append(items, objectItem("PersistentVolumeClaim", &list.Items[index], string(list.Items[index].Status.Phase)))
+		}
+		return items, nil
 	case "events":
 		list, err := client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{Limit: int64(limit)})
 		if err != nil {
@@ -527,6 +547,16 @@ func readResources(ctx context.Context, client kubernetes.Interface, resource, n
 				return nil, err
 			}
 			items = append(items, objectItem("Namespace", namespaceObject, string(namespaceObject.Status.Phase)))
+		}
+		return items, nil
+	case "nodes":
+		list, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: int64(limit)})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceItem, 0, len(list.Items))
+		for index := range list.Items {
+			items = append(items, objectItem("Node", &list.Items[index], ""))
 		}
 		return items, nil
 	default:

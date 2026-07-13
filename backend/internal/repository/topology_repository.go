@@ -13,6 +13,10 @@ import (
 type TopologyRepository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
+	FindEdgeByKey(ctx context.Context, edgeKey string) (*model.TopologyEdge, error)
+	UpdateTopologyEdge(ctx context.Context, edge *model.TopologyEdge) error
+	UpsertTopologyEdgeObservation(ctx context.Context, observation *model.TopologyEdgeObservation) error
+	ListTopologyEdgeObservations(ctx context.Context, edgeID int64) ([]model.TopologyEdgeObservation, error)
 	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
 	FindNodeByID(ctx context.Context, id int64) (*model.TopologyNode, error)
 	FindTopologyNodes(ctx context.Context, filters TopologyNodeLookupFilters) ([]model.TopologyNode, error)
@@ -97,12 +101,50 @@ func (r *GORMTopologyRepository) UpsertEdge(ctx context.Context, edge *model.Top
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "edge_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"from_node_key", "to_node_key", "edge_type", "relation_type_id", "confidence", "properties", "source_type", "source_ref", "updated_at",
+			"from_node_key", "to_node_key", "edge_type", "relation_type_id", "confidence", "status", "source_priority", "resolved_confidence", "first_observed_at", "last_observed_at", "stale_at", "deleted_at", "properties", "source_type", "source_ref", "updated_at",
 		}),
 	}).Create(edge).Error; err != nil {
 		return fmt.Errorf("upsert topology edge: %w", err)
 	}
 	return nil
+}
+
+func (r *GORMTopologyRepository) FindEdgeByKey(ctx context.Context, edgeKey string) (*model.TopologyEdge, error) {
+	var edge model.TopologyEdge
+	if err := r.db.WithContext(ctx).Where("edge_key = ?", edgeKey).First(&edge).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find topology edge by key: %w", err)
+	}
+	return &edge, nil
+}
+
+func (r *GORMTopologyRepository) UpdateTopologyEdge(ctx context.Context, edge *model.TopologyEdge) error {
+	if err := r.db.WithContext(ctx).Save(edge).Error; err != nil {
+		return fmt.Errorf("update topology edge: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) UpsertTopologyEdgeObservation(ctx context.Context, observation *model.TopologyEdgeObservation) error {
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "edge_id"}, {Name: "source_type"}, {Name: "source_record_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"source_config_id", "source_priority", "observed_attributes", "confidence", "observed_at", "expires_at", "raw_ref",
+		}),
+	}).Create(observation).Error; err != nil {
+		return fmt.Errorf("upsert topology edge observation: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) ListTopologyEdgeObservations(ctx context.Context, edgeID int64) ([]model.TopologyEdgeObservation, error) {
+	var observations []model.TopologyEdgeObservation
+	if err := r.db.WithContext(ctx).Where("edge_id = ?", edgeID).Order("source_priority DESC, id ASC").Find(&observations).Error; err != nil {
+		return nil, fmt.Errorf("list topology edge observations: %w", err)
+	}
+	return observations, nil
 }
 
 func (r *GORMTopologyRepository) FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error) {
