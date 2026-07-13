@@ -2,6 +2,7 @@ package correlation
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,78 @@ func TestAnalyzeUsesTopologySignal(t *testing.T) {
 	topologyDetail := findDetail(result.Candidates[0].ScoreDetails, "topology")
 	if topologyDetail.Score < 0.8 {
 		t.Fatalf("expected direct topology score, got %+v", topologyDetail)
+	}
+	if !strings.Contains(topologyDetail.Explanation, "edges=owns") || !strings.Contains(topologyDetail.Explanation, "confidence=") {
+		t.Fatalf("expected topology path and confidence explanation, got %+v", topologyDetail)
+	}
+	if len(result.Candidates[0].TopologyPaths) != 1 || result.Candidates[0].TopologyPaths[0].Hops != 1 {
+		t.Fatalf("expected structured topology path on candidate, got %+v", result.Candidates[0].TopologyPaths)
+	}
+}
+
+func TestAnalyzeDoesNotGiveHighTopologyScoreForObservationOnlyRelation(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	events := &memoryEventRepository{events: []model.OpsEvent{
+		opsEvent(1, now, "alert", "latency_high", "payment latency", "payment-api", `{"evidenceKeys":["ev_target"]}`),
+		opsEvent(2, now.Add(-1*time.Minute), "log_anomaly", "same_log_template", "orders log similar", "orders-api", `{"evidenceKeys":["ev_log"]}`),
+	}}
+	topology := &memoryTopologyRepository{
+		nodes: []model.TopologyNode{
+			{NodeKey: "svc:payment-api", Name: "payment-api"},
+			{NodeKey: "svc:orders-api", Name: "orders-api"},
+		},
+		edges: []model.TopologyEdge{{
+			EdgeKey:            "observed",
+			FromNodeKey:        "svc:payment-api",
+			ToNodeKey:          "svc:orders-api",
+			EdgeType:           model.TopologyEdgeTypeObservedWith,
+			ResolvedConfidence: ptrFloat(0.95),
+		}},
+	}
+	service := NewService(events, topology)
+
+	result, err := service.Analyze(context.Background(), Query{TargetEventID: 1, IncludeTopology: true})
+	if err != nil {
+		t.Fatalf("analyze correlation: %v", err)
+	}
+	topologyDetail := findDetail(result.Candidates[0].ScoreDetails, "topology")
+	if topologyDetail.Score > 0.2 {
+		t.Fatalf("observation-only relation must not produce high topology score: %+v", topologyDetail)
+	}
+	if !strings.Contains(topologyDetail.Explanation, model.TopologyRelationSemanticsObservation) {
+		t.Fatalf("expected observation semantics explanation, got %+v", topologyDetail)
+	}
+	if len(result.Candidates[0].TopologyPaths) != 1 || result.Candidates[0].TopologyPaths[0].ImpactType != "potentially_related" {
+		t.Fatalf("expected observation path to be marked potentially related, got %+v", result.Candidates[0].TopologyPaths)
+	}
+}
+
+func TestAnalyzeUsesCommonDependencySignal(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	events := &memoryEventRepository{events: []model.OpsEvent{
+		opsEvent(1, now, "alert", "db_latency", "payment db latency", "payment-api", `{"evidenceKeys":["ev_target"]}`),
+		opsEvent(2, now.Add(-4*time.Minute), "release", "deploy", "orders deployed", "orders-api", `{"evidenceKeys":["ev_release"]}`),
+	}}
+	topology := &memoryTopologyRepository{
+		nodes: []model.TopologyNode{
+			{NodeKey: "svc:payment-api", Name: "payment-api"},
+			{NodeKey: "svc:orders-api", Name: "orders-api"},
+			{NodeKey: "db:shared-orders", Name: "shared-orders"},
+		},
+		edges: []model.TopologyEdge{
+			{EdgeKey: "payment-db", FromNodeKey: "svc:payment-api", ToNodeKey: "db:shared-orders", EdgeType: model.TopologyEdgeTypeDependsOn, ResolvedConfidence: ptrFloat(0.9)},
+			{EdgeKey: "orders-db", FromNodeKey: "svc:orders-api", ToNodeKey: "db:shared-orders", EdgeType: model.TopologyEdgeTypeDependsOn, ResolvedConfidence: ptrFloat(0.8)},
+		},
+	}
+	service := NewService(events, topology)
+
+	result, err := service.Analyze(context.Background(), Query{TargetEventID: 1, IncludeTopology: true})
+	if err != nil {
+		t.Fatalf("analyze correlation: %v", err)
+	}
+	topologyDetail := findDetail(result.Candidates[0].ScoreDetails, "topology")
+	if topologyDetail.Score < 0.4 || !strings.Contains(topologyDetail.Explanation, "common dependency db:shared-orders") {
+		t.Fatalf("expected common dependency topology signal, got %+v", topologyDetail)
 	}
 }
 
@@ -148,6 +221,10 @@ func opsEvent(id int64, at time.Time, sourceType, eventType, summary, resourceNa
 		Payload:         []byte(payload),
 		OccurrenceCount: 1,
 	}
+}
+
+func ptrFloat(value float64) *float64 {
+	return &value
 }
 
 type memoryEventRepository struct {

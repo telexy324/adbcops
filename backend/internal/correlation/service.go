@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -58,13 +59,14 @@ type Result struct {
 }
 
 type Candidate struct {
-	Event             EventSummary  `json:"event"`
-	Score             float64       `json:"score"`
-	Confidence        string        `json:"confidence"`
-	ScoreDetails      []ScoreDetail `json:"scoreDetails"`
-	EvidenceKeys      []string      `json:"evidenceKeys,omitempty"`
-	EvidenceAvailable bool          `json:"evidenceAvailable"`
-	Reason            string        `json:"reason"`
+	Event             EventSummary          `json:"event"`
+	Score             float64               `json:"score"`
+	Confidence        string                `json:"confidence"`
+	ScoreDetails      []ScoreDetail         `json:"scoreDetails"`
+	TopologyPaths     []TopologyPathSummary `json:"topologyPaths,omitempty"`
+	EvidenceKeys      []string              `json:"evidenceKeys,omitempty"`
+	EvidenceAvailable bool                  `json:"evidenceAvailable"`
+	Reason            string                `json:"reason"`
 }
 
 type EventSummary struct {
@@ -90,9 +92,31 @@ type ScoreDetail struct {
 	Explanation string  `json:"explanation"`
 }
 
+type TopologyPathSummary struct {
+	NodeKeys   []string `json:"nodeKeys"`
+	EdgeTypes  []string `json:"edgeTypes"`
+	Semantics  []string `json:"semantics"`
+	Hops       int      `json:"hops"`
+	Confidence float64  `json:"confidence"`
+	ImpactType string   `json:"impactType"`
+}
+
 type topologyGraph struct {
 	nodes []model.TopologyNode
 	edges []model.TopologyEdge
+}
+
+type topologySignal struct {
+	score       float64
+	explanation string
+	paths       []topologyPath
+}
+
+type topologyPath struct {
+	nodeKeys   []string
+	edgeTypes  []string
+	confidence float64
+	semantics  []string
 }
 
 func NewService(events EventRepository, topology TopologyRepository) *Service {
@@ -214,10 +238,11 @@ func (s *Service) loadTopology(ctx context.Context, target *model.OpsEvent, quer
 
 func scoreCandidate(target, candidate model.OpsEvent, graph topologyGraph, topologyUsed bool, targetEvidence []string) Candidate {
 	candidateEvidence := evidenceKeysFromPayload(candidate.Payload)
+	topologyDetail, topologyPaths := topologyScoreAndPaths(target, candidate, graph, topologyUsed)
 	details := []ScoreDetail{
 		identifierScore(target, candidate),
 		temporalScore(target, candidate),
-		topologyScore(target, candidate, graph, topologyUsed),
+		topologyDetail,
 		semanticScore(target, candidate),
 		evidenceScore(targetEvidence, candidateEvidence),
 	}
@@ -235,6 +260,7 @@ func scoreCandidate(target, candidate model.OpsEvent, graph topologyGraph, topol
 		Score:             total,
 		Confidence:        confidence(total),
 		ScoreDetails:      details,
+		TopologyPaths:     topologyPaths,
 		EvidenceKeys:      candidateEvidence,
 		EvidenceAvailable: evidenceAvailable,
 		Reason:            reasonFromDetails(details, evidenceAvailable),
@@ -288,25 +314,205 @@ func temporalScore(target, candidate model.OpsEvent) ScoreDetail {
 	return weightedDetail("temporal", score, 0.25, "event is "+intString(int(delta))+" minutes from target")
 }
 
-func topologyScore(target, candidate model.OpsEvent, graph topologyGraph, used bool) ScoreDetail {
+func topologyScoreAndPaths(target, candidate model.OpsEvent, graph topologyGraph, used bool) (ScoreDetail, []TopologyPathSummary) {
 	if !used {
-		return weightedDetail("topology", 0, 0.20, "topology scoring disabled or unavailable")
+		return weightedDetail("topology", 0, 0.20, "topology scoring disabled or unavailable"), nil
 	}
 	targetNodes := matchingNodeKeys(target, graph.nodes)
 	candidateNodes := matchingNodeKeys(candidate, graph.nodes)
 	if len(targetNodes) == 0 || len(candidateNodes) == 0 {
-		return weightedDetail("topology", 0, 0.20, "no matching topology node for target or candidate")
+		return weightedDetail("topology", 0, 0.20, "no matching topology node for target or candidate"), nil
 	}
 	if intersects(targetNodes, candidateNodes) {
-		return weightedDetail("topology", 1, 0.20, "target and candidate map to the same topology node")
+		return weightedDetail("topology", 1, 0.20, "target and candidate map to the same topology node"), nil
 	}
-	if directlyConnected(targetNodes, candidateNodes, graph.edges) {
-		return weightedDetail("topology", 0.8, 0.20, "target and candidate topology nodes are directly connected")
+	pathSignal := bestPathSignal(targetNodes, candidateNodes, graph.edges)
+	commonSignal := commonDependencySignal(targetNodes, candidateNodes, graph.edges)
+	best := pathSignal
+	if commonSignal.score > best.score {
+		best = commonSignal
 	}
-	if twoHopConnected(targetNodes, candidateNodes, graph.edges) {
-		return weightedDetail("topology", 0.45, 0.20, "target and candidate topology nodes are connected within two hops")
+	if best.score > 0 {
+		return weightedDetail("topology", best.score, 0.20, best.explanation), topologyPathSummaries(best.paths)
 	}
-	return weightedDetail("topology", 0.05, 0.20, "topology nodes found but no close path discovered")
+	return weightedDetail("topology", 0.05, 0.20, "topology nodes found but no close path discovered"), nil
+}
+
+func bestPathSignal(targetNodes, candidateNodes map[string]struct{}, edges []model.TopologyEdge) topologySignal {
+	path, ok := bestTopologyPath(targetNodes, candidateNodes, edges, 3)
+	if !ok {
+		return topologySignal{}
+	}
+	score := pathScore(path)
+	return topologySignal{
+		score: score,
+		explanation: strings.Join([]string{
+			"topology path",
+			strings.Join(path.nodeKeys, " -> "),
+			"hops=" + intString(len(path.edgeTypes)),
+			"edges=" + strings.Join(path.edgeTypes, ","),
+			"semantics=" + strings.Join(path.semantics, ","),
+			"confidence=" + scoreString(path.confidence),
+		}, "; "),
+		paths: []topologyPath{path},
+	}
+}
+
+func bestTopologyPath(from, to map[string]struct{}, edges []model.TopologyEdge, maxDepth int) (topologyPath, bool) {
+	type state struct {
+		node       string
+		nodes      []string
+		edgeTypes  []string
+		semantics  []string
+		confidence float64
+	}
+	adjacency := map[string][]model.TopologyEdge{}
+	for _, edge := range edges {
+		adjacency[edge.FromNodeKey] = append(adjacency[edge.FromNodeKey], edge)
+		reversed := edge
+		reversed.FromNodeKey = edge.ToNodeKey
+		reversed.ToNodeKey = edge.FromNodeKey
+		adjacency[edge.ToNodeKey] = append(adjacency[edge.ToNodeKey], reversed)
+	}
+	queue := []state{}
+	for key := range from {
+		queue = append(queue, state{node: key, nodes: []string{key}, confidence: 1})
+	}
+	best := topologyPath{}
+	bestScore := -1.0
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if len(current.edgeTypes) > maxDepth {
+			continue
+		}
+		if _, ok := to[current.node]; ok && len(current.edgeTypes) > 0 {
+			path := topologyPath{
+				nodeKeys:   append([]string{}, current.nodes...),
+				edgeTypes:  append([]string{}, current.edgeTypes...),
+				semantics:  append([]string{}, current.semantics...),
+				confidence: current.confidence,
+			}
+			score := pathScore(path)
+			if score > bestScore {
+				best = path
+				bestScore = score
+			}
+			continue
+		}
+		if len(current.edgeTypes) == maxDepth {
+			continue
+		}
+		visited := stringSet(current.nodes)
+		for _, edge := range adjacency[current.node] {
+			if _, seen := visited[edge.ToNodeKey]; seen {
+				continue
+			}
+			queue = append(queue, state{
+				node:       edge.ToNodeKey,
+				nodes:      append(append([]string{}, current.nodes...), edge.ToNodeKey),
+				edgeTypes:  append(append([]string{}, current.edgeTypes...), edge.EdgeType),
+				semantics:  append(append([]string{}, current.semantics...), relationSemantics(edge.EdgeType)),
+				confidence: current.confidence * edgeConfidence(edge),
+			})
+		}
+	}
+	return best, bestScore >= 0
+}
+
+func pathScore(path topologyPath) float64 {
+	if len(path.edgeTypes) == 0 {
+		return 0
+	}
+	base := 0.0
+	observationOnly := true
+	for _, edgeType := range path.edgeTypes {
+		edgeBase := relationCorrelationBase(edgeType)
+		if edgeBase > base {
+			base = edgeBase
+		}
+		if relationSemantics(edgeType) != model.TopologyRelationSemanticsObservation {
+			observationOnly = false
+		}
+	}
+	hops := len(path.edgeTypes)
+	hopFactor := 1.0
+	if hops == 2 {
+		hopFactor = 0.72
+	} else if hops >= 3 {
+		hopFactor = 0.55
+	}
+	score := base * path.confidence * hopFactor
+	if observationOnly && score > 0.2 {
+		score = 0.2
+	}
+	return roundScore(score)
+}
+
+func commonDependencySignal(left, right map[string]struct{}, edges []model.TopologyEdge) topologySignal {
+	leftDeps := dependencyTargets(left, edges)
+	rightDeps := dependencyTargets(right, edges)
+	bestNode := ""
+	bestConfidence := 0.0
+	for node, leftConfidence := range leftDeps {
+		if rightConfidence, ok := rightDeps[node]; ok {
+			confidence := math.Min(leftConfidence, rightConfidence)
+			if confidence > bestConfidence {
+				bestNode = node
+				bestConfidence = confidence
+			}
+		}
+	}
+	if bestNode == "" {
+		return topologySignal{}
+	}
+	return topologySignal{
+		score:       roundScore(0.65 * bestConfidence),
+		explanation: "target and candidate share common dependency " + bestNode + "; confidence=" + scoreString(bestConfidence),
+	}
+}
+
+func topologyPathSummaries(paths []topologyPath) []TopologyPathSummary {
+	result := make([]TopologyPathSummary, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, TopologyPathSummary{
+			NodeKeys:   append([]string{}, path.nodeKeys...),
+			EdgeTypes:  append([]string{}, path.edgeTypes...),
+			Semantics:  append([]string{}, path.semantics...),
+			Hops:       len(path.edgeTypes),
+			Confidence: roundScore(path.confidence),
+			ImpactType: impactTypeForPath(path),
+		})
+	}
+	return result
+}
+
+func impactTypeForPath(path topologyPath) string {
+	if len(path.semantics) == 0 {
+		return "potentially_affected"
+	}
+	for _, semantics := range path.semantics {
+		if semantics == model.TopologyRelationSemanticsObservation || semantics == model.TopologyRelationSemanticsAnnotation {
+			return "potentially_related"
+		}
+	}
+	return "potentially_affected"
+}
+
+func dependencyTargets(nodes map[string]struct{}, edges []model.TopologyEdge) map[string]float64 {
+	result := map[string]float64{}
+	for _, edge := range edges {
+		if !relationPropagates(edge.EdgeType) {
+			continue
+		}
+		if _, ok := nodes[edge.FromNodeKey]; ok {
+			confidence := edgeConfidence(edge)
+			if confidence > result[edge.ToNodeKey] {
+				result[edge.ToNodeKey] = confidence
+			}
+		}
+	}
+	return result
 }
 
 func semanticScore(target, candidate model.OpsEvent) ScoreDetail {
@@ -408,11 +614,74 @@ func matchingNodeKeys(event model.OpsEvent, nodes []model.TopologyNode) map[stri
 			result[node.NodeKey] = struct{}{}
 			continue
 		}
-		if system != "" && (name == system || strings.Contains(key, system)) {
+		if system != "" && name == system {
 			result[node.NodeKey] = struct{}{}
 		}
 	}
 	return result
+}
+
+func relationSemantics(edgeType string) string {
+	switch edgeType {
+	case model.TopologyEdgeTypeObservedWith:
+		return model.TopologyRelationSemanticsObservation
+	case model.TopologyEdgeTypeOwns:
+		return model.TopologyRelationSemanticsOwnership
+	case model.TopologyEdgeTypeSelects, model.TopologyEdgeTypeMemberOf, model.TopologyEdgeTypeExposes:
+		return model.TopologyRelationSemanticsAnnotation
+	case model.TopologyEdgeTypeRunsOn:
+		return model.TopologyRelationSemanticsContainment
+	case model.TopologyEdgeTypeDependsOn, model.TopologyEdgeTypeStoresIn, model.TopologyEdgeTypeReplicatesTo, model.TopologyEdgeTypeConnectsTo:
+		return model.TopologyRelationSemanticsRuntimeDep
+	case model.TopologyEdgeTypeCalls, model.TopologyEdgeTypeRoutesTo, model.TopologyEdgeTypeRegisteredIn:
+		return model.TopologyRelationSemanticsTraffic
+	default:
+		return model.TopologyRelationSemanticsRuntimeDep
+	}
+}
+
+func relationCorrelationBase(edgeType string) float64 {
+	switch relationSemantics(edgeType) {
+	case model.TopologyRelationSemanticsObservation:
+		return 0.2
+	case model.TopologyRelationSemanticsHardDep:
+		return 0.95
+	case model.TopologyRelationSemanticsRuntimeDep, model.TopologyRelationSemanticsTraffic:
+		return 0.9
+	case model.TopologyRelationSemanticsOwnership, model.TopologyRelationSemanticsContainment:
+		return 0.8
+	case model.TopologyRelationSemanticsConfiguration:
+		return 0.65
+	case model.TopologyRelationSemanticsAnnotation:
+		return 0.35
+	default:
+		return 0.5
+	}
+}
+
+func relationPropagates(edgeType string) bool {
+	switch relationSemantics(edgeType) {
+	case model.TopologyRelationSemanticsObservation, model.TopologyRelationSemanticsAnnotation:
+		return false
+	default:
+		return true
+	}
+}
+
+func edgeConfidence(edge model.TopologyEdge) float64 {
+	confidence := 1.0
+	if edge.ResolvedConfidence != nil {
+		confidence = *edge.ResolvedConfidence
+	} else if edge.Confidence != nil {
+		confidence = *edge.Confidence
+	}
+	if confidence < 0 {
+		return 0
+	}
+	if confidence > 1 {
+		return 1
+	}
+	return confidence
 }
 
 func directlyConnected(left, right map[string]struct{}, edges []model.TopologyEdge) bool {
@@ -533,6 +802,17 @@ func intersectsStrings(left, right []string) bool {
 	return false
 }
 
+func stringSet(values []string) map[string]struct{} {
+	result := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result[value] = struct{}{}
+		}
+	}
+	return result
+}
+
 func uniqueStrings(values []string) []string {
 	seen := map[string]struct{}{}
 	result := []string{}
@@ -552,6 +832,10 @@ func uniqueStrings(values []string) []string {
 
 func roundScore(value float64) float64 {
 	return math.Round(value*1000) / 1000
+}
+
+func scoreString(value float64) string {
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.3f", roundScore(value)), "0"), ".")
 }
 
 func intString(value int) string {
