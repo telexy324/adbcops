@@ -70,15 +70,17 @@ func TestTopologyRelationTypeRejectsInvalidSourceTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create relation type: %v", err)
 	}
-	if _, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api"}); err != nil {
+	paymentAPI, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api"})
+	if err != nil {
 		t.Fatalf("upsert service node: %v", err)
 	}
-	if _, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-worker"}); err != nil {
+	paymentWorker, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-worker"})
+	if err != nil {
 		t.Fatalf("upsert worker node: %v", err)
 	}
 	_, err = service.UpsertEdge(context.Background(), EdgeInput{
-		FromNodeKey: "service:payment-api",
-		ToNodeKey:   "service:payment-worker",
+		FromNodeKey: paymentAPI.NodeKey,
+		ToNodeKey:   paymentWorker.NodeKey,
 		EdgeType:    "service_to_database",
 	})
 	if !errors.Is(err, ErrInvalidInput) {
@@ -283,6 +285,89 @@ func TestPreviewMappingReportsUnresolvedAndRejectsSensitiveFields(t *testing.T) 
 	})
 	if !errors.Is(err, ErrSensitiveConfig) {
 		t.Fatalf("expected sensitive config error, got %v", err)
+	}
+}
+
+func TestFindNodeUsesAliasAndReportsAmbiguity(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	prod, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: "prod:service:cmdb:payment-api", Kind: "service", Name: "payment-api", Environment: "prod"})
+	if err != nil {
+		t.Fatalf("upsert prod node: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{NodeKey: "test:service:cmdb:payment-api", Kind: "service", Name: "payment-api", Environment: "test"}); err != nil {
+		t.Fatalf("upsert test node: %v", err)
+	}
+	if _, err := service.AddNodeAlias(context.Background(), prod.ID, AliasInput{Alias: "pay-api", Environment: "prod"}); err != nil {
+		t.Fatalf("add alias: %v", err)
+	}
+	aliasResult, err := service.FindNode(context.Background(), FindNodeInput{Query: "pay-api", Environment: "prod"})
+	if err != nil {
+		t.Fatalf("find alias: %v", err)
+	}
+	if !aliasResult.Matched || aliasResult.Node.NodeKey != "prod:service:cmdb:payment-api" {
+		t.Fatalf("unexpected alias result: %+v", aliasResult)
+	}
+	ambiguous, err := service.FindNode(context.Background(), FindNodeInput{Query: "payment-api"})
+	if err != nil {
+		t.Fatalf("find ambiguous: %v", err)
+	}
+	if !ambiguous.Ambiguous || len(ambiguous.Candidates) != 2 {
+		t.Fatalf("expected ambiguous candidates, got %+v", ambiguous)
+	}
+}
+
+func TestNodeMergeProtectsLockedFieldsAndRecordsConflict(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	created, err := service.UpsertNode(context.Background(), NodeInput{
+		NodeKey:        "prod:service:cmdb:payment-api",
+		Kind:           "service",
+		Name:           "payment-api",
+		Environment:    "prod",
+		SourceType:     model.TopologySourceTypeManual,
+		SourcePriority: 100,
+		LockedFields:   json.RawMessage(`["name"]`),
+	})
+	if err != nil {
+		t.Fatalf("upsert locked node: %v", err)
+	}
+	updated, err := service.UpsertNode(context.Background(), NodeInput{
+		NodeKey:        created.NodeKey,
+		Kind:           "service",
+		Name:           "payment-api-renamed",
+		Environment:    "prod",
+		SourceType:     model.TopologySourceTypeTraceServiceGraph,
+		SourcePriority: 70,
+	})
+	if err != nil {
+		t.Fatalf("upsert lower priority node: %v", err)
+	}
+	if updated.Name != "payment-api" {
+		t.Fatalf("locked name should be preserved, got %+v", updated)
+	}
+	if len(repo.conflicts) != 0 {
+		t.Fatalf("locked field should suppress conflict, got %+v", repo.conflicts)
+	}
+	repo.nodes[created.NodeKey] = model.TopologyNode{
+		ID:             created.ID,
+		NodeKey:        created.NodeKey,
+		Kind:           "service",
+		Name:           "payment-api",
+		SourceType:     model.TopologySourceTypeCMDB,
+		SourcePriority: 90,
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{
+		NodeKey:        created.NodeKey,
+		Kind:           "service",
+		Name:           "payment-api-from-trace",
+		SourceType:     model.TopologySourceTypeTraceServiceGraph,
+		SourcePriority: 70,
+	}); err != nil {
+		t.Fatalf("upsert conflicting node: %v", err)
+	}
+	if len(repo.conflicts) != 1 {
+		t.Fatalf("expected one conflict, got %+v", repo.conflicts)
 	}
 }
 
@@ -494,6 +579,8 @@ type memoryTopologyRepository struct {
 	relationTypes map[string]model.TopologyRelationType
 	sourceConfigs map[int64]model.TopologySourceConfig
 	dataSources   map[int64]model.DataSource
+	aliases       map[int64]model.TopologyNodeAlias
+	conflicts     []model.TopologyConflict
 	audits        []model.TopologyTypeAudit
 }
 
@@ -506,6 +593,7 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		relationTypes: map[string]model.TopologyRelationType{},
 		sourceConfigs: map[int64]model.TopologySourceConfig{},
 		dataSources:   map[int64]model.DataSource{},
+		aliases:       map[int64]model.TopologyNodeAlias{},
 	}
 	for _, key := range []string{
 		"service",
@@ -529,6 +617,13 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 }
 
 func (r *memoryTopologyRepository) UpsertNode(_ context.Context, node *model.TopologyNode) error {
+	if node.ID == 0 {
+		if existing, ok := r.nodes[node.NodeKey]; ok {
+			node.ID = existing.ID
+		} else {
+			node.ID = r.nextID()
+		}
+	}
 	r.nodes[node.NodeKey] = *node
 	return nil
 }
@@ -544,6 +639,78 @@ func (r *memoryTopologyRepository) FindNodeByKey(_ context.Context, nodeKey stri
 		return nil, repository.ErrNotFound
 	}
 	return &node, nil
+}
+
+func (r *memoryTopologyRepository) FindNodeByID(_ context.Context, id int64) (*model.TopologyNode, error) {
+	for _, node := range r.nodes {
+		if node.ID == id {
+			return &node, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) FindTopologyNodes(_ context.Context, filters repository.TopologyNodeLookupFilters) ([]model.TopologyNode, error) {
+	result := []model.TopologyNode{}
+	seen := map[string]struct{}{}
+	for _, node := range r.nodes {
+		if filters.Environment != "" && (node.Environment == nil || *node.Environment != filters.Environment) {
+			continue
+		}
+		if len(filters.Kinds) > 0 && !stringInSlice(node.Kind, filters.Kinds) {
+			continue
+		}
+		matched := node.NodeKey == filters.Query || node.Name == filters.Query || (node.DisplayName != nil && *node.DisplayName == filters.Query)
+		if !matched {
+			for _, alias := range r.aliases {
+				if alias.NodeID == node.ID && alias.Alias == filters.Query {
+					if filters.Environment == "" || alias.Environment == nil || *alias.Environment == filters.Environment {
+						matched = true
+						break
+					}
+				}
+			}
+		}
+		if matched {
+			if _, ok := seen[node.NodeKey]; !ok {
+				result = append(result, node)
+				seen[node.NodeKey] = struct{}{}
+			}
+		}
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) CreateTopologyNodeAlias(_ context.Context, alias *model.TopologyNodeAlias) error {
+	if alias.ID == 0 {
+		alias.ID = r.nextID()
+	}
+	r.aliases[alias.ID] = *alias
+	return nil
+}
+
+func (r *memoryTopologyRepository) DeleteTopologyNodeAlias(_ context.Context, id int64) error {
+	if _, ok := r.aliases[id]; !ok {
+		return repository.ErrNotFound
+	}
+	delete(r.aliases, id)
+	return nil
+}
+
+func (r *memoryTopologyRepository) ListTopologyNodeAliases(_ context.Context, nodeID int64) ([]model.TopologyNodeAlias, error) {
+	result := []model.TopologyNodeAlias{}
+	for _, alias := range r.aliases {
+		if alias.NodeID == nodeID {
+			result = append(result, alias)
+		}
+	}
+	return result, nil
+}
+
+func (r *memoryTopologyRepository) CreateTopologyConflict(_ context.Context, conflict *model.TopologyConflict) error {
+	conflict.ID = int64(len(r.conflicts) + 1)
+	r.conflicts = append(r.conflicts, *conflict)
+	return nil
 }
 
 func (r *memoryTopologyRepository) ListNodes(_ context.Context, _ repository.TopologyFilters) ([]model.TopologyNode, error) {

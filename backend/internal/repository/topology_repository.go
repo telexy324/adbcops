@@ -14,6 +14,12 @@ type TopologyRepository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
 	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
+	FindNodeByID(ctx context.Context, id int64) (*model.TopologyNode, error)
+	FindTopologyNodes(ctx context.Context, filters TopologyNodeLookupFilters) ([]model.TopologyNode, error)
+	CreateTopologyNodeAlias(ctx context.Context, alias *model.TopologyNodeAlias) error
+	DeleteTopologyNodeAlias(ctx context.Context, id int64) error
+	ListTopologyNodeAliases(ctx context.Context, nodeID int64) ([]model.TopologyNodeAlias, error)
+	CreateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error
 	ListNodes(ctx context.Context, filters TopologyFilters) ([]model.TopologyNode, error)
 	ListEdges(ctx context.Context, filters TopologyFilters) ([]model.TopologyEdge, error)
 	ListTopologyNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error)
@@ -40,6 +46,13 @@ type TopologyFilters struct {
 	Cluster     string
 	Namespace   string
 	Kind        string
+	Limit       int
+}
+
+type TopologyNodeLookupFilters struct {
+	Query       string
+	Environment string
+	Kinds       []string
 	Limit       int
 }
 
@@ -72,7 +85,7 @@ func (r *GORMTopologyRepository) UpsertNode(ctx context.Context, node *model.Top
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "node_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"kind", "node_type_id", "name", "display_name", "environment", "cluster", "namespace", "labels", "properties", "source_type", "source_ref", "updated_at",
+			"kind", "node_type_id", "name", "display_name", "environment", "cluster", "namespace", "labels", "properties", "source_type", "source_priority", "locked_fields", "resolved_attributes", "source_ref", "updated_at",
 		}),
 	}).Create(node).Error; err != nil {
 		return fmt.Errorf("upsert topology node: %w", err)
@@ -103,6 +116,17 @@ func (r *GORMTopologyRepository) FindNodeByKey(ctx context.Context, nodeKey stri
 	return &node, nil
 }
 
+func (r *GORMTopologyRepository) FindNodeByID(ctx context.Context, id int64) (*model.TopologyNode, error) {
+	var node model.TopologyNode
+	if err := r.db.WithContext(ctx).First(&node, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find topology node by id: %w", err)
+	}
+	return &node, nil
+}
+
 func (r *GORMTopologyRepository) ListNodes(ctx context.Context, filters TopologyFilters) ([]model.TopologyNode, error) {
 	limit := filters.Limit
 	if limit <= 0 || limit > 1000 {
@@ -126,6 +150,68 @@ func (r *GORMTopologyRepository) ListNodes(ctx context.Context, filters Topology
 		return nil, fmt.Errorf("list topology nodes: %w", err)
 	}
 	return nodes, nil
+}
+
+func (r *GORMTopologyRepository) FindTopologyNodes(ctx context.Context, filters TopologyNodeLookupFilters) ([]model.TopologyNode, error) {
+	limit := filters.Limit
+	if limit <= 0 || limit > 20 {
+		limit = 10
+	}
+	queryText := filters.Query
+	query := r.db.WithContext(ctx).
+		Model(&model.TopologyNode{}).
+		Distinct("topology_node.*").
+		Joins("LEFT JOIN topology_node_alias ON topology_node_alias.node_id = topology_node.id").
+		Where("topology_node.node_key = ? OR topology_node.name = ? OR topology_node.display_name = ? OR topology_node_alias.alias = ?", queryText, queryText, queryText, queryText).
+		Order("topology_node.source_priority DESC, topology_node.id ASC").
+		Limit(limit)
+	if filters.Environment != "" {
+		query = query.Where("(topology_node.environment = ? OR topology_node_alias.environment = ?)", filters.Environment, filters.Environment)
+	}
+	if len(filters.Kinds) > 0 {
+		query = query.Where("topology_node.kind IN ?", filters.Kinds)
+	}
+	var nodes []model.TopologyNode
+	if err := query.Find(&nodes).Error; err != nil {
+		return nil, fmt.Errorf("find topology nodes: %w", err)
+	}
+	return nodes, nil
+}
+
+func (r *GORMTopologyRepository) CreateTopologyNodeAlias(ctx context.Context, alias *model.TopologyNodeAlias) error {
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "node_id"}, {Name: "alias"}},
+		DoUpdates: clause.AssignmentColumns([]string{"alias_type", "environment", "source_type", "confidence"}),
+	}).Create(alias).Error; err != nil {
+		return fmt.Errorf("create topology node alias: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) DeleteTopologyNodeAlias(ctx context.Context, id int64) error {
+	result := r.db.WithContext(ctx).Delete(&model.TopologyNodeAlias{}, id)
+	if result.Error != nil {
+		return fmt.Errorf("delete topology node alias: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) ListTopologyNodeAliases(ctx context.Context, nodeID int64) ([]model.TopologyNodeAlias, error) {
+	var aliases []model.TopologyNodeAlias
+	if err := r.db.WithContext(ctx).Where("node_id = ?", nodeID).Order("alias ASC").Find(&aliases).Error; err != nil {
+		return nil, fmt.Errorf("list topology node aliases: %w", err)
+	}
+	return aliases, nil
+}
+
+func (r *GORMTopologyRepository) CreateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error {
+	if err := r.db.WithContext(ctx).Create(conflict).Error; err != nil {
+		return fmt.Errorf("create topology conflict: %w", err)
+	}
+	return nil
 }
 
 func (r *GORMTopologyRepository) ListEdges(ctx context.Context, filters TopologyFilters) ([]model.TopologyEdge, error) {

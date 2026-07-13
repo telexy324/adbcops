@@ -34,6 +34,19 @@ func (h *TopologyHandler) Graph(c *gin.Context) {
 	success(c, graph)
 }
 
+func (h *TopologyHandler) FindNode(c *gin.Context) {
+	var request topologysvc.FindNodeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.FindNode(c.Request.Context(), request)
+	if handleTopologyError(c, err, "find topology node failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *TopologyHandler) ListNodeTypes(c *gin.Context) {
 	nodeTypes, err := h.service.ListNodeTypes(c.Request.Context())
 	if handleTopologyError(c, err, "list topology node types failed") {
@@ -302,6 +315,47 @@ func (h *TopologyHandler) UpsertNode(c *gin.Context) {
 		return
 	}
 	success(c, node)
+}
+
+func (h *TopologyHandler) ListNodeAliases(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	aliases, err := h.service.ListNodeAliases(c.Request.Context(), id)
+	if handleTopologyError(c, err, "list topology node aliases failed") {
+		return
+	}
+	success(c, aliases)
+}
+
+func (h *TopologyHandler) AddNodeAlias(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.AliasInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	alias, err := h.service.AddNodeAlias(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "add topology node alias failed") {
+		return
+	}
+	success(c, alias)
+}
+
+func (h *TopologyHandler) DeleteNodeAlias(c *gin.Context) {
+	aliasID, err := strconv.ParseInt(c.Param("aliasId"), 10, 64)
+	if err != nil || aliasID <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	if err := h.service.DeleteNodeAlias(c.Request.Context(), aliasID); handleTopologyError(c, err, "delete topology node alias failed") {
+		return
+	}
+	success(c, gin.H{"deleted": true})
 }
 
 func (h *TopologyHandler) UpsertEdge(c *gin.Context) {

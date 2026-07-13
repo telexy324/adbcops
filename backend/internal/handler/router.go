@@ -84,6 +84,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.GET("/downstream", dependencies.TopologyHandler.Downstream)
 		topologyRoutes.GET("/common-dependencies", dependencies.TopologyHandler.CommonDependencies)
 		topologyRoutes.GET("/blast-radius", dependencies.TopologyHandler.BlastRadius)
+		topologyRoutes.POST("/find-node", dependencies.TopologyHandler.FindNode)
 		topologyRoutes.GET("/node-types", dependencies.TopologyHandler.ListNodeTypes)
 		topologyRoutes.POST("/node-types", dependencies.RequireAdmin, dependencies.TopologyHandler.CreateNodeType)
 		topologyRoutes.PUT("/node-types/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.UpdateNodeType)
@@ -102,6 +103,9 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.POST("/sources/:id/test", dependencies.RequireAdmin, dependencies.TopologyHandler.TestSource)
 		topologyRoutes.POST("/sources/:id/preview", dependencies.RequireAdmin, dependencies.TopologyHandler.PreviewSource)
 		topologyRoutes.POST("/nodes", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertNode)
+		topologyRoutes.GET("/nodes/:id/aliases", dependencies.TopologyHandler.ListNodeAliases)
+		topologyRoutes.POST("/nodes/:id/aliases", dependencies.RequireAdmin, dependencies.TopologyHandler.AddNodeAlias)
+		topologyRoutes.DELETE("/nodes/:id/aliases/:aliasId", dependencies.RequireAdmin, dependencies.TopologyHandler.DeleteNodeAlias)
 		topologyRoutes.POST("/edges", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertEdge)
 		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
 	}

@@ -33,6 +33,12 @@ type Repository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
 	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
+	FindNodeByID(ctx context.Context, id int64) (*model.TopologyNode, error)
+	FindTopologyNodes(ctx context.Context, filters repository.TopologyNodeLookupFilters) ([]model.TopologyNode, error)
+	CreateTopologyNodeAlias(ctx context.Context, alias *model.TopologyNodeAlias) error
+	DeleteTopologyNodeAlias(ctx context.Context, id int64) error
+	ListTopologyNodeAliases(ctx context.Context, nodeID int64) ([]model.TopologyNodeAlias, error)
+	CreateTopologyConflict(ctx context.Context, conflict *model.TopologyConflict) error
 	ListNodes(ctx context.Context, filters repository.TopologyFilters) ([]model.TopologyNode, error)
 	ListEdges(ctx context.Context, filters repository.TopologyFilters) ([]model.TopologyEdge, error)
 	ListTopologyNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error)
@@ -64,17 +70,20 @@ type Service struct {
 }
 
 type NodeInput struct {
-	NodeKey     string          `json:"nodeKey"`
-	Kind        string          `json:"kind"`
-	Name        string          `json:"name"`
-	DisplayName *string         `json:"displayName"`
-	Environment string          `json:"environment"`
-	Cluster     string          `json:"cluster"`
-	Namespace   string          `json:"namespace"`
-	Labels      json.RawMessage `json:"labels"`
-	Properties  json.RawMessage `json:"properties"`
-	SourceType  string          `json:"sourceType"`
-	SourceRef   json.RawMessage `json:"sourceRef"`
+	NodeKey            string          `json:"nodeKey"`
+	Kind               string          `json:"kind"`
+	Name               string          `json:"name"`
+	DisplayName        *string         `json:"displayName"`
+	Environment        string          `json:"environment"`
+	Cluster            string          `json:"cluster"`
+	Namespace          string          `json:"namespace"`
+	Labels             json.RawMessage `json:"labels"`
+	Properties         json.RawMessage `json:"properties"`
+	SourceType         string          `json:"sourceType"`
+	SourcePriority     int             `json:"sourcePriority"`
+	LockedFields       json.RawMessage `json:"lockedFields"`
+	ResolvedAttributes json.RawMessage `json:"resolvedAttributes"`
+	SourceRef          json.RawMessage `json:"sourceRef"`
 }
 
 type EdgeInput struct {
@@ -252,6 +261,28 @@ type edgeMappingSpec struct {
 type lookupMappingSpec struct {
 	NodeType            string `json:"nodeType"`
 	ExternalKeyTemplate string `json:"externalKeyTemplate"`
+}
+
+type AliasInput struct {
+	Alias       string   `json:"alias"`
+	AliasType   *string  `json:"aliasType"`
+	Environment string   `json:"environment"`
+	SourceType  string   `json:"sourceType"`
+	Confidence  *float64 `json:"confidence"`
+}
+
+type FindNodeInput struct {
+	Query       string   `json:"query"`
+	Environment string   `json:"environment"`
+	NodeTypes   []string `json:"nodeTypes"`
+	Limit       int      `json:"limit"`
+}
+
+type FindNodeResult struct {
+	Matched    bool                 `json:"matched"`
+	Ambiguous  bool                 `json:"ambiguous"`
+	Node       *model.TopologyNode  `json:"node,omitempty"`
+	Candidates []model.TopologyNode `json:"candidates"`
 }
 
 func NewService(repository Repository, k8sReader K8sReader) *Service {
@@ -614,6 +645,95 @@ func (s *Service) PreviewMapping(_ context.Context, input MappingPreviewInput) (
 	return result, nil
 }
 
+func (s *Service) AddNodeAlias(ctx context.Context, nodeID int64, input AliasInput) (*model.TopologyNodeAlias, error) {
+	if nodeID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	node, err := s.repository.FindNodeByID(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	aliasValue := strings.TrimSpace(input.Alias)
+	if aliasValue == "" || len(aliasValue) > 255 {
+		return nil, ErrInvalidInput
+	}
+	if input.Confidence != nil && (*input.Confidence < 0 || *input.Confidence > 1) {
+		return nil, ErrInvalidInput
+	}
+	environment := cleanString(input.Environment)
+	if environment == nil {
+		environment = node.Environment
+	}
+	sourceType := cleanString(input.SourceType)
+	if sourceType == nil {
+		defaultSource := model.TopologySourceManual
+		sourceType = &defaultSource
+	}
+	alias := &model.TopologyNodeAlias{
+		NodeID:      nodeID,
+		Alias:       aliasValue,
+		AliasType:   cleanStringPtr(input.AliasType),
+		Environment: environment,
+		SourceType:  sourceType,
+		Confidence:  input.Confidence,
+	}
+	if err := s.repository.CreateTopologyNodeAlias(ctx, alias); err != nil {
+		return nil, err
+	}
+	return alias, nil
+}
+
+func (s *Service) ListNodeAliases(ctx context.Context, nodeID int64) ([]model.TopologyNodeAlias, error) {
+	if nodeID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.ListTopologyNodeAliases(ctx, nodeID)
+}
+
+func (s *Service) DeleteNodeAlias(ctx context.Context, aliasID int64) error {
+	if aliasID <= 0 {
+		return ErrInvalidInput
+	}
+	return s.repository.DeleteTopologyNodeAlias(ctx, aliasID)
+}
+
+func (s *Service) FindNode(ctx context.Context, input FindNodeInput) (*FindNodeResult, error) {
+	query := strings.TrimSpace(input.Query)
+	if query == "" {
+		return nil, ErrInvalidInput
+	}
+	nodeTypes := make([]string, 0, len(input.NodeTypes))
+	for _, nodeType := range input.NodeTypes {
+		nodeType = strings.TrimSpace(nodeType)
+		if nodeType == "" {
+			continue
+		}
+		if !validTypeKey(nodeType) {
+			return nil, ErrInvalidInput
+		}
+		nodeTypes = append(nodeTypes, nodeType)
+	}
+	nodes, err := s.repository.FindTopologyNodes(ctx, repository.TopologyNodeLookupFilters{
+		Query:       query,
+		Environment: strings.TrimSpace(input.Environment),
+		Kinds:       nodeTypes,
+		Limit:       input.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := &FindNodeResult{Candidates: nodes}
+	if len(nodes) == 1 {
+		result.Matched = true
+		result.Node = &nodes[0]
+		return result, nil
+	}
+	if len(nodes) > 1 {
+		result.Ambiguous = true
+	}
+	return result, nil
+}
+
 func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.TopologyNode, error) {
 	node, err := normalizeNode(input)
 	if err != nil {
@@ -627,6 +747,11 @@ func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.Topol
 		return nil, ErrTopologyTypeDisabled
 	}
 	node.NodeTypeID = &nodeType.ID
+	if existing, err := s.repository.FindNodeByKey(ctx, node.NodeKey); err == nil {
+		node = s.mergeNode(ctx, existing, node)
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
 	if err := s.repository.UpsertNode(ctx, node); err != nil {
 		return nil, err
 	}
@@ -1560,31 +1685,72 @@ func normalizeNode(input NodeInput) (*model.TopologyNode, error) {
 		return nil, ErrInvalidInput
 	}
 	if nodeKey == "" {
-		nodeKey = strings.ToLower(kind + ":" + name)
+		nodeKey = externalKey(input.Environment, kind, input.SourceType, name)
 	}
 	labelsJSON := validJSONOrEmpty(input.Labels)
 	propertiesJSON := validJSONOrEmpty(input.Properties)
+	lockedFieldsJSON := validJSONOrDefault(input.LockedFields, []byte(`[]`))
+	resolvedAttributesJSON := validJSONOrDefault(input.ResolvedAttributes, []byte(`{}`))
 	sourceRef := validJSONOrEmpty(input.SourceRef)
-	if labelsJSON == nil || propertiesJSON == nil || sourceRef == nil {
+	if labelsJSON == nil || propertiesJSON == nil || lockedFieldsJSON == nil || resolvedAttributesJSON == nil || sourceRef == nil {
 		return nil, ErrInvalidInput
 	}
 	sourceType := strings.TrimSpace(input.SourceType)
 	if sourceType == "" {
 		sourceType = model.TopologySourceManual
 	}
+	sourcePriority := input.SourcePriority
+	if sourcePriority < 0 || sourcePriority > 100 {
+		return nil, ErrInvalidInput
+	}
+	if sourcePriority == 0 {
+		sourcePriority = defaultSourcePriority(sourceType)
+	}
 	return &model.TopologyNode{
-		NodeKey:     nodeKey,
-		Kind:        kind,
-		Name:        name,
-		DisplayName: cleanStringPtr(input.DisplayName),
-		Environment: cleanString(input.Environment),
-		Cluster:     cleanString(input.Cluster),
-		Namespace:   cleanString(input.Namespace),
-		Labels:      labelsJSON,
-		Properties:  propertiesJSON,
-		SourceType:  sourceType,
-		SourceRef:   sourceRef,
+		NodeKey:            nodeKey,
+		Kind:               kind,
+		Name:               name,
+		DisplayName:        cleanStringPtr(input.DisplayName),
+		Environment:        cleanString(input.Environment),
+		Cluster:            cleanString(input.Cluster),
+		Namespace:          cleanString(input.Namespace),
+		Labels:             labelsJSON,
+		Properties:         propertiesJSON,
+		SourceType:         sourceType,
+		SourcePriority:     sourcePriority,
+		LockedFields:       lockedFieldsJSON,
+		ResolvedAttributes: resolvedAttributesJSON,
+		SourceRef:          sourceRef,
 	}, nil
+}
+
+func (s *Service) mergeNode(ctx context.Context, existing, incoming *model.TopologyNode) *model.TopologyNode {
+	lockedFields := lockedFieldSet(existing.LockedFields)
+	if incoming.SourcePriority < existing.SourcePriority {
+		if !lockedFields["name"] {
+			_ = s.repository.CreateTopologyConflict(ctx, &model.TopologyConflict{
+				ConflictType: "attribute_conflict",
+				Status:       "open",
+				NodeID:       &existing.ID,
+				Description:  "lower priority source attempted to update topology node name",
+				Candidates:   conflictCandidates(existing.Name, incoming.Name),
+			})
+		}
+		return existing
+	}
+	if lockedFields["name"] {
+		incoming.Name = existing.Name
+	}
+	if lockedFields["display_name"] {
+		incoming.DisplayName = existing.DisplayName
+	}
+	if lockedFields["properties"] {
+		incoming.Properties = existing.Properties
+	}
+	if len(existing.LockedFields) > 0 && string(existing.LockedFields) != "[]" {
+		incoming.LockedFields = existing.LockedFields
+	}
+	return incoming
 }
 
 func normalizeEdge(input EdgeInput) (*model.TopologyEdge, error) {
@@ -1630,6 +1796,44 @@ func validJSONOrEmpty(raw json.RawMessage) []byte {
 		return nil
 	}
 	return raw
+}
+
+func externalKey(environment, nodeType, sourceType, identity string) string {
+	environment = strings.TrimSpace(environment)
+	if environment == "" {
+		environment = "default"
+	}
+	sourceType = strings.TrimSpace(sourceType)
+	if sourceType == "" {
+		sourceType = model.TopologySourceManual
+	}
+	return strings.ToLower(environment + ":" + strings.TrimSpace(nodeType) + ":" + sourceType + ":" + strings.TrimSpace(identity))
+}
+
+func lockedFieldSet(raw []byte) map[string]bool {
+	result := map[string]bool{}
+	if len(raw) == 0 {
+		return result
+	}
+	var fields []string
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return result
+	}
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field != "" {
+			result[field] = true
+		}
+	}
+	return result
+}
+
+func conflictCandidates(existing, incoming string) []byte {
+	payload, _ := json.Marshal([]map[string]string{
+		{"source": "existing", "value": existing},
+		{"source": "incoming", "value": incoming},
+	})
+	return payload
 }
 
 func validJSONOrDefault(raw json.RawMessage, fallback []byte) []byte {
