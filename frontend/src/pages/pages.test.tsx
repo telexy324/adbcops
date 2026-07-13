@@ -131,6 +131,25 @@ vi.mock("@/api/operations", () => ({
     ],
     activities: [],
   }),
+  getSimilarIncidents: vi.fn().mockResolvedValue([
+    {
+      incident: {
+        id: 2,
+        incidentKey: "INC-20260701-0002",
+        title: "支付服务发布后错误率升高",
+        severity: "major",
+        status: "resolved",
+        environment: "prod",
+        systemName: "payment",
+        createdAt: "2026-07-01T10:00:00Z",
+        updatedAt: "2026-07-01T11:00:00Z",
+      },
+      score: 0.78,
+      reasons: ["error template matched", "shared payment tag"],
+      advisoryOnly: true,
+      notice: "仅供参考，不自动确认历史根因。",
+    },
+  ]),
   getTimeline: vi.fn().mockResolvedValue({
     from: "2026-07-12T08:00:00Z",
     to: "2026-07-12T10:30:00Z",
@@ -375,6 +394,10 @@ describe("OperationsPage", () => {
     expect(
       screen.getByRole("heading", { name: "Root Cause Candidates" }),
     ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "历史相似 Incident" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("仅供参考，不自动确认历史根因。")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "报告导出 Markdown" }),
     ).toBeInTheDocument();

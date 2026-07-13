@@ -110,6 +110,14 @@ export type IncidentDetail = {
   activities: IncidentActivity[];
 };
 
+export type SimilarIncident = {
+  incident: Incident;
+  score: number;
+  reasons: string[];
+  advisoryOnly: boolean;
+  notice: string;
+};
+
 export type TimelineItem = {
   eventId: number;
   time: string;
@@ -181,6 +189,14 @@ export async function listIncidents() {
 export async function getIncident(incidentId: number) {
   const response = await apiClient.get<ApiEnvelope<IncidentDetail>>(
     `/api/incidents/${incidentId}`,
+  );
+  return response.data.data;
+}
+
+export async function getSimilarIncidents(incidentId: number, limit = 5) {
+  const response = await apiClient.get<ApiEnvelope<SimilarIncident[]>>(
+    `/api/incidents/${incidentId}/similar`,
+    { params: { limit } },
   );
   return response.data.data;
 }

@@ -16,12 +16,14 @@ import {
   confirmRootCause,
   getBlastRadius,
   getIncident,
+  getSimilarIncidents,
   getTimeline,
   getTopologyGraph,
   listIncidents,
   toAPIErrorMessage,
   type BlastRadius,
   type IncidentDetail,
+  type SimilarIncident,
   type TimelineItem,
   type TopologyGraph,
   type TopologyNode,
@@ -77,6 +79,12 @@ export function OperationsPage() {
     enabled: Boolean(anchorEventId),
   });
 
+  const similarQuery = useQuery({
+    queryKey: ["incidents", selectedIncidentId, "similar"],
+    queryFn: () => getSimilarIncidents(selectedIncidentId ?? 0, 5),
+    enabled: selectedIncidentId !== null,
+  });
+
   const blastMutation = useMutation({
     mutationFn: getBlastRadius,
     onSuccess: (result) => {
@@ -100,8 +108,13 @@ export function OperationsPage() {
   });
 
   const markdown = useMemo(
-    () => buildIncidentMarkdown(incidentQuery.data, timelineQuery.data?.items),
-    [incidentQuery.data, timelineQuery.data?.items],
+    () =>
+      buildIncidentMarkdown(
+        incidentQuery.data,
+        timelineQuery.data?.items,
+        similarQuery.data,
+      ),
+    [incidentQuery.data, timelineQuery.data?.items, similarQuery.data],
   );
 
   async function copyMarkdown() {
@@ -186,6 +199,8 @@ export function OperationsPage() {
             loading={incidentQuery.isLoading}
             timelineItems={timelineQuery.data?.items ?? []}
             timelineLoading={timelineQuery.isLoading}
+            similarIncidents={similarQuery.data ?? []}
+            similarLoading={similarQuery.isLoading}
             markdown={markdown}
             onCopyMarkdown={copyMarkdown}
             confirmingId={
@@ -433,6 +448,8 @@ function IncidentWorkspace({
   loading,
   timelineItems,
   timelineLoading,
+  similarIncidents,
+  similarLoading,
   markdown,
   onCopyMarkdown,
   confirmingId,
@@ -442,6 +459,8 @@ function IncidentWorkspace({
   loading: boolean;
   timelineItems: TimelineItem[];
   timelineLoading: boolean;
+  similarIncidents: SimilarIncident[];
+  similarLoading: boolean;
   markdown: string;
   onCopyMarkdown: () => void;
   confirmingId: number | null;
@@ -610,6 +629,11 @@ function IncidentWorkspace({
         </Card>
       </div>
 
+      <SimilarIncidentsCard
+        incidents={similarIncidents}
+        loading={similarLoading}
+      />
+
       <Card>
         <CardHeader>
           <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
@@ -660,6 +684,64 @@ function NodePill({ node }: { node: TopologyNode }) {
         </p>
       )}
     </div>
+  );
+}
+
+function SimilarIncidentsCard({
+  incidents,
+  loading,
+}: {
+  incidents: SimilarIncident[];
+  loading: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>历史相似 Incident</CardTitle>
+        <CardDescription>
+          基于标签、错误模板和文本相似度匹配；仅供参考，不会自动确认历史根因。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading && <LoadingLine text="匹配历史 Incident..." />}
+        {!loading && incidents.length === 0 && (
+          <EmptyLine text="暂无相似历史案例。" />
+        )}
+        {!loading &&
+          incidents.map((item) => (
+            <div
+              key={item.incident.id}
+              className="rounded-xl border border-amber-200 bg-amber-50/60 p-3"
+            >
+              <div className="flex flex-col justify-between gap-2 md:flex-row md:items-start">
+                <div>
+                  <p className="font-medium text-slate-900">
+                    {item.incident.title}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    {item.incident.incidentKey} ·{" "}
+                    {item.incident.environment ?? "unknown"} ·{" "}
+                    {item.incident.status}
+                  </p>
+                </div>
+                <Badge className="bg-amber-100 text-amber-800">
+                  {`${(item.score * 100).toFixed(0)}% similar`}
+                </Badge>
+              </div>
+              <p className="mt-3 text-xs font-medium text-amber-800">
+                {item.notice || "仅供参考，不自动确认历史根因。"}
+              </p>
+              {item.reasons.length > 0 && (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
+                  {item.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -780,6 +862,7 @@ function EmptyLine({
 function buildIncidentMarkdown(
   detail?: IncidentDetail,
   timelineItems: TimelineItem[] = [],
+  similarIncidents: SimilarIncident[] = [],
 ) {
   if (!detail) {
     return "";
@@ -834,6 +917,17 @@ function buildIncidentMarkdown(
           )
           .join("\n")
       : "- 暂无候选根因。",
+    "",
+    "## Similar Incidents",
+    "",
+    similarIncidents.length
+      ? similarIncidents
+          .map(
+            (item) =>
+              `- ${item.incident.incidentKey}: ${item.incident.title} (${(item.score * 100).toFixed(0)}%) — ${item.notice || "仅供参考，不自动确认历史根因。"}`,
+          )
+          .join("\n")
+      : "- 暂无相似历史案例。",
     "",
     "## Follow-ups",
     "",
