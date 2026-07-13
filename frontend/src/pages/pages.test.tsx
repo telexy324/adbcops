@@ -17,14 +17,17 @@ vi.mock("@/api/auth", () => ({
 }));
 
 vi.mock("@/api/knowledge", () => ({
+  autoReviewQuality: vi.fn(),
   askKnowledge: vi.fn(),
   getDocumentChunks: vi.fn(),
+  listQualityStandards: vi.fn().mockResolvedValue([]),
   listDocuments: vi.fn().mockResolvedValue([]),
   reprocessDocument: vi.fn(),
   reviewAction: vi.fn(),
   reviewQuality: vi.fn(),
   toAPIErrorMessage: vi.fn(() => "请求失败"),
   uploadDocument: vi.fn(),
+  uploadQualityStandard: vi.fn(),
 }));
 
 vi.mock("@/api/analysis", () => ({

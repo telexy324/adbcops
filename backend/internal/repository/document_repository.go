@@ -19,6 +19,9 @@ type DocumentRepository interface {
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
 	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
+	CreateQualityStandard(ctx context.Context, standard *model.KBQualityStandard) error
+	ListQualityStandards(ctx context.Context, enabledOnly bool) ([]model.KBQualityStandard, error)
+	FindQualityStandardsByIDs(ctx context.Context, ids []int64) ([]model.KBQualityStandard, error)
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 	ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error)
 	ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error)
@@ -138,6 +141,42 @@ func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64,
 	return &updated, nil
 }
 
+func (r *GORMUserRepository) CreateQualityStandard(ctx context.Context, standard *model.KBQualityStandard) error {
+	if err := r.db.WithContext(ctx).Create(standard).Error; err != nil {
+		return fmt.Errorf("create kb quality standard: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMUserRepository) ListQualityStandards(ctx context.Context, enabledOnly bool) ([]model.KBQualityStandard, error) {
+	var standards []model.KBQualityStandard
+	query := r.db.WithContext(ctx).Order("created_at DESC, id DESC")
+	if enabledOnly {
+		query = query.Where("enabled = ?", true)
+	}
+	if err := query.Find(&standards).Error; err != nil {
+		return nil, fmt.Errorf("list kb quality standards: %w", err)
+	}
+	return standards, nil
+}
+
+func (r *GORMUserRepository) FindQualityStandardsByIDs(ctx context.Context, ids []int64) ([]model.KBQualityStandard, error) {
+	var standards []model.KBQualityStandard
+	if len(ids) == 0 {
+		return standards, nil
+	}
+	if err := r.db.WithContext(ctx).
+		Where("id IN ? AND enabled = ?", ids, true).
+		Order("id ASC").
+		Find(&standards).Error; err != nil {
+		return nil, fmt.Errorf("find kb quality standards: %w", err)
+	}
+	if len(standards) != len(uniqueInt64(ids)) {
+		return nil, ErrNotFound
+	}
+	return standards, nil
+}
+
 func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error) {
 	var chunks []model.KBChunk
 	if limit <= 0 {
@@ -241,4 +280,20 @@ func (r *GORMUserRepository) UpsertChunkEmbeddings(ctx context.Context, embeddin
 		return fmt.Errorf("upsert kb chunk embeddings: %w", err)
 	}
 	return nil
+}
+
+func uniqueInt64(values []int64) []int64 {
+	seen := map[int64]struct{}{}
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

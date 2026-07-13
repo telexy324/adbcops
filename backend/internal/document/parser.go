@@ -16,17 +16,24 @@ func ExtractText(document *model.KBDocument) (string, error) {
 	if document == nil || strings.TrimSpace(document.FilePath) == "" {
 		return "", ErrInvalidFile
 	}
-	switch document.FileType {
+	return ExtractTextFromFile(document.FilePath, document.FileType)
+}
+
+func ExtractTextFromFile(path, fileType string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", ErrInvalidFile
+	}
+	switch fileType {
 	case model.DocumentFileTypeMarkdown, model.DocumentFileTypeText:
-		content, err := readTextFile(document.FilePath)
+		content, err := readTextFile(path)
 		if err != nil {
 			return "", err
 		}
 		return string(content), nil
 	case model.DocumentFileTypeDocx:
-		return extractDocxText(document.FilePath)
+		return extractDocxText(path)
 	case model.DocumentFileTypeXlsx:
-		return extractXlsxText(document.FilePath)
+		return extractXlsxText(path)
 	default:
 		return "", ErrUnsupportedExt
 	}

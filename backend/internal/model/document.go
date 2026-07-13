@@ -53,6 +53,23 @@ func (KBDocument) TableName() string {
 	return "kb_document"
 }
 
+type KBQualityStandard struct {
+	ID        int64     `gorm:"column:id;primaryKey" json:"id"`
+	Title     string    `gorm:"column:title;size:255;not null" json:"title"`
+	FileName  string    `gorm:"column:file_name;size:255;not null" json:"fileName"`
+	FilePath  string    `gorm:"column:file_path;not null" json:"filePath"`
+	FileType  string    `gorm:"column:file_type;size:50;not null" json:"fileType"`
+	Content   string    `gorm:"column:content;not null" json:"content"`
+	Enabled   bool      `gorm:"column:enabled;not null" json:"enabled"`
+	CreatedBy *int64    `gorm:"column:created_by" json:"createdBy,omitempty"`
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+}
+
+func (KBQualityStandard) TableName() string {
+	return "kb_quality_standard"
+}
+
 type KBChunk struct {
 	ID                int64     `gorm:"column:id;primaryKey" json:"id"`
 	DocumentID        int64     `gorm:"column:document_id;not null" json:"documentId"`

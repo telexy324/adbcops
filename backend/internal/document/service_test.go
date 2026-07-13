@@ -224,6 +224,35 @@ func TestReviewQualitySetsStatusByScore(t *testing.T) {
 	}
 }
 
+func TestAutoReviewQualityUsesDefaultAndCustomStandards(t *testing.T) {
+	store := newFakeRepository()
+	service := newTestServiceWithChunk(t, store, t.TempDir(), 4096, 120, 10)
+	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	document, err := service.Upload(context.Background(), owner, newFileHeader(t, "guide.md", "# 支付系统\n\n范围：生产环境 payment-api 组件 v1.0。\n\n步骤：检查日志、告警、错误、延迟、指标和数据库连接池，执行命令并确认风险、影响、应急恢复、降级与回滚方案。\n\n负责人：SRE，更新时间：2026-07-13，维护链接和参考变更记录。"), UploadMetadata{Title: "Guide"})
+	if err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	if _, err := service.Reprocess(context.Background(), owner, document.ID); err != nil {
+		t.Fatalf("Reprocess() error = %v", err)
+	}
+	standard, err := service.UploadQualityStandard(context.Background(), admin, newFileHeader(t, "standard.md", "- 必须包含连接池\n- 必须包含回滚方案"), "DB 标准")
+	if err != nil {
+		t.Fatalf("UploadQualityStandard() error = %v", err)
+	}
+
+	updated, result, err := service.AutoReviewQuality(context.Background(), admin, document.ID, AutoQualityInput{UseDefault: true, StandardIDs: []int64{standard.ID}})
+	if err != nil {
+		t.Fatalf("AutoReviewQuality() error = %v", err)
+	}
+	if updated.QualityScore != result.Score || result.Score < 70 || updated.Status != model.DocumentStatusReviewing {
+		t.Fatalf("updated=%+v result=%+v", updated, result)
+	}
+	if len(result.CriteriaScores) == 0 || !containsString(result.Standards, "DB 标准") || !containsString(result.Standards, "default") {
+		t.Fatalf("quality result missing standards/criteria: %+v", result)
+	}
+}
+
 func TestReviewDecisionRequiresAdminAndPublishableDocument(t *testing.T) {
 	store := newFakeRepository()
 	service := newTestService(t, store, t.TempDir(), 1024)
@@ -381,15 +410,24 @@ func minimalXlsx(t *testing.T, rows [][]string) []byte {
 }
 
 type fakeRepository struct {
-	nextID      int64
-	nextChunkID int64
-	documents   map[int64]*model.KBDocument
-	chunks      map[int64][]model.KBChunk
-	reviews     []model.KBDocumentReview
+	nextID         int64
+	nextChunkID    int64
+	nextStandardID int64
+	documents      map[int64]*model.KBDocument
+	chunks         map[int64][]model.KBChunk
+	standards      map[int64]*model.KBQualityStandard
+	reviews        []model.KBDocumentReview
 }
 
 func newFakeRepository() *fakeRepository {
-	return &fakeRepository{nextID: 1, nextChunkID: 1, documents: make(map[int64]*model.KBDocument), chunks: make(map[int64][]model.KBChunk)}
+	return &fakeRepository{
+		nextID:         1,
+		nextChunkID:    1,
+		nextStandardID: 1,
+		documents:      make(map[int64]*model.KBDocument),
+		chunks:         make(map[int64][]model.KBChunk),
+		standards:      make(map[int64]*model.KBQualityStandard),
+	}
 }
 
 func (f *fakeRepository) CreateDocument(_ context.Context, document *model.KBDocument) error {
@@ -465,6 +503,35 @@ func (f *fakeRepository) RecordDocumentReview(_ context.Context, id int64, revie
 	return document, nil
 }
 
+func (f *fakeRepository) CreateQualityStandard(_ context.Context, standard *model.KBQualityStandard) error {
+	standard.ID = f.nextStandardID
+	f.nextStandardID++
+	f.standards[standard.ID] = standard
+	return nil
+}
+
+func (f *fakeRepository) ListQualityStandards(_ context.Context, enabledOnly bool) ([]model.KBQualityStandard, error) {
+	standards := make([]model.KBQualityStandard, 0, len(f.standards))
+	for _, standard := range f.standards {
+		if !enabledOnly || standard.Enabled {
+			standards = append(standards, *standard)
+		}
+	}
+	return standards, nil
+}
+
+func (f *fakeRepository) FindQualityStandardsByIDs(_ context.Context, ids []int64) ([]model.KBQualityStandard, error) {
+	standards := make([]model.KBQualityStandard, 0, len(ids))
+	for _, id := range ids {
+		standard, ok := f.standards[id]
+		if !ok || !standard.Enabled {
+			return nil, repository.ErrNotFound
+		}
+		standards = append(standards, *standard)
+	}
+	return standards, nil
+}
+
 func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int) ([]model.KBChunk, error) {
 	var results []model.KBChunk
 	for documentID, chunks := range f.chunks {
@@ -486,4 +553,13 @@ func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int
 		}
 	}
 	return results, nil
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }

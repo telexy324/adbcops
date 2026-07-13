@@ -41,6 +41,17 @@ type documentResponse struct {
 	UpdatedAt     string          `json:"updatedAt"`
 }
 
+type qualityStandardResponse struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	FileName  string `json:"fileName"`
+	FileType  string `json:"fileType"`
+	Enabled   bool   `json:"enabled"`
+	CreatedBy *int64 `json:"createdBy,omitempty"`
+	CreatedAt string `json:"createdAt"`
+	Preview   string `json:"preview"`
+}
+
 type chunkResponse struct {
 	ID            int64   `json:"id"`
 	DocumentID    int64   `json:"documentId"`
@@ -53,9 +64,12 @@ type chunkResponse struct {
 }
 
 type reviewDocumentRequest struct {
-	Result  json.RawMessage `json:"result"`
-	Action  string          `json:"action"`
-	Comment string          `json:"comment"`
+	Result      json.RawMessage `json:"result"`
+	Action      string          `json:"action"`
+	Comment     string          `json:"comment"`
+	AutoQuality bool            `json:"autoQuality"`
+	UseDefault  *bool           `json:"useDefault"`
+	StandardIDs []int64         `json:"standardIds"`
 }
 
 type knowledgeSearchRequest struct {
@@ -87,6 +101,40 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		return
 	}
 	success(c, toDocumentResponse(document))
+}
+
+func (h *DocumentHandler) UploadQualityStandard(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadBytes+1024*1024)
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	standard, err := h.service.UploadQualityStandard(c.Request.Context(), actor, fileHeader, c.PostForm("title"))
+	if handleDocumentError(c, err, "upload quality standard failed") {
+		return
+	}
+	success(c, toQualityStandardResponse(standard))
+}
+
+func (h *DocumentHandler) QualityStandards(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	standards, err := h.service.ListQualityStandards(c.Request.Context(), actor)
+	if handleDocumentError(c, err, "list quality standards failed") {
+		return
+	}
+	response := make([]qualityStandardResponse, 0, len(standards))
+	for index := range standards {
+		response = append(response, toQualityStandardResponse(&standards[index]))
+	}
+	success(c, response)
 }
 
 func (h *DocumentHandler) List(c *gin.Context) {
@@ -180,6 +228,25 @@ func (h *DocumentHandler) Review(c *gin.Context) {
 		return
 	}
 	if len(request.Result) == 0 {
+		if request.AutoQuality {
+			useDefault := true
+			if request.UseDefault != nil {
+				useDefault = *request.UseDefault
+			}
+			document, result, err := h.service.AutoReviewQuality(c.Request.Context(), actor, documentID, documentsvc.AutoQualityInput{
+				UseDefault:  useDefault,
+				StandardIDs: request.StandardIDs,
+			})
+			if handleDocumentError(c, err, "auto review document failed") {
+				return
+			}
+			success(c, gin.H{
+				"document":      toDocumentResponse(document),
+				"qualityResult": result,
+				"canPublish":    documentsvc.CanPublish(document),
+			})
+			return
+		}
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 		return
 	}
@@ -280,6 +347,19 @@ func toDocumentResponse(document *model.KBDocument) documentResponse {
 	}
 }
 
+func toQualityStandardResponse(standard *model.KBQualityStandard) qualityStandardResponse {
+	return qualityStandardResponse{
+		ID:        standard.ID,
+		Title:     standard.Title,
+		FileName:  standard.FileName,
+		FileType:  standard.FileType,
+		Enabled:   standard.Enabled,
+		CreatedBy: standard.CreatedBy,
+		CreatedAt: standard.CreatedAt.Format(time.RFC3339),
+		Preview:   snippetText(standard.Content, 180),
+	}
+}
+
 func toChunkResponses(chunks []model.KBChunk) []chunkResponse {
 	response := make([]chunkResponse, 0, len(chunks))
 	for index := range chunks {
@@ -299,4 +379,12 @@ func toChunkResponse(chunk *model.KBChunk) chunkResponse {
 		TokenCount:    chunk.TokenCount,
 		CreatedAt:     chunk.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+func snippetText(content string, limit int) string {
+	runes := []rune(content)
+	if len(runes) <= limit {
+		return content
+	}
+	return string(runes[:limit]) + "..."
 }

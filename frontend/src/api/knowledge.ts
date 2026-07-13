@@ -49,6 +49,26 @@ export type QualityResult = {
   summary: string;
   findings: string[];
   suggestions: string[];
+  criteriaScores?: Array<{
+    name: string;
+    score: number;
+    matched?: string[];
+    missing?: string[];
+    standard: string;
+  }>;
+  standards?: string[];
+  source?: string;
+};
+
+export type QualityStandard = {
+  id: number;
+  title: string;
+  fileName: string;
+  fileType: string;
+  enabled: boolean;
+  createdBy?: number;
+  createdAt: string;
+  preview: string;
 };
 
 export type ReviewResponse = {
@@ -119,6 +139,24 @@ export async function uploadDocument(input: UploadDocumentInput) {
   return response.data.data;
 }
 
+export async function listQualityStandards() {
+  const response = await apiClient.get<ApiEnvelope<QualityStandard[]>>(
+    "/api/documents/quality-standards",
+  );
+  return response.data.data;
+}
+
+export async function uploadQualityStandard(input: { file: File; title: string }) {
+  const form = new FormData();
+  form.append("file", input.file);
+  form.append("title", input.title);
+  const response = await apiClient.post<ApiEnvelope<QualityStandard>>(
+    "/api/documents/quality-standards/upload",
+    form,
+  );
+  return response.data.data;
+}
+
 export async function reprocessDocument(documentId: number) {
   const response = await apiClient.post<ApiEnvelope<DocumentChunksResponse>>(
     `/api/documents/${documentId}/reprocess`,
@@ -140,6 +178,22 @@ export async function reviewQuality(
   const response = await apiClient.post<ApiEnvelope<ReviewResponse>>(
     `/api/documents/${documentId}/review`,
     { result },
+  );
+  return response.data.data;
+}
+
+export async function autoReviewQuality(input: {
+  documentId: number;
+  useDefault: boolean;
+  standardIds: number[];
+}) {
+  const response = await apiClient.post<ApiEnvelope<ReviewResponse>>(
+    `/api/documents/${input.documentId}/review`,
+    {
+      autoQuality: true,
+      useDefault: input.useDefault,
+      standardIds: input.standardIds,
+    },
   );
   return response.data.data;
 }

@@ -154,6 +154,10 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		documentRoutes := router.Group("/api/documents")
 		documentRoutes.Use(dependencies.Authenticate)
 		documentRoutes.POST("/upload", dependencies.DocumentHandler.Upload)
+		documentRoutes.GET("/quality-standards", dependencies.DocumentHandler.QualityStandards)
+		if dependencies.RequireAdmin != nil {
+			documentRoutes.POST("/quality-standards/upload", dependencies.RequireAdmin, dependencies.DocumentHandler.UploadQualityStandard)
+		}
 		documentRoutes.GET("", dependencies.DocumentHandler.List)
 		documentRoutes.GET("/:id", dependencies.DocumentHandler.Get)
 		documentRoutes.GET("/:id/chunks", dependencies.DocumentHandler.Chunks)

@@ -15,14 +15,17 @@ import {
 } from "lucide-react";
 
 import {
+  autoReviewQuality,
   askKnowledge,
   getDocumentChunks,
+  listQualityStandards,
   listDocuments,
   reprocessDocument,
   reviewAction,
   reviewQuality,
   toAPIErrorMessage,
   uploadDocument,
+  uploadQualityStandard,
   type AskResponse,
   type KnowledgeDocument,
   type QualityResult,
@@ -72,6 +75,10 @@ export function KnowledgePage() {
     tags: '["runbook"]',
   });
   const [file, setFile] = useState<File | null>(null);
+  const [standardFile, setStandardFile] = useState<File | null>(null);
+  const [standardTitle, setStandardTitle] = useState("");
+  const [selectedStandardIDs, setSelectedStandardIDs] = useState<number[]>([]);
+  const [useDefaultQuality, setUseDefaultQuality] = useState(true);
   const [qualityJSON, setQualityJSON] = useState(defaultQualityJSON);
   const [comment, setComment] = useState("质量达标，允许进入正式知识库。");
   const [question, setQuestion] = useState("数据库连接池耗尽时如何排查？");
@@ -86,6 +93,11 @@ export function KnowledgePage() {
   });
 
   const documents = documentsQuery.data ?? [];
+  const standardsQuery = useQuery({
+    queryKey: ["knowledge", "quality-standards"],
+    queryFn: listQualityStandards,
+  });
+  const qualityStandards = standardsQuery.data ?? [];
   const selectedDocument = useMemo(
     () => documents.find((document) => document.id === selectedID) ?? null,
     [documents, selectedID],
@@ -118,12 +130,39 @@ export function KnowledgePage() {
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
 
+  const uploadStandardMutation = useMutation({
+    mutationFn: uploadQualityStandard,
+    onSuccess: (standard) => {
+      setStandardTitle("");
+      setStandardFile(null);
+      setSelectedStandardIDs((current) => [...current, standard.id]);
+      setNotice("评分标准上传成功。");
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "quality-standards"] });
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
   const qualityMutation = useMutation({
     mutationFn: ({ id, result }: { id: number; result: QualityResult }) =>
       reviewQuality(id, result),
     onSuccess: (response) => {
       setSelectedID(response.document.id);
       setNotice(`质检完成，状态：${response.document.status}`);
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const autoQualityMutation = useMutation({
+    mutationFn: autoReviewQuality,
+    onSuccess: (response) => {
+      setSelectedID(response.document.id);
+      if (response.qualityResult) {
+        setQualityJSON(JSON.stringify(response.qualityResult, null, 2));
+      }
+      setNotice(`自动评分完成，状态：${response.document.status}`);
       setError(null);
       void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
     },
@@ -169,6 +208,15 @@ export function KnowledgePage() {
     uploadMutation.mutate({ file, ...uploadForm });
   }
 
+  function submitStandard(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!standardFile) {
+      setError("请选择评分标准文件。");
+      return;
+    }
+    uploadStandardMutation.mutate({ file: standardFile, title: standardTitle });
+  }
+
   function submitQuality(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedDocument) {
@@ -180,6 +228,17 @@ export function KnowledgePage() {
     } catch {
       setError("质检 JSON 格式不正确。");
     }
+  }
+
+  function runAutoQuality() {
+    if (!selectedDocument) {
+      return;
+    }
+    autoQualityMutation.mutate({
+      documentId: selectedDocument.id,
+      useDefault: useDefaultQuality,
+      standardIds: selectedStandardIDs,
+    });
   }
 
   function submitAsk(event: FormEvent<HTMLFormElement>) {
@@ -323,6 +382,35 @@ export function KnowledgePage() {
               </Button>
             </form>
 
+            <form className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3" onSubmit={submitStandard}>
+              <div>
+                <p className="text-sm font-semibold text-slate-700">评分标准</p>
+                <p className="mt-1 text-xs text-slate-400">
+                  支持 txt、md、docx、xlsx，上传后可参与自动评分。
+                </p>
+              </div>
+              <Field label="标准标题">
+                <Input
+                  value={standardTitle}
+                  placeholder="数据库知识库评分标准"
+                  onChange={(event) => setStandardTitle(event.target.value)}
+                />
+              </Field>
+              <Field label="标准文件">
+                <Input
+                  type="file"
+                  accept=".md,.txt,.docx,.xlsx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(event) => setStandardFile(event.target.files?.[0] ?? null)}
+                />
+              </Field>
+              <Button className="w-full" variant="outline" disabled={uploadStandardMutation.isPending}>
+                {uploadStandardMutation.isPending && (
+                  <Loader2 className="size-4 animate-spin" />
+                )}
+                上传评分标准
+              </Button>
+            </form>
+
             <div className="space-y-2">
               {documentsQuery.isLoading && (
                 <p className="text-sm text-slate-400">正在加载文档...</p>
@@ -459,6 +547,72 @@ export function KnowledgePage() {
                     onChange={(event) => setComment(event.target.value)}
                   />
                 </Field>
+
+                <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-700">
+                      按评分标准自动评分
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      可同时使用默认标准和自定义标准，结果会写入下方质检 JSON。
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={useDefaultQuality}
+                      onChange={(event) => setUseDefaultQuality(event.target.checked)}
+                    />
+                    使用默认评分标准
+                  </label>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-slate-500">
+                      自定义标准
+                    </p>
+                    {qualityStandards.length === 0 && (
+                      <p className="text-xs text-slate-400">
+                        暂无自定义评分标准，可在左侧上传。
+                      </p>
+                    )}
+                    {qualityStandards.map((standard) => (
+                      <label
+                        key={standard.id}
+                        className="flex items-start gap-2 rounded-lg bg-white p-2 text-xs text-slate-600"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedStandardIDs.includes(standard.id)}
+                          onChange={(event) =>
+                            setSelectedStandardIDs((current) =>
+                              event.target.checked
+                                ? [...current, standard.id]
+                                : current.filter((id) => id !== standard.id),
+                            )
+                          }
+                        />
+                        <span>
+                          <span className="font-semibold text-slate-700">
+                            {standard.title}
+                          </span>
+                          <span className="ml-2 text-slate-400">
+                            {standard.fileName}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={autoQualityMutation.isPending}
+                    onClick={runAutoQuality}
+                  >
+                    {autoQualityMutation.isPending && (
+                      <Loader2 className="size-4 animate-spin" />
+                    )}
+                    自动评分
+                  </Button>
+                </div>
 
                 <form className="space-y-3" onSubmit={submitQuality}>
                   <Field label="质检 JSON">

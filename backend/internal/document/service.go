@@ -46,6 +46,9 @@ type Repository interface {
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
 	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
+	CreateQualityStandard(ctx context.Context, standard *model.KBQualityStandard) error
+	ListQualityStandards(ctx context.Context, enabledOnly bool) ([]model.KBQualityStandard, error)
+	FindQualityStandardsByIDs(ctx context.Context, ids []int64) ([]model.KBQualityStandard, error)
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
 }
 
@@ -70,6 +73,11 @@ type UploadMetadata struct {
 type ReviewDecision struct {
 	Action  string
 	Comment string
+}
+
+type AutoQualityInput struct {
+	UseDefault  bool
+	StandardIDs []int64
 }
 
 func NewService(documents Repository, localFileDir string, maxUploadBytes int64, chunkSize, chunkOverlap int) (*Service, error) {
@@ -224,6 +232,75 @@ func (s *Service) ListChunks(ctx context.Context, actor *model.AppUser, id int64
 	return s.documents.ListDocumentChunks(ctx, document.ID)
 }
 
+func (s *Service) UploadQualityStandard(ctx context.Context, actor *model.AppUser, fileHeader *multipart.FileHeader, title string) (*model.KBQualityStandard, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	if actor.Role != model.RoleAdmin {
+		return nil, ErrAdminRequired
+	}
+	if fileHeader == nil || fileHeader.Size <= 0 {
+		return nil, ErrInvalidFile
+	}
+	if fileHeader.Size > s.maxUploadBytes {
+		return nil, ErrFileTooLarge
+	}
+	originalName, err := normalizeFileName(fileHeader.Filename)
+	if err != nil {
+		return nil, err
+	}
+	fileType, ext, err := detectFileType(originalName)
+	if err != nil {
+		return nil, err
+	}
+	normalizedTitle, err := normalizeTitle(title, originalName)
+	if err != nil {
+		return nil, err
+	}
+	baseDir, err := ensureBaseDir(s.localFileDir)
+	if err != nil {
+		return nil, err
+	}
+	storedPath, err := s.newStoragePath(baseDir, ext)
+	if err != nil {
+		return nil, err
+	}
+	if err := saveMultipartFile(fileHeader, storedPath, s.maxUploadBytes); err != nil {
+		return nil, err
+	}
+	content, err := ExtractTextFromFile(storedPath, fileType)
+	if err != nil {
+		_ = os.Remove(storedPath)
+		return nil, err
+	}
+	if strings.TrimSpace(content) == "" {
+		_ = os.Remove(storedPath)
+		return nil, ErrInvalidFile
+	}
+	createdBy := actor.ID
+	standard := &model.KBQualityStandard{
+		Title:     normalizedTitle,
+		FileName:  originalName,
+		FilePath:  storedPath,
+		FileType:  fileType,
+		Content:   content,
+		Enabled:   true,
+		CreatedBy: &createdBy,
+	}
+	if err := s.documents.CreateQualityStandard(ctx, standard); err != nil {
+		_ = os.Remove(storedPath)
+		return nil, fmt.Errorf("create quality standard: %w", err)
+	}
+	return standard, nil
+}
+
+func (s *Service) ListQualityStandards(ctx context.Context, actor *model.AppUser) ([]model.KBQualityStandard, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	return s.documents.ListQualityStandards(ctx, true)
+}
+
 func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id int64, rawResult json.RawMessage) (*model.KBDocument, QualityResult, error) {
 	if actor == nil || id <= 0 {
 		return nil, QualityResult{}, ErrInvalidInput
@@ -245,6 +322,54 @@ func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id in
 		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
 	}
 	return updated, result, nil
+}
+
+func (s *Service) AutoReviewQuality(ctx context.Context, actor *model.AppUser, id int64, input AutoQualityInput) (*model.KBDocument, QualityResult, error) {
+	if actor == nil || id <= 0 {
+		return nil, QualityResult{}, ErrInvalidInput
+	}
+	if actor.Role != model.RoleAdmin {
+		return nil, QualityResult{}, ErrAdminRequired
+	}
+	document, err := s.documents.FindDocumentByID(ctx, id)
+	if err != nil {
+		return nil, QualityResult{}, err
+	}
+	content, err := s.documentQualityContent(ctx, document)
+	if err != nil {
+		return nil, QualityResult{}, err
+	}
+	var standards []model.KBQualityStandard
+	if len(input.StandardIDs) > 0 {
+		standards, err = s.documents.FindQualityStandardsByIDs(ctx, input.StandardIDs)
+		if err != nil {
+			return nil, QualityResult{}, err
+		}
+	}
+	result := BuildQualityResult(document, content, standards, input.UseDefault)
+	normalized, err := json.Marshal(result)
+	if err != nil {
+		return nil, QualityResult{}, fmt.Errorf("normalize quality result: %w", err)
+	}
+	status := StatusAfterQualityScore(result.Score)
+	updated, err := s.documents.UpdateDocumentQuality(ctx, document.ID, result.Score, normalized, status)
+	if err != nil {
+		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
+	}
+	return updated, result, nil
+}
+
+func (s *Service) documentQualityContent(ctx context.Context, document *model.KBDocument) (string, error) {
+	chunks, err := s.documents.ListDocumentChunks(ctx, document.ID)
+	if err == nil && len(chunks) > 0 {
+		var builder strings.Builder
+		for _, chunk := range chunks {
+			builder.WriteString(chunk.Content)
+			builder.WriteString("\n")
+		}
+		return builder.String(), nil
+	}
+	return ExtractText(document)
 }
 
 func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id int64, input ReviewDecision) (*model.KBDocument, error) {
