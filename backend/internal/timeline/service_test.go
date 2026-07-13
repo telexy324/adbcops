@@ -12,9 +12,10 @@ import (
 func TestBuildTimelineUsesUTCAndStableSortForSameTime(t *testing.T) {
 	instant := time.Date(2026, 7, 12, 10, 0, 0, 0, time.FixedZone("CST", 8*3600))
 	repo := &memoryEventRepository{events: []model.OpsEvent{
-		event(3, instant, "metric_anomaly", "cpu"),
-		event(1, instant, "alert", "firing"),
-		event(2, instant, "alert", "resolved"),
+		event(4, instant, model.EventSourceK8sEvent, "BackOff"),
+		event(3, instant, model.EventSourceMetricAnomaly, "cpu"),
+		event(1, instant, model.EventSourceAlert, "firing"),
+		event(2, instant, model.EventSourceAlert, "resolved"),
 	}}
 	service := NewService(repo, nil)
 	from := instant.Add(-time.Minute)
@@ -27,15 +28,18 @@ func TestBuildTimelineUsesUTCAndStableSortForSameTime(t *testing.T) {
 	if result.Timezone != "UTC" || result.From.Location() != time.UTC || result.To.Location() != time.UTC {
 		t.Fatalf("expected UTC window, got %+v", result)
 	}
-	if len(result.Items) != 3 {
-		t.Fatalf("expected 3 items, got %+v", result.Items)
+	if len(result.Items) != 4 {
+		t.Fatalf("expected 4 items, got %+v", result.Items)
 	}
-	gotIDs := []int64{result.Items[0].EventID, result.Items[1].EventID, result.Items[2].EventID}
-	wantIDs := []int64{1, 2, 3}
+	gotIDs := []int64{result.Items[0].EventID, result.Items[1].EventID, result.Items[2].EventID, result.Items[3].EventID}
+	wantIDs := []int64{1, 2, 3, 4}
 	for i := range wantIDs {
 		if gotIDs[i] != wantIDs[i] {
 			t.Fatalf("stable sort mismatch: got %v want %v", gotIDs, wantIDs)
 		}
+	}
+	if result.SourceCounts[model.EventSourceAlert] != 2 || result.SourceCounts[model.EventSourceMetricAnomaly] != 1 || result.SourceCounts[model.EventSourceK8sEvent] != 1 {
+		t.Fatalf("unexpected source counts: %+v", result.SourceCounts)
 	}
 	for _, item := range result.Items {
 		if item.Time.Location() != time.UTC {

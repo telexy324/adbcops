@@ -286,6 +286,9 @@ func sortEventsStable(events []model.OpsEvent) {
 		if !left.EventTime.Equal(right.EventTime) {
 			return left.EventTime.UTC().Before(right.EventTime.UTC())
 		}
+		if sourcePriority(left.SourceType) != sourcePriority(right.SourceType) {
+			return sourcePriority(left.SourceType) < sourcePriority(right.SourceType)
+		}
 		if left.SourceType != right.SourceType {
 			return left.SourceType < right.SourceType
 		}
@@ -294,4 +297,23 @@ func sortEventsStable(events []model.OpsEvent) {
 		}
 		return left.ID < right.ID
 	})
+}
+
+func sourcePriority(sourceType string) int {
+	switch sourceType {
+	case model.EventSourceAlertmanager, model.EventSourceAlert:
+		return 10
+	case model.EventSourceMetricAnomaly:
+		return 20
+	case model.EventSourceLogAnomaly:
+		return 30
+	case model.EventSourceK8sEvent:
+		return 40
+	case model.EventSourceRelease, model.EventSourceConfigChange, model.EventSourceGitChange, model.EventSourceDBChange:
+		return 50
+	case model.EventSourceManualNote:
+		return 90
+	default:
+		return 100
+	}
 }
