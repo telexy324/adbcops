@@ -422,6 +422,38 @@ func (h *TopologyHandler) SyncComponent(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *TopologyHandler) RunSourceSync(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.RunTopologySyncInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	request.SourceConfigID = id
+	run, err := h.service.RunTopologySync(c.Request.Context(), actor, request)
+	if handleTopologyError(c, err, "run topology sync failed") {
+		return
+	}
+	success(c, run)
+}
+
+func (h *TopologyHandler) ListSyncRuns(c *gin.Context) {
+	sourceConfigID, _ := strconv.ParseInt(c.Query("sourceConfigId"), 10, 64)
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	runs, err := h.service.ListTopologySyncRuns(c.Request.Context(), sourceConfigID, limit)
+	if handleTopologyError(c, err, "list topology sync runs failed") {
+		return
+	}
+	success(c, runs)
+}
+
 func idFromParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -465,6 +497,8 @@ func handleTopologyError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40005, "unsupported topology source")
 	case errors.Is(err, topologysvc.ErrSensitiveConfig):
 		failure(c, http.StatusBadRequest, 40006, "topology config contains sensitive fields")
+	case errors.Is(err, topologysvc.ErrSyncAlreadyRunning):
+		failure(c, http.StatusConflict, 40901, "topology sync already running")
 	default:
 		failure(c, http.StatusInternalServerError, 50096, fallback)
 	}

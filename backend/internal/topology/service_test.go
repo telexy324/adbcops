@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sort"
 	"testing"
 	"time"
 
@@ -711,6 +712,93 @@ func TestSyncComponentTopologyDefaultReaderRequiresReadOnlyDataSource(t *testing
 	}
 }
 
+func TestRunTopologySyncRecordsHistoryAndStatistics(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	dataSourceID := int64(1)
+	repo.sourceConfigs[1] = model.TopologySourceConfig{
+		ID:                1,
+		Name:              "redis-topology",
+		SourceType:        model.TopologySourceTypeRedis,
+		DataSourceID:      &dataSourceID,
+		Enabled:           true,
+		StaleAfterSeconds: 60,
+		Scope:             []byte(`{"environment":"prod"}`),
+	}
+	service := NewService(repo, nil)
+	service.SetComponentTopologyReader(fakeComponentTopologyReader{facts: &ComponentTopologyFacts{
+		Nodes: []ComponentTopologyNode{
+			{Kind: "redis_instance", Identity: "redis-a:6379", Name: "redis-a"},
+			{Kind: "redis_instance", Identity: "redis-b:6379", Name: "redis-b"},
+		},
+		Edges: []ComponentTopologyEdge{
+			{FromKind: "redis_instance", FromIdentity: "redis-a:6379", ToKind: "redis_instance", ToIdentity: "redis-b:6379", Relation: model.TopologyEdgeTypeReplicatesTo},
+		},
+	}})
+
+	run, err := service.RunTopologySync(context.Background(), &model.AppUser{ID: 1}, RunTopologySyncInput{SourceConfigID: 1, TriggerType: "manual"})
+	if err != nil {
+		t.Fatalf("run topology sync: %v", err)
+	}
+	if run.Status != "success" || run.DiscoveredNodes != 2 || run.DiscoveredEdges != 1 || run.FinishedAt == nil {
+		t.Fatalf("unexpected sync run stats: %+v", run)
+	}
+	runs, err := service.ListTopologySyncRuns(context.Background(), 1, 10)
+	if err != nil {
+		t.Fatalf("list sync runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("expected persisted sync history, got %+v", runs)
+	}
+}
+
+func TestRunTopologySyncRejectsConcurrentSameSource(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	if !service.acquireSyncLock(1) {
+		t.Fatal("expected initial sync lock")
+	}
+	defer service.releaseSyncLock(1)
+
+	_, err := service.RunTopologySync(context.Background(), &model.AppUser{ID: 1}, RunTopologySyncInput{SourceConfigID: 1})
+	if !errors.Is(err, ErrSyncAlreadyRunning) {
+		t.Fatalf("expected sync already running error, got %v", err)
+	}
+}
+
+func TestRunTopologySyncTransitionsExpiredEdgesToStale(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	dataSourceID := int64(1)
+	repo.sourceConfigs[1] = model.TopologySourceConfig{
+		ID:                1,
+		Name:              "empty-redis-topology",
+		SourceType:        model.TopologySourceTypeRedis,
+		DataSourceID:      &dataSourceID,
+		Enabled:           true,
+		StaleAfterSeconds: 60,
+	}
+	expiredAt := time.Now().Add(-time.Minute)
+	repo.edges["expired"] = model.TopologyEdge{
+		ID:          1,
+		EdgeKey:     "expired",
+		FromNodeKey: "a",
+		ToNodeKey:   "b",
+		EdgeType:    model.TopologyEdgeTypeConnectsTo,
+		Status:      edgeStatusActive,
+		SourceType:  model.TopologySourceTypeRedis,
+		StaleAt:     &expiredAt,
+	}
+	service := NewService(repo, nil)
+	service.SetComponentTopologyReader(fakeComponentTopologyReader{facts: &ComponentTopologyFacts{}})
+
+	run, err := service.RunTopologySync(context.Background(), &model.AppUser{ID: 1}, RunTopologySyncInput{SourceConfigID: 1})
+	if err != nil {
+		t.Fatalf("run topology sync: %v", err)
+	}
+	if run.StaleEdges != 1 || repo.edges["expired"].Status != edgeStatusStale {
+		t.Fatalf("expected stale transition, run=%+v edge=%+v", run, repo.edges["expired"])
+	}
+}
+
 func TestTopologyTraversalDetectsCycleAndHonorsHops(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	seedManualGraph(t, repo,
@@ -968,6 +1056,7 @@ type memoryTopologyRepository struct {
 	relationTypes    map[string]model.TopologyRelationType
 	sourceConfigs    map[int64]model.TopologySourceConfig
 	dataSources      map[int64]model.DataSource
+	syncRuns         map[int64]model.TopologySyncRun
 	aliases          map[int64]model.TopologyNodeAlias
 	conflicts        []model.TopologyConflict
 	audits           []model.TopologyTypeAudit
@@ -983,6 +1072,7 @@ func newMemoryTopologyRepository() *memoryTopologyRepository {
 		relationTypes:    map[string]model.TopologyRelationType{},
 		sourceConfigs:    map[int64]model.TopologySourceConfig{},
 		dataSources:      map[int64]model.DataSource{},
+		syncRuns:         map[int64]model.TopologySyncRun{},
 		aliases:          map[int64]model.TopologyNodeAlias{},
 	}
 	for _, key := range []string{
@@ -1330,6 +1420,42 @@ func (r *memoryTopologyRepository) DeleteTopologySourceConfig(_ context.Context,
 	}
 	delete(r.sourceConfigs, id)
 	return nil
+}
+
+func (r *memoryTopologyRepository) CreateTopologySyncRun(_ context.Context, run *model.TopologySyncRun) error {
+	if run.ID == 0 {
+		run.ID = r.nextID()
+	}
+	r.syncRuns[run.ID] = *run
+	return nil
+}
+
+func (r *memoryTopologyRepository) UpdateTopologySyncRun(_ context.Context, run *model.TopologySyncRun) error {
+	if _, ok := r.syncRuns[run.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	r.syncRuns[run.ID] = *run
+	return nil
+}
+
+func (r *memoryTopologyRepository) ListTopologySyncRuns(_ context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	result := []model.TopologySyncRun{}
+	for _, run := range r.syncRuns {
+		if sourceConfigID > 0 && run.SourceConfigID != sourceConfigID {
+			continue
+		}
+		result = append(result, run)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID > result[j].ID
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }
 
 func (r *memoryTopologyRepository) FindDataSourceByID(_ context.Context, id int64) (*model.DataSource, error) {

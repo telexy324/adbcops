@@ -209,6 +209,32 @@ func (TopologySourceConfig) TableName() string {
 	return "topology_source_config"
 }
 
+type TopologySyncRun struct {
+	ID              int64      `gorm:"column:id;primaryKey" json:"id"`
+	SourceConfigID  int64      `gorm:"column:source_config_id;not null" json:"sourceConfigId"`
+	TriggerType     string     `gorm:"column:trigger_type;size:30;not null" json:"triggerType"`
+	Status          string     `gorm:"column:status;size:30;not null" json:"status"`
+	DiscoveredNodes int        `gorm:"column:discovered_nodes;not null" json:"discoveredNodes"`
+	DiscoveredEdges int        `gorm:"column:discovered_edges;not null" json:"discoveredEdges"`
+	CreatedNodes    int        `gorm:"column:created_nodes;not null" json:"createdNodes"`
+	UpdatedNodes    int        `gorm:"column:updated_nodes;not null" json:"updatedNodes"`
+	StaleNodes      int        `gorm:"column:stale_nodes;not null" json:"staleNodes"`
+	CreatedEdges    int        `gorm:"column:created_edges;not null" json:"createdEdges"`
+	UpdatedEdges    int        `gorm:"column:updated_edges;not null" json:"updatedEdges"`
+	StaleEdges      int        `gorm:"column:stale_edges;not null" json:"staleEdges"`
+	ConflictCount   int        `gorm:"column:conflict_count;not null" json:"conflictCount"`
+	WarningCount    int        `gorm:"column:warning_count;not null" json:"warningCount"`
+	ErrorMessage    *string    `gorm:"column:error_message" json:"errorMessage,omitempty"`
+	Detail          []byte     `gorm:"column:detail;type:jsonb" json:"detail,omitempty"`
+	StartedAt       *time.Time `gorm:"column:started_at" json:"startedAt,omitempty"`
+	FinishedAt      *time.Time `gorm:"column:finished_at" json:"finishedAt,omitempty"`
+	CreatedAt       time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+}
+
+func (TopologySyncRun) TableName() string {
+	return "topology_sync_run"
+}
+
 type TopologyNodeAlias struct {
 	ID          int64     `gorm:"column:id;primaryKey" json:"id"`
 	NodeID      int64     `gorm:"column:node_id;not null" json:"nodeId"`

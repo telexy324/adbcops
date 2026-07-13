@@ -42,6 +42,9 @@ type TopologyRepository interface {
 	CreateTopologySourceConfig(ctx context.Context, source *model.TopologySourceConfig) error
 	UpdateTopologySourceConfig(ctx context.Context, id int64, updates TopologySourceConfigUpdates) (*model.TopologySourceConfig, error)
 	DeleteTopologySourceConfig(ctx context.Context, id int64) error
+	CreateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
+	UpdateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
+	ListTopologySyncRuns(ctx context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error)
 	FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error)
 }
 
@@ -453,6 +456,35 @@ func (r *GORMTopologyRepository) DeleteTopologySourceConfig(ctx context.Context,
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *GORMTopologyRepository) CreateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error {
+	if err := r.db.WithContext(ctx).Create(run).Error; err != nil {
+		return fmt.Errorf("create topology sync run: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) UpdateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error {
+	if err := r.db.WithContext(ctx).Save(run).Error; err != nil {
+		return fmt.Errorf("update topology sync run: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) ListTopologySyncRuns(ctx context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := r.db.WithContext(ctx).Order("created_at DESC").Limit(limit)
+	if sourceConfigID > 0 {
+		query = query.Where("source_config_id = ?", sourceConfigID)
+	}
+	var runs []model.TopologySyncRun
+	if err := query.Find(&runs).Error; err != nil {
+		return nil, fmt.Errorf("list topology sync runs: %w", err)
+	}
+	return runs, nil
 }
 
 func (r *GORMTopologyRepository) FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error) {

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	k8ssvc "aiops-platform/backend/internal/k8s"
@@ -31,6 +32,7 @@ var (
 	ErrTopologyTypeBuiltIn  = errors.New("built-in topology type is protected")
 	ErrUnsupportedSource    = errors.New("unsupported topology source")
 	ErrSensitiveConfig      = errors.New("topology config contains sensitive fields")
+	ErrSyncAlreadyRunning   = errors.New("topology sync already running")
 )
 
 const (
@@ -71,6 +73,9 @@ type Repository interface {
 	CreateTopologySourceConfig(ctx context.Context, source *model.TopologySourceConfig) error
 	UpdateTopologySourceConfig(ctx context.Context, id int64, updates repository.TopologySourceConfigUpdates) (*model.TopologySourceConfig, error)
 	DeleteTopologySourceConfig(ctx context.Context, id int64) error
+	CreateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
+	UpdateTopologySyncRun(ctx context.Context, run *model.TopologySyncRun) error
+	ListTopologySyncRuns(ctx context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error)
 	FindDataSourceByID(ctx context.Context, id int64) (*model.DataSource, error)
 }
 
@@ -91,6 +96,8 @@ type Service struct {
 	k8sReader               K8sReader
 	traceGraphReader        TraceGraphReader
 	componentTopologyReader ComponentTopologyReader
+	syncMu                  sync.Mutex
+	runningSyncs            map[int64]struct{}
 }
 
 type NodeInput struct {
@@ -180,6 +187,12 @@ type SyncK8sInput struct {
 	Cluster      string `json:"cluster"`
 	Namespace    string `json:"namespace"`
 	Limit        int    `json:"limit"`
+}
+
+type RunTopologySyncInput struct {
+	SourceConfigID int64  `json:"sourceConfigId"`
+	TriggerType    string `json:"triggerType"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
 }
 
 type TraceServiceGraphInput struct {
@@ -377,7 +390,7 @@ type FindNodeResult struct {
 }
 
 func NewService(repository Repository, k8sReader K8sReader) *Service {
-	service := &Service{repository: repository, k8sReader: k8sReader}
+	service := &Service{repository: repository, k8sReader: k8sReader, runningSyncs: map[int64]struct{}{}}
 	service.traceGraphReader = httpTraceGraphReader{repository: repository, client: &http.Client{Timeout: 10 * time.Second}}
 	service.componentTopologyReader = configComponentTopologyReader{repository: repository}
 	return service
@@ -1465,6 +1478,190 @@ func (s *Service) SyncComponentTopology(ctx context.Context, actor *model.AppUse
 	return result, nil
 }
 
+func (s *Service) RunTopologySync(ctx context.Context, actor *model.AppUser, input RunTopologySyncInput) (*model.TopologySyncRun, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	if input.SourceConfigID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	if !s.acquireSyncLock(input.SourceConfigID) {
+		return nil, ErrSyncAlreadyRunning
+	}
+	defer s.releaseSyncLock(input.SourceConfigID)
+
+	source, err := s.repository.FindTopologySourceConfigByID(ctx, input.SourceConfigID)
+	if err != nil {
+		return nil, err
+	}
+	if !source.Enabled {
+		return nil, ErrTopologyTypeDisabled
+	}
+	triggerType := strings.TrimSpace(input.TriggerType)
+	if triggerType == "" {
+		triggerType = "manual"
+	}
+	timeoutSeconds := input.TimeoutSeconds
+	if timeoutSeconds <= 0 || timeoutSeconds > 3600 {
+		timeoutSeconds = 120
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	startedAt := time.Now().UTC()
+	run := &model.TopologySyncRun{
+		SourceConfigID: source.ID,
+		TriggerType:    triggerType,
+		Status:         "running",
+		StartedAt:      &startedAt,
+		Detail:         []byte(`{}`),
+	}
+	if err := s.repository.CreateTopologySyncRun(ctx, run); err != nil {
+		return nil, err
+	}
+
+	result, syncErr := s.dispatchTopologySync(runCtx, actor, source)
+	staleEdges, staleErr := s.transitionExpiredEdges(ctx)
+	finishedAt := time.Now().UTC()
+	run.FinishedAt = &finishedAt
+	run.StaleEdges = staleEdges
+	if result != nil {
+		run.DiscoveredNodes = result.Nodes
+		run.DiscoveredEdges = result.Edges
+		run.CreatedNodes = result.Nodes
+		run.CreatedEdges = result.Edges
+	}
+	if syncErr != nil || staleErr != nil {
+		run.Status = "failed"
+		if result != nil && (result.Nodes > 0 || result.Edges > 0) {
+			run.Status = "partial"
+		}
+		message := syncRunErrorMessage(syncErr, staleErr)
+		run.ErrorMessage = &message
+	} else {
+		run.Status = "success"
+	}
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		run.Status = "timeout"
+		message := "topology sync timeout"
+		run.ErrorMessage = &message
+	}
+	detail, _ := json.Marshal(map[string]any{
+		"sourceType": source.SourceType,
+		"sourceName": source.Name,
+		"timeoutSec": timeoutSeconds,
+	})
+	run.Detail = detail
+	if err := s.repository.UpdateTopologySyncRun(ctx, run); err != nil {
+		return nil, err
+	}
+	if syncErr != nil {
+		return run, syncErr
+	}
+	if staleErr != nil {
+		return run, staleErr
+	}
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return run, runCtx.Err()
+	}
+	return run, nil
+}
+
+func (s *Service) ListTopologySyncRuns(ctx context.Context, sourceConfigID int64, limit int) ([]model.TopologySyncRun, error) {
+	return s.repository.ListTopologySyncRuns(ctx, sourceConfigID, limit)
+}
+
+func (s *Service) dispatchTopologySync(ctx context.Context, actor *model.AppUser, source *model.TopologySourceConfig) (*SyncResult, error) {
+	if source == nil || source.DataSourceID == nil {
+		return nil, ErrInvalidInput
+	}
+	scope := topologySyncScope(source.Scope)
+	switch source.SourceType {
+	case model.TopologySourceTypeKubernetes:
+		return s.SyncK8s(ctx, actor, SyncK8sInput{
+			DataSourceID: *source.DataSourceID,
+			Environment:  scope.Environment,
+			Cluster:      scope.Cluster,
+			Namespace:    scope.Namespace,
+			Limit:        scope.Limit,
+		})
+	case model.TopologySourceTypeTraceServiceGraph:
+		return s.SyncTraceServiceGraph(ctx, actor, TraceServiceGraphInput{
+			DataSourceID:    *source.DataSourceID,
+			Environment:     scope.Environment,
+			System:          scope.System,
+			Cluster:         scope.Cluster,
+			Namespace:       scope.Namespace,
+			Path:            scope.Path,
+			MinRequestCount: scope.MinRequestCount,
+			TTLSeconds:      source.StaleAfterSeconds,
+			Limit:           scope.Limit,
+		})
+	case model.TopologySourceTypeNacos, model.TopologySourceTypeRedis, model.TopologySourceTypeTiDB, model.TopologySourceTypeNginx:
+		return s.SyncComponentTopology(ctx, actor, ComponentTopologyInput{
+			Component:    source.SourceType,
+			DataSourceID: *source.DataSourceID,
+			Environment:  scope.Environment,
+			Cluster:      scope.Cluster,
+			Namespace:    scope.Namespace,
+			Limit:        scope.Limit,
+			TTLSeconds:   source.StaleAfterSeconds,
+		})
+	default:
+		return nil, ErrUnsupportedSource
+	}
+}
+
+func (s *Service) acquireSyncLock(sourceConfigID int64) bool {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if _, ok := s.runningSyncs[sourceConfigID]; ok {
+		return false
+	}
+	s.runningSyncs[sourceConfigID] = struct{}{}
+	return true
+}
+
+func (s *Service) releaseSyncLock(sourceConfigID int64) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	delete(s.runningSyncs, sourceConfigID)
+}
+
+func (s *Service) transitionExpiredEdges(ctx context.Context) (int, error) {
+	edges, err := s.repository.ListEdges(ctx, repository.TopologyFilters{Limit: 1000})
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	changed := 0
+	for index := range edges {
+		edge := edges[index]
+		if edge.Status != edgeStatusActive || edge.StaleAt == nil || edge.StaleAt.After(now) {
+			continue
+		}
+		if edge.SourceType == model.TopologySourceManual || edge.SourceType == model.TopologySourceTypeManual {
+			continue
+		}
+		edge.Status = edgeStatusStale
+		if err := s.repository.UpdateTopologyEdge(ctx, &edge); err != nil {
+			return changed, err
+		}
+		changed++
+	}
+	return changed, nil
+}
+
+func syncRunErrorMessage(errs ...error) string {
+	parts := []string{}
+	for _, err := range errs {
+		if err != nil {
+			parts = append(parts, err.Error())
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (s *Service) readK8sResource(ctx context.Context, actor *model.AppUser, dataSourceID int64, namespace, resource string, limit int) (*k8ssvc.ResourceResult, error) {
 	return s.k8sReader.Resources(ctx, actor, k8ssvc.ResourceInput{
 		DataSourceID: dataSourceID,
@@ -2200,6 +2397,27 @@ func allowedNamespacesFromScope(raw []byte) []string {
 		result = append(result, namespace)
 	}
 	return result
+}
+
+type syncScope struct {
+	Environment     string `json:"environment"`
+	System          string `json:"system"`
+	Cluster         string `json:"cluster"`
+	Namespace       string `json:"namespace"`
+	Path            string `json:"path"`
+	Limit           int    `json:"limit"`
+	MinRequestCount int64  `json:"minRequestCount"`
+}
+
+func topologySyncScope(raw []byte) syncScope {
+	var scope syncScope
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &scope)
+	}
+	if scope.Limit <= 0 || scope.Limit > 1000 {
+		scope.Limit = 200
+	}
+	return scope
 }
 
 func compatibleTopologyDataSource(sourceType, dataSourceType string) bool {
