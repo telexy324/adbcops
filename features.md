@@ -870,6 +870,219 @@ rank_root_causes
 match_historical_incidents
 ```
 
+### 18.8 Nacos Skills
+
+```text
+query_nacos_services
+get_nacos_service_instances
+query_nacos_config_metadata
+query_nacos_config_changes
+query_nacos_client_connections
+diagnose_nacos_registration
+diagnose_nacos_config_delivery
+```
+
+职责边界：
+
+- 查询服务、分组、集群和实例状态；
+- 识别 healthy / unhealthy 实例数、enabled 状态、ephemeral 实例、权重和 clusterName；
+- 查询配置元数据、MD5、版本标识、修改时间和变更记录；
+- 查询客户端连接、监听关系和心跳异常；
+- 默认不读取敏感配置正文；
+- 如确需读取配置正文，必须经过独立权限、字段级脱敏和字节限制；
+- 不允许发布、修改或删除配置；
+- 不允许注册、注销或修改服务实例。
+
+`diagnose_nacos_registration` 至少检查：
+
+- 服务是否存在；
+- healthy / unhealthy 实例数量；
+- enabled 实例数量；
+- ephemeral 实例异常消失；
+- clusterName、groupName、namespace 是否一致；
+- 客户端注册和心跳异常；
+- 同一服务多环境或多命名空间混用。
+
+`diagnose_nacos_config_delivery` 至少检查：
+
+- dataId、group、namespace 是否匹配；
+- 配置是否存在；
+- MD5、版本或修改时间是否发生变化；
+- 客户端是否存在监听关系；
+- 异常前后是否发生配置变更；
+- 配置推送异常是否与应用启动或运行异常相关。
+
+### 18.9 Redis Skills
+
+```text
+query_redis_info
+query_redis_memory
+query_redis_clients
+query_redis_slowlog
+query_redis_keyspace
+query_redis_replication
+query_redis_cluster
+query_redis_latency
+diagnose_redis_health
+diagnose_redis_memory
+diagnose_redis_connection_pool
+diagnose_redis_replication
+diagnose_redis_cluster
+```
+
+职责边界：
+
+- 只执行白名单内只读命令；
+- 支持 standalone、Sentinel、Cluster 三种部署形态；
+- 默认不读取业务 Key 的 Value；
+- 默认不执行 `KEYS *`；
+- 大 Key 分析优先使用 exporter、采样接口或受控扫描；
+- 不允许 DEL、UNLINK、FLUSHDB、FLUSHALL、CONFIG SET、SHUTDOWN、SLAVEOF、CLUSTER FAILOVER 等写操作或高风险操作。
+
+`diagnose_redis_health` 至少检查：
+
+- connected_clients；
+- blocked_clients；
+- rejected_connections；
+- instantaneous_ops_per_sec；
+- keyspace_hits / keyspace_misses；
+- evicted_keys；
+- expired_keys；
+- used_memory 与 maxmemory；
+- mem_fragmentation_ratio；
+- latest_fork_usec；
+- role 和主从状态；
+- sentinel master / replica 状态；
+- cluster_state 和 slot 覆盖情况。
+
+`diagnose_redis_memory` 至少输出：
+
+- 内存使用率；
+- RSS 与逻辑内存差异；
+- 碎片率；
+- 淘汰数量；
+- Keyspace 分布；
+- 是否达到 maxmemory；
+- 建议补充的 bigkey / hotkey 证据；
+- 清理或扩容均标记为高风险人工操作。
+
+`diagnose_redis_connection_pool` 至少检查：
+
+- connected_clients、blocked_clients、rejected_connections；
+- 应用连接池错误日志；
+- Redis `maxclients`；
+- 连接突增与发布时间、流量峰值、异常重试的关系。
+
+`diagnose_redis_replication` / `diagnose_redis_cluster` 至少检查：
+
+- role、master_link_status、replication offset；
+- Sentinel master / replica / quorum 状态；
+- Cluster nodes、slots、fail、pfail、migrating / importing；
+- 主从切换、slot 缺失和跨节点异常。
+
+### 18.10 TiDB Skills
+
+```text
+query_tidb_cluster_status
+query_tidb_metrics
+query_tidb_slow_queries
+query_tidb_processlist
+query_tidb_lock_waits
+query_tidb_hot_regions
+query_tidb_statistics_health
+explain_tidb_sql
+diagnose_tidb_performance
+diagnose_tidb_connection_pressure
+diagnose_tidb_lock_contention
+diagnose_tidb_plan_regression
+```
+
+职责边界：
+
+- 使用只读数据库账号或只读 HTTP / Prometheus 接口；
+- SQL 查询必须经过语句分类和 SQL AST 只读校验；
+- 只允许 SELECT、EXPLAIN、SHOW；
+- 禁止多语句；
+- 禁止 INTO OUTFILE、LOAD DATA、SET GLOBAL、ADMIN、ANALYZE、DDL、DML；
+- 对 SQL 文本、表名、参数和结果进行脱敏及限量。
+
+`diagnose_tidb_performance` 至少检查：
+
+- QPS、延迟、错误率；
+- TiDB CPU、内存、连接数；
+- TiKV CPU、磁盘、Raft、Scheduler；
+- PD leader、region 和调度状态；
+- 慢 SQL 分布；
+- Coprocessor 请求和延迟；
+- 热 Region；
+- 统计信息健康度；
+- 执行计划变化；
+- 锁等待和大事务。
+
+`diagnose_tidb_connection_pressure` 至少检查：
+
+- 当前连接数、活跃连接、长事务；
+- Processlist 中等待、执行中和空闲连接；
+- 应用连接池报错；
+- 连接压力与发布、流量、重试风暴的关系。
+
+`diagnose_tidb_lock_contention` 至少检查：
+
+- lock wait；
+- blocked / blocking 事务；
+- 事务持续时间；
+- 涉及表、索引和 SQL 摘要；
+- 是否与批处理、大事务或热点写入相关。
+
+`diagnose_tidb_plan_regression` 至少检查：
+
+- 慢 SQL 与历史基线；
+- 统计信息健康度；
+- 执行计划算子、估算行数、访问对象、索引、Join、Exchange；
+- 潜在全表扫描、索引失效、计划绑定变化；
+- 不自动创建索引或修改 SQL。
+
+`explain_tidb_sql`：
+
+- 只允许 EXPLAIN 或受控 EXPLAIN ANALYZE；
+- 生产环境默认仅允许 EXPLAIN，不允许实际执行；
+- 输出算子、估算行数、访问对象、索引、Join、Exchange 和潜在全表扫描；
+- 不自动创建索引或修改 SQL。
+
+### 18.11 Nginx Skills
+
+```text
+query_nginx_access_logs
+query_nginx_error_logs
+query_nginx_metrics
+query_nginx_upstreams
+query_nginx_config_metadata
+analyze_nginx_status_codes
+analyze_nginx_latency
+diagnose_nginx_499
+diagnose_nginx_502
+diagnose_nginx_503
+diagnose_nginx_504
+diagnose_nginx_upstream
+```
+
+职责边界：
+
+- 日志查询复用 Log Tool；
+- 指标查询复用 Prometheus Tool；
+- 配置只读取经过白名单允许的配置文件或配置元数据；
+- 默认不读取证书私钥、Basic Auth 文件或敏感 Header；
+- 不允许 reload、restart、修改配置或切换 upstream。
+
+专项诊断：
+
+- `499`：客户端主动断开、后端处理慢、代理超时、网络中断；
+- `502`：连接拒绝、连接重置、无效响应、Pod 重启、targetPort 错误；
+- `503`：无可用 upstream、Endpoint 为空、限流或过载；
+- `504`：upstream 响应超时、DB / Redis / 下游接口延迟；
+- 必须结合 request_time、upstream_response_time、upstream_connect_time、upstream_status、upstream_addr；
+- 必须区分入口 Nginx、Ingress Controller 和应用内嵌 Nginx。
+
 ## 19. Skill 风险等级
 
 ```text
@@ -988,6 +1201,236 @@ type Tool interface {
 - Header 敏感字段加密；
 - 响应大小限制；
 - JSONPath 字段映射。
+
+### 22.7 Nacos Tool
+
+支持 Nacos OpenAPI 或经过授权的内部代理 API。
+
+能力：
+
+```text
+test_connection
+list_services
+list_instances
+get_service
+list_config_metadata
+get_config_metadata
+list_config_history
+list_listeners
+get_client_connections
+```
+
+配置示例：
+
+```json
+{
+  "sourceType": "nacos",
+  "endpoint": "http://nacos.internal:8848",
+  "namespace": "prod",
+  "username": "readonly_user",
+  "defaultGroup": "DEFAULT_GROUP",
+  "allowConfigContent": false,
+  "allowedNamespaces": ["prod"],
+  "allowedGroups": ["DEFAULT_GROUP", "PAY_GROUP"]
+}
+```
+
+安全约束：
+
+- 账号必须只读；
+- Namespace 和 Group 必须 allowlist；
+- 默认只返回配置元数据，不返回正文；
+- 配置正文开启后必须字段级脱敏和字节限制；
+- 禁止 publishConfig、removeConfig、registerInstance、deregisterInstance；
+- Token、密码、accessToken 不得写入调用日志。
+
+统一操作接口示例：
+
+```go
+type NacosTool interface {
+    Test(ctx context.Context) error
+    ListServices(ctx context.Context, q NacosServiceQuery) ([]NacosService, error)
+    ListInstances(ctx context.Context, q NacosInstanceQuery) ([]NacosInstance, error)
+    GetConfigMetadata(ctx context.Context, q NacosConfigQuery) (*NacosConfigMetadata, error)
+    ListConfigHistory(ctx context.Context, q NacosConfigHistoryQuery) ([]NacosConfigChange, error)
+    ListListeners(ctx context.Context, q NacosListenerQuery) ([]NacosListener, error)
+    GetClientConnections(ctx context.Context, q NacosClientQuery) ([]NacosClientConnection, error)
+}
+```
+
+### 22.8 Redis Tool
+
+支持 standalone、Sentinel 和 Cluster，只允许白名单只读命令。
+
+能力：
+
+```text
+test_connection
+info
+client_list_summary
+slowlog_get
+latency_latest
+memory_stats
+dbsize
+scan_summary
+cluster_info
+cluster_nodes_summary
+sentinel_masters
+sentinel_replicas
+```
+
+默认命令白名单：
+
+```text
+PING
+INFO
+ROLE
+DBSIZE
+SLOWLOG GET
+LATENCY LATEST
+MEMORY STATS
+CLIENT LIST
+CLUSTER INFO
+CLUSTER NODES
+SENTINEL MASTERS
+SENTINEL REPLICAS
+SCAN
+```
+
+实现要求：
+
+- 使用专用只读 ACL 用户；
+- `CLIENT LIST` 返回前脱敏 addr、name 和 user；
+- `SCAN` 必须限制 cursor 次数、Key 数和耗时；
+- 不读取业务 Value；
+- 禁止任意命令透传；
+- Redis Cluster 需要汇总各节点并标识数据来源；
+- Tool 层必须拒绝所有不在白名单的命令。
+
+统一接口：
+
+```go
+type RedisTool interface {
+    Test(ctx context.Context) error
+    Info(ctx context.Context, sections []string) (*RedisInfo, error)
+    SlowLog(ctx context.Context, limit int) ([]RedisSlowLogItem, error)
+    MemoryStats(ctx context.Context) (*RedisMemoryStats, error)
+    ClusterState(ctx context.Context) (*RedisClusterState, error)
+    SentinelState(ctx context.Context) (*RedisSentinelState, error)
+    ScanSummary(ctx context.Context, opts RedisScanOptions) (*RedisKeyspaceSummary, error)
+}
+```
+
+### 22.9 TiDB Tool
+
+TiDB Tool 由两个适配通道组成：
+
+```text
+tidb_sql_readonly
+tidb_status_http
+```
+
+能力：
+
+```text
+test_connection
+query_cluster_status
+query_processlist
+query_slow_queries
+query_lock_waits
+query_hot_regions
+query_statistics_health
+explain_sql
+query_tidb_metrics
+```
+
+SQL 安全规则：
+
+- 使用只读账号；
+- 解析 SQL AST；
+- 只允许单条 SELECT、SHOW、EXPLAIN；
+- 拒绝注释绕过、多语句和危险函数；
+- 默认设置 `MAX_EXECUTION_TIME`；
+- 限制返回行数、列数和总字节；
+- 敏感字段按列名和内容双重脱敏；
+- 生产环境禁止 `EXPLAIN ANALYZE`，除非管理员显式开启独立策略。
+
+统一接口：
+
+```go
+type TiDBTool interface {
+    Test(ctx context.Context) error
+    QueryClusterStatus(ctx context.Context) (*TiDBClusterStatus, error)
+    QuerySlowQueries(ctx context.Context, q TiDBSlowQueryFilter) ([]TiDBSlowQuery, error)
+    QueryProcessList(ctx context.Context, q TiDBProcessFilter) ([]TiDBProcess, error)
+    QueryLockWaits(ctx context.Context) ([]TiDBLockWait, error)
+    QueryHotRegions(ctx context.Context, q TiDBHotRegionFilter) ([]TiDBHotRegion, error)
+    QueryStatisticsHealth(ctx context.Context, q TiDBStatsFilter) ([]TiDBStatsHealth, error)
+    Explain(ctx context.Context, sql string, args []any) (*TiDBExplainResult, error)
+}
+```
+
+### 22.10 Nginx Tool
+
+Nginx Tool 是组合型 Tool Adapter，统一封装：
+
+```text
+access_log_provider
+error_log_provider
+metrics_provider
+config_metadata_provider
+upstream_status_provider
+```
+
+能力：
+
+```text
+test_connection
+query_access_logs
+query_error_logs
+query_metrics
+get_upstream_status
+get_config_metadata
+```
+
+数据来源可以是：
+
+- Elasticsearch / OpenSearch；
+- 服务器文件；
+- Prometheus nginx-exporter；
+- Nginx Stub Status；
+- Nginx Plus API；
+- Kubernetes Ingress Controller；
+- 经过授权的配置管理 API。
+
+标准访问日志字段：
+
+```text
+timestamp
+remote_addr_masked
+host
+method
+uri_template
+status
+body_bytes_sent
+request_time
+upstream_addr
+upstream_status
+upstream_connect_time
+upstream_header_time
+upstream_response_time
+request_id
+trace_id
+```
+
+安全约束：
+
+- query string 默认脱敏；
+- Authorization、Cookie、Set-Cookie 不得返回；
+- 客户端 IP 可按策略掩码；
+- 配置元数据只返回 server、location、upstream、timeout 等安全字段；
+- 不读取 TLS 私钥；
+- 不实现 reload、restart 和配置写入。
 
 ## 23. MCP 预留
 
@@ -1139,6 +1582,114 @@ parse_alert
   -> correlate
   -> create_incident
 ```
+
+### 26.6 Nacos Diagnosis
+
+```text
+query_services
+  -> query_instances
+  -> query_config_metadata
+  -> query_recent_config_changes
+  -> query_nacos_client_connections
+  -> query_application_logs
+  -> query_recent_releases
+  -> diagnose_nacos_registration
+  -> diagnose_nacos_config_delivery
+  -> build_timeline
+  -> correlate
+  -> report
+```
+
+用于：
+
+- Nacos 服务注册异常；
+- 实例健康状态异常；
+- Namespace / Group / Cluster 配置不一致；
+- 配置推送失败；
+- 配置变更与应用异常关联分析。
+
+### 26.7 Redis Diagnosis
+
+```text
+query_redis_info
+  -> query_memory
+  -> query_clients
+  -> query_slowlog
+  -> query_replication_or_cluster
+  -> query_prometheus_metrics
+  -> query_application_logs
+  -> search_knowledge
+  -> diagnose_redis_health
+  -> diagnose_redis_memory
+  -> diagnose_redis_connection_pool
+  -> diagnose_redis_replication_or_cluster
+  -> correlate
+  -> report
+```
+
+用于：
+
+- Redis 内存上涨、淘汰、碎片异常；
+- 连接池耗尽、拒绝连接、阻塞客户端；
+- 主从复制异常；
+- Sentinel 选主异常；
+- Cluster slot、节点、fail / pfail 异常。
+
+### 26.8 TiDB Diagnosis
+
+```text
+query_cluster_status
+  -> query_tidb_metrics
+  -> query_slow_queries
+  -> query_processlist
+  -> query_lock_waits
+  -> query_hot_regions
+  -> query_statistics_health
+  -> optional_explain
+  -> query_recent_changes
+  -> search_knowledge
+  -> diagnose_tidb_performance
+  -> diagnose_tidb_connection_pressure
+  -> diagnose_tidb_lock_contention
+  -> diagnose_tidb_plan_regression
+  -> correlate
+  -> report
+```
+
+用于：
+
+- TiDB 性能下降；
+- 连接压力和连接池异常；
+- 锁竞争和长事务；
+- 慢 SQL 与执行计划回退；
+- 热 Region、统计信息异常和 TiKV / PD 侧瓶颈。
+
+### 26.9 Nginx Diagnosis
+
+```text
+query_access_logs
+  -> query_error_logs
+  -> query_nginx_metrics
+  -> get_upstream_status
+  -> get_topology
+  -> query_backend_k8s_context
+  -> query_recent_changes
+  -> analyze_status_codes
+  -> diagnose_nginx_499
+  -> diagnose_nginx_502
+  -> diagnose_nginx_503
+  -> diagnose_nginx_504
+  -> correlate
+  -> report
+```
+
+用于：
+
+- Nginx `499` 客户端主动断开诊断；
+- `502` upstream 连接或响应异常诊断；
+- `503` upstream 不可用、限流或过载诊断；
+- `504` upstream 超时与下游依赖延迟诊断；
+- Ingress / 边缘 Nginx / 应用内嵌 Nginx 的分层定位。
 
 ## 27. Workflow 状态
 
@@ -2762,6 +3313,46 @@ AGENT_MAX_SKILL_CALLS=20
 AGENT_TIMEOUT_SECONDS=180
 ```
 
+### 102.1 Nacos、Redis、TiDB、Nginx 限制
+
+```dotenv
+NACOS_QUERY_TIMEOUT_SECONDS=10
+NACOS_MAX_SERVICES=1000
+NACOS_MAX_INSTANCES=2000
+NACOS_CONFIG_CONTENT_ENABLED=false
+NACOS_CONFIG_MAX_BYTES=65536
+
+REDIS_QUERY_TIMEOUT_SECONDS=8
+REDIS_SLOWLOG_MAX_ITEMS=100
+REDIS_SCAN_MAX_ITERATIONS=20
+REDIS_SCAN_MAX_KEYS=1000
+REDIS_ALLOW_VALUE_READ=false
+
+TIDB_QUERY_TIMEOUT_SECONDS=15
+TIDB_MAX_ROWS=500
+TIDB_MAX_RESULT_BYTES=524288
+TIDB_EXPLAIN_ANALYZE_ENABLED=false
+TIDB_SLOW_QUERY_MAX_ITEMS=200
+
+NGINX_QUERY_TIMEOUT_SECONDS=15
+NGINX_LOG_MAX_LINES=1000
+NGINX_LOG_MAX_BYTES=524288
+NGINX_MASK_CLIENT_IP=true
+NGINX_CONFIG_CONTENT_ENABLED=false
+```
+
+统一安全约束：
+
+- 四类 Tool 均只读；
+- 所有外部 endpoint 必须来源于数据源配置，不接受用户临时输入任意地址；
+- 所有查询必须有超时、行数、字节数和时间窗口限制；
+- 所有凭据必须加密保存，调用日志不得包含 token、密码、accessToken；
+- Nacos 限制 Namespace / Group allowlist；
+- Redis 严格命令白名单，不读取业务 Value；
+- TiDB SQL 必须 AST 只读校验，并拒绝多语句和危险语句；
+- Nginx 日志和配置输出必须脱敏，不返回 Authorization、Cookie、Set-Cookie、TLS 私钥；
+- Workflow 节点失败必须返回结构化 partial error，不得伪造 Tool 结果。
+
 ---
 
 # 第二十部分：测试策略
@@ -3354,6 +3945,85 @@ GET /api/health
 - 数据源凭据不在页面明文回显；
 - 配置后可在分析页面使用数据源 ID。
 
+### Task 2.13：Nacos Tool
+
+实现：
+
+- Nacos 数据源配置；
+- 连接测试；
+- 服务和实例查询；
+- 配置元数据和变更历史查询；
+- 客户端连接和监听关系查询；
+- Namespace / Group allowlist；
+- 默认禁止配置正文。
+
+验收：
+
+- 不支持配置发布、删除和服务实例写操作；
+- 敏感 Token 不出现在日志和 API 响应；
+- 未授权 Namespace / Group 返回 403；
+- 服务实例、配置元数据、配置变更、客户端连接均有 Mock Server 测试；
+- Tool 单元测试和 Mock Server 集成测试通过。
+
+### Task 2.14：Redis Tool
+
+实现：
+
+- standalone / Sentinel / Cluster；
+- INFO、SLOWLOG、MEMORY、LATENCY、ROLE、CLUSTER、SENTINEL 等白名单能力；
+- 只读 ACL；
+- Cluster 节点聚合并标识来源节点；
+- Sentinel master / replica 汇总；
+- 受限 SCAN 摘要。
+
+验收：
+
+- 任意非白名单命令被拒绝；
+- 不读取 Key Value；
+- SCAN 次数、Key 数、超时限制生效；
+- 敏感客户端信息脱敏；
+- Cluster 单节点失败不阻断整体摘要。
+
+### Task 2.15：TiDB Tool
+
+实现：
+
+- 只读 SQL 连接；
+- Cluster 状态；
+- Processlist；
+- 慢 SQL；
+- Lock Wait；
+- Statistics Health；
+- Hot Region；
+- 受控 Explain；
+- 可选 Status API / Prometheus 指标。
+
+验收：
+
+- AST 校验拒绝 DDL / DML、多语句和危险语句；
+- 行数、字节和超时限制生效；
+- 生产环境默认拒绝 EXPLAIN ANALYZE；
+- 查询结果脱敏；
+- 慢 SQL、Processlist、锁等待、统计信息、热点 Region 和 EXPLAIN 均有测试数据覆盖。
+
+### Task 2.16：Nginx Tool
+
+实现：
+
+- Access / Error Logs；
+- Prometheus / Stub Status / Nginx Plus 指标；
+- Upstream 状态；
+- 配置元数据；
+- 标准字段映射。
+
+验收：
+
+- Authorization / Cookie / query 敏感参数被脱敏；
+- 客户端 IP 可按策略掩码；
+- 不读取证书私钥；
+- 不提供 reload / restart / write；
+- 499 / 502 / 503 / 504 测试数据可被标准化。
+
 ---
 
 ## Phase 3：Agent、Skill、Tool、Workflow
@@ -3416,6 +4086,98 @@ GET /api/health
 验收：
 
 - Tool 失败返回结构化 partial error。
+
+### Task 3.4A：Nacos Skills
+
+实现：
+
+- query_nacos_services；
+- get_nacos_service_instances；
+- query_nacos_config_metadata；
+- query_nacos_config_changes；
+- query_nacos_client_connections；
+- diagnose_nacos_registration；
+- diagnose_nacos_config_delivery。
+
+验收：
+
+- 输出 FACT / RULE / EvidenceRef；
+- 不返回未授权配置正文；
+- 配置变更可进入 Timeline；
+- Namespace / Group 不一致能给出明确证据；
+- Nacos Tool 失败可 partial_success。
+
+### Task 3.4B：Redis Skills
+
+实现：
+
+- query_redis_info；
+- query_redis_memory；
+- query_redis_clients；
+- query_redis_slowlog；
+- query_redis_replication；
+- query_redis_cluster；
+- diagnose_redis_health；
+- diagnose_redis_memory；
+- diagnose_redis_connection_pool；
+- diagnose_redis_replication；
+- diagnose_redis_cluster。
+
+验收：
+
+- 诊断输出包含指标和值的来源节点；
+- 单节点失败不阻断 Cluster 汇总；
+- 删除、清理、扩容建议必须标记高风险；
+- 不生成自动执行动作；
+- 不读取业务 Value。
+
+### Task 3.4C：TiDB Skills
+
+实现：
+
+- query_tidb_cluster_status；
+- query_tidb_slow_queries；
+- query_tidb_processlist；
+- query_tidb_lock_waits；
+- query_tidb_hot_regions；
+- query_tidb_statistics_health；
+- explain_tidb_sql；
+- diagnose_tidb_performance；
+- diagnose_tidb_connection_pressure；
+- diagnose_tidb_lock_contention；
+- diagnose_tidb_plan_regression。
+
+验收：
+
+- SQL 和结果均有脱敏；
+- 根因推测必须引用慢 SQL、指标、锁或计划证据；
+- 无执行计划证据时不得断言“索引失效”；
+- 数据不足时输出 missingEvidence；
+- 只读 AST 校验失败时 Skill 返回安全错误而不是执行 SQL。
+
+### Task 3.4D：Nginx Skills
+
+实现：
+
+- query_nginx_access_logs；
+- query_nginx_error_logs；
+- query_nginx_metrics；
+- query_nginx_upstreams；
+- query_nginx_config_metadata；
+- analyze_nginx_status_codes；
+- analyze_nginx_latency；
+- diagnose_nginx_499；
+- diagnose_nginx_502；
+- diagnose_nginx_503；
+- diagnose_nginx_504；
+- diagnose_nginx_upstream。
+
+验收：
+
+- 综合 access log、error log、upstream 字段、指标和拓扑；
+- 能区分客户端中断、无 Endpoint、连接失败和上游超时；
+- 每个专项结论引用 Evidence；
+- 配置修改和 reload 仅作为需审批建议。
 
 ### Task 3.5：Agent Runtime
 
@@ -3503,12 +4265,20 @@ GET /api/health
 - Log Analysis；
 - Pod Diagnosis；
 - Ingress Diagnosis；
-- Alert Diagnosis。
+- Alert Diagnosis；
+- Nacos Diagnosis；
+- Redis Diagnosis；
+- TiDB Diagnosis；
+- Nginx Diagnosis。
 
 验收：
 
 - 所有 Workflow 可验证；
-- 运行记录完整。
+- 运行记录完整；
+- Nacos 注册与配置推送诊断 Workflow 可运行；
+- Redis 内存、连接池、主从和集群诊断 Workflow 可运行；
+- TiDB 性能、连接压力、锁竞争和执行计划回退诊断 Workflow 可运行；
+- Nginx 499、502、503、504 专项诊断 Workflow 可运行。
 
 ### Task 3.11：Workflow 前端
 
