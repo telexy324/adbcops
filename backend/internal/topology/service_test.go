@@ -1037,6 +1037,77 @@ func TestExpandTopologyCapsDepthAndNodeLimit(t *testing.T) {
 	}
 }
 
+func TestExplainPathSortsMultiplePathsAndEvidence(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b", "svc:c", "svc:d"},
+		[][3]string{
+			{"svc:a", "svc:b", model.TopologyEdgeTypeDependsOn},
+			{"svc:b", "svc:d", model.TopologyEdgeTypeDependsOn},
+			{"svc:a", "svc:c", model.TopologyEdgeTypeDependsOn},
+			{"svc:c", "svc:d", model.TopologyEdgeTypeDependsOn},
+		},
+	)
+	edgeAB := repo.edges[edgeKeyFor("svc:a", "svc:b", model.TopologyEdgeTypeDependsOn)]
+	edgeBD := repo.edges[edgeKeyFor("svc:b", "svc:d", model.TopologyEdgeTypeDependsOn)]
+	edgeAC := repo.edges[edgeKeyFor("svc:a", "svc:c", model.TopologyEdgeTypeDependsOn)]
+	edgeCD := repo.edges[edgeKeyFor("svc:c", "svc:d", model.TopologyEdgeTypeDependsOn)]
+	edgeAB.Confidence = ptr(0.9)
+	edgeBD.Confidence = ptr(0.9)
+	edgeAC.Confidence = ptr(0.5)
+	edgeCD.Confidence = ptr(0.5)
+	repo.edges[edgeAB.EdgeKey] = edgeAB
+	repo.edges[edgeBD.EdgeKey] = edgeBD
+	repo.edges[edgeAC.EdgeKey] = edgeAC
+	repo.edges[edgeCD.EdgeKey] = edgeCD
+	service := NewService(repo, nil)
+
+	result, err := service.ExplainPath(context.Background(), ExplainPathQuery{
+		FromNodeKey: "svc:a",
+		ToNodeKey:   "svc:d",
+		MaxDepth:    3,
+		MaxPaths:    5,
+	})
+	if err != nil {
+		t.Fatalf("explain path: %v", err)
+	}
+	if len(result.Paths) != 2 || result.EvidenceKey == "" {
+		t.Fatalf("expected two paths with evidence, got %+v", result)
+	}
+	if result.Paths[0].Confidence < result.Paths[1].Confidence || result.Paths[0].Via != "svc:b" {
+		t.Fatalf("expected higher confidence path first, got %+v", result.Paths)
+	}
+	for _, path := range result.Paths {
+		if path.EvidenceKey == "" || path.ImpactType != "potentially_affected" {
+			t.Fatalf("expected path evidence and potential impact, got %+v", path)
+		}
+	}
+}
+
+func TestExplainPathObservedImpactRequiresObservedEvidence(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b"},
+		[][3]string{{"svc:a", "svc:b", model.TopologyEdgeTypeDependsOn}},
+	)
+	service := NewService(repo, nil)
+
+	potential, err := service.ExplainPath(context.Background(), ExplainPathQuery{FromNodeKey: "svc:a", ToNodeKey: "svc:b"})
+	if err != nil {
+		t.Fatalf("explain potential path: %v", err)
+	}
+	if potential.Paths[0].ImpactType != "potentially_affected" {
+		t.Fatalf("graph reachability alone must stay potential, got %+v", potential.Paths[0])
+	}
+	observed, err := service.ExplainPath(context.Background(), ExplainPathQuery{FromNodeKey: "svc:a", ToNodeKey: "svc:b", ObservedNodeKeys: []string{"svc:b"}})
+	if err != nil {
+		t.Fatalf("explain observed path: %v", err)
+	}
+	if observed.Paths[0].ImpactType != "observed_affected" {
+		t.Fatalf("expected explicit observed node to mark observed impact, got %+v", observed.Paths[0])
+	}
+}
+
 func TestUpstreamAndBlastRadius(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	seedManualGraph(t, repo,

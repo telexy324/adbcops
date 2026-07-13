@@ -334,18 +334,32 @@ func (h *TopologyHandler) Expand(c *gin.Context) {
 	maxNodes, _ := strconv.Atoi(c.Query("maxNodes"))
 	maxEdges, _ := strconv.Atoi(c.Query("maxEdges"))
 	result, err := h.service.ExpandTopology(c.Request.Context(), topologysvc.ExpandTopologyQuery{
-		NodeKey:         c.Query("nodeKey"),
-		Depth:           depth,
-		Direction:       c.Query("direction"),
-		MaxNodes:        maxNodes,
-		MaxEdges:        maxEdges,
-		OnlyPropagating: strings.EqualFold(c.Query("onlyPropagating"), "true"),
-		Semantics:       splitQueryCSV(c.Query("semantics")),
-		Environment:     c.Query("environment"),
-		Cluster:         c.Query("cluster"),
-		Namespace:       c.Query("namespace"),
+		NodeKey:          c.Query("nodeKey"),
+		Depth:            depth,
+		Direction:        c.Query("direction"),
+		MaxNodes:         maxNodes,
+		MaxEdges:         maxEdges,
+		OnlyPropagating:  strings.EqualFold(c.Query("onlyPropagating"), "true"),
+		Semantics:        splitQueryCSV(c.Query("semantics")),
+		ObservedNodeKeys: splitQueryCSV(c.Query("observedNodeKeys")),
+		Environment:      c.Query("environment"),
+		Cluster:          c.Query("cluster"),
+		Namespace:        c.Query("namespace"),
 	})
 	if handleTopologyError(c, err, "expand topology failed") {
+		return
+	}
+	success(c, result)
+}
+
+func (h *TopologyHandler) ExplainPath(c *gin.Context) {
+	var request topologysvc.ExplainPathQuery
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.ExplainPath(c.Request.Context(), request)
+	if handleTopologyError(c, err, "explain topology path failed") {
 		return
 	}
 	success(c, result)

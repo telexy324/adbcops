@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/url"
@@ -168,22 +169,24 @@ type TraversalResult struct {
 }
 
 type ExpandTopologyQuery struct {
-	NodeKey         string
-	Depth           int
-	Direction       string
-	MaxNodes        int
-	MaxEdges        int
-	OnlyPropagating bool
-	Semantics       []string
-	Environment     string
-	Cluster         string
-	Namespace       string
+	NodeKey          string
+	Depth            int
+	Direction        string
+	MaxNodes         int
+	MaxEdges         int
+	OnlyPropagating  bool
+	Semantics        []string
+	ObservedNodeKeys []string
+	Environment      string
+	Cluster          string
+	Namespace        string
 }
 
 type ExpandTopologyResult struct {
 	RootKey       string               `json:"rootKey"`
 	Direction     string               `json:"direction"`
 	Depth         int                  `json:"depth"`
+	EvidenceKey   string               `json:"evidenceKey"`
 	Nodes         []model.TopologyNode `json:"nodes"`
 	Edges         []model.TopologyEdge `json:"edges"`
 	Paths         []TopologyPath       `json:"paths"`
@@ -199,6 +202,29 @@ type TopologyPath struct {
 	EdgeKeys      []string `json:"edgeKeys"`
 	Confidence    float64  `json:"confidence"`
 	ImpactType    string   `json:"impactType"`
+	EvidenceKey   string   `json:"evidenceKey"`
+}
+
+type ExplainPathQuery struct {
+	FromNodeKey      string
+	ToNodeKey        string
+	Direction        string
+	MaxDepth         int
+	MaxPaths         int
+	OnlyPropagating  bool
+	Semantics        []string
+	ObservedNodeKeys []string
+	Environment      string
+	Cluster          string
+	Namespace        string
+}
+
+type ExplainPathResult struct {
+	FromNodeKey string         `json:"fromNodeKey"`
+	ToNodeKey   string         `json:"toNodeKey"`
+	EvidenceKey string         `json:"evidenceKey"`
+	Paths       []TopologyPath `json:"paths"`
+	Truncated   bool           `json:"truncated"`
 }
 
 type CommonDependencyQuery struct {
@@ -1253,7 +1279,9 @@ func (s *Service) ExpandTopology(ctx context.Context, query ExpandTopologyQuery)
 	if _, ok := index.nodes[root]; !ok {
 		return nil, ErrTopologyNodeAbsent
 	}
+	observedNodes := stringSet(query.ObservedNodeKeys)
 	result := &ExpandTopologyResult{RootKey: root, Direction: direction, Depth: depth}
+	result.EvidenceKey = topologyEvidenceKey("expand", []string{root, direction, fmt.Sprint(depth)})
 	type pathState struct {
 		nodeKey    string
 		nodeKeys   []string
@@ -1303,6 +1331,7 @@ func (s *Service) ExpandTopology(ctx context.Context, query ExpandTopologyQuery)
 				continue
 			}
 			hops := len(nextEdgeKeys)
+			evidenceKey := topologyEvidenceKey("path", append(nextNodeKeys, nextEdgeKeys...))
 			result.Paths = append(result.Paths, TopologyPath{
 				TargetNodeKey: next,
 				Via:           pathVia(nextNodeKeys),
@@ -1310,7 +1339,8 @@ func (s *Service) ExpandTopology(ctx context.Context, query ExpandTopologyQuery)
 				NodeKeys:      nextNodeKeys,
 				EdgeKeys:      nextEdgeKeys,
 				Confidence:    confidence,
-				ImpactType:    "potentially_affected",
+				ImpactType:    impactTypeForNode(next, observedNodes),
+				EvidenceKey:   evidenceKey,
 			})
 			if previousDepth, seen := visitedDepth[next]; !seen || hops < previousDepth {
 				visitedDepth[next] = hops
@@ -1326,12 +1356,7 @@ func (s *Service) ExpandTopology(ctx context.Context, query ExpandTopologyQuery)
 	}
 	sortTopologyNodes(result.Nodes)
 	sortTopologyEdges(result.Edges)
-	sort.Slice(result.Paths, func(i, j int) bool {
-		if result.Paths[i].Hops == result.Paths[j].Hops {
-			return result.Paths[i].Confidence > result.Paths[j].Confidence
-		}
-		return result.Paths[i].Hops < result.Paths[j].Hops
-	})
+	sortTopologyPaths(result.Paths)
 	return result, nil
 }
 
@@ -1341,6 +1366,101 @@ func (s *Service) BlastRadius(ctx context.Context, query TraversalQuery) (*Trave
 		result.Direction = "blast_radius"
 	}
 	return result, err
+}
+
+func (s *Service) ExplainPath(ctx context.Context, query ExplainPathQuery) (*ExplainPathResult, error) {
+	from := strings.TrimSpace(query.FromNodeKey)
+	to := strings.TrimSpace(query.ToNodeKey)
+	if from == "" || to == "" {
+		return nil, ErrInvalidInput
+	}
+	depth := normalizeExpandDepth(query.MaxDepth)
+	maxPaths := query.MaxPaths
+	if maxPaths <= 0 || maxPaths > 50 {
+		maxPaths = 10
+	}
+	direction := strings.TrimSpace(query.Direction)
+	if direction == "" {
+		direction = "downstream"
+	}
+	if direction != "upstream" && direction != "downstream" && direction != "both" {
+		return nil, ErrInvalidInput
+	}
+	graph, err := s.Graph(ctx, Query{
+		Environment: query.Environment,
+		Cluster:     query.Cluster,
+		Namespace:   query.Namespace,
+		Limit:       normalizeMaxNodes(0),
+	})
+	if err != nil {
+		return nil, err
+	}
+	index := newGraphIndex(graph)
+	if _, ok := index.nodes[from]; !ok {
+		return nil, ErrTopologyNodeAbsent
+	}
+	if _, ok := index.nodes[to]; !ok {
+		return nil, ErrTopologyNodeAbsent
+	}
+	semantics := normalizeSemanticsFilter(query.Semantics)
+	observedNodes := stringSet(query.ObservedNodeKeys)
+	result := &ExplainPathResult{
+		FromNodeKey: from,
+		ToNodeKey:   to,
+		EvidenceKey: topologyEvidenceKey("explain_path", []string{from, to, direction, fmt.Sprint(depth)}),
+	}
+	type pathState struct {
+		nodeKey    string
+		nodeKeys   []string
+		edgeKeys   []string
+		confidence float64
+	}
+	queue := []pathState{{nodeKey: from, nodeKeys: []string{from}, confidence: 1}}
+	for len(queue) > 0 {
+		state := queue[0]
+		queue = queue[1:]
+		if len(state.edgeKeys) >= depth {
+			continue
+		}
+		for _, edge := range expandEdges(index, state.nodeKey, direction) {
+			relationType := relationTypeByKey(edge.EdgeType)
+			if !expandAllowsEdge(edge, relationType, query.OnlyPropagating, semantics) {
+				continue
+			}
+			next := edge.ToNodeKey
+			if direction == "upstream" || (direction == "both" && edge.ToNodeKey == state.nodeKey) {
+				next = edge.FromNodeKey
+			}
+			if stringInSlice(next, state.nodeKeys) {
+				continue
+			}
+			nextNodeKeys := append(append([]string{}, state.nodeKeys...), next)
+			nextEdgeKeys := append(append([]string{}, state.edgeKeys...), edge.EdgeKey)
+			confidence := state.confidence * edgeConfidence(edge)
+			if next == to {
+				result.Paths = append(result.Paths, TopologyPath{
+					TargetNodeKey: next,
+					Via:           pathVia(nextNodeKeys),
+					Hops:          len(nextEdgeKeys),
+					NodeKeys:      nextNodeKeys,
+					EdgeKeys:      nextEdgeKeys,
+					Confidence:    confidence,
+					ImpactType:    impactTypeForNode(next, observedNodes),
+					EvidenceKey:   topologyEvidenceKey("path", append(nextNodeKeys, nextEdgeKeys...)),
+				})
+				if len(result.Paths) > maxPaths {
+					result.Truncated = true
+				}
+				continue
+			}
+			queue = append(queue, pathState{nodeKey: next, nodeKeys: nextNodeKeys, edgeKeys: nextEdgeKeys, confidence: confidence})
+		}
+	}
+	sortTopologyPaths(result.Paths)
+	if len(result.Paths) > maxPaths {
+		result.Paths = result.Paths[:maxPaths]
+	}
+	return result, nil
 }
 
 func (s *Service) CommonDependencies(ctx context.Context, query CommonDependencyQuery) (*CommonDependencyResult, error) {
@@ -2421,6 +2541,40 @@ func pathVia(nodeKeys []string) string {
 		return ""
 	}
 	return nodeKeys[1]
+}
+
+func stringSet(values []string) map[string]struct{} {
+	result := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result[value] = struct{}{}
+		}
+	}
+	return result
+}
+
+func impactTypeForNode(nodeKey string, observedNodes map[string]struct{}) string {
+	if _, ok := observedNodes[nodeKey]; ok {
+		return "observed_affected"
+	}
+	return "potentially_affected"
+}
+
+func topologyEvidenceKey(prefix string, parts []string) string {
+	joined := strings.Join(parts, "|")
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(joined))
+	return fmt.Sprintf("ev_topology_%s_%x", prefix, hash.Sum64())
+}
+
+func sortTopologyPaths(paths []TopologyPath) {
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i].Confidence == paths[j].Confidence {
+			return paths[i].Hops < paths[j].Hops
+		}
+		return paths[i].Confidence > paths[j].Confidence
+	})
 }
 
 func hasDirectedCycle(index graphIndex, nodeKeys map[string]struct{}, direction string) bool {
