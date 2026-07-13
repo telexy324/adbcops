@@ -584,6 +584,12 @@ evidence_references
 - embedding：知识库语义召回与语义排序；
 - rerank：知识库候选片段精排。
 
+凭据：
+
+- API Key：加密保存，页面不明文回显；
+- API Secret：可选，加密保存，页面不明文回显；
+- API Secret 为空时仍允许保存模型配置。
+
 同一用途最多一个默认启用模型。Embedding 和 Rerank 是可选增强能力，缺失时知识库必须自动降级。
 
 统一接口：
@@ -2455,6 +2461,7 @@ CREATE TABLE llm_config (
     base_url TEXT NOT NULL,
     model VARCHAR(120) NOT NULL,
     api_key_ref TEXT,
+    api_secret_ref TEXT,
     temperature NUMERIC(4,3) DEFAULT 0.2,
     enabled BOOLEAN NOT NULL DEFAULT true,
     is_default BOOLEAN NOT NULL DEFAULT false,
@@ -3622,6 +3629,7 @@ GET /api/health
 - llm_config；
 - 模型用途 purpose：chat / embedding / rerank；
 - API Key 加密；
+- API Secret 可选且加密；
 - 每种用途独立默认模型；
 - OpenAI-compatible client；
 - Embedding API；
@@ -3631,6 +3639,7 @@ GET /api/health
 验收：
 
 - 不返回明文 key；
+- 不返回明文 secret；
 - 每种用途默认模型唯一；
 - Mock LLM 测试通过。
 

@@ -245,6 +245,37 @@ vi.mock("@/api/config", () => ({
       enabled: true,
       isDefault: true,
       apiKeyConfigured: true,
+      apiSecretConfigured: false,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+    {
+      id: 2,
+      name: "default-embedding",
+      provider: "openai-compatible",
+      baseUrl: "https://api.openai.example/v1",
+      model: "embedding-model",
+      purpose: "embedding",
+      temperature: 0,
+      enabled: true,
+      isDefault: true,
+      apiKeyConfigured: true,
+      apiSecretConfigured: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+    {
+      id: 3,
+      name: "default-rerank",
+      provider: "openai-compatible",
+      baseUrl: "https://api.openai.example/v1",
+      model: "rerank-model",
+      purpose: "rerank",
+      temperature: 0,
+      enabled: true,
+      isDefault: true,
+      apiKeyConfigured: true,
+      apiSecretConfigured: false,
       createdAt: "2026-07-12T10:00:00Z",
       updatedAt: "2026-07-12T10:00:00Z",
     },
@@ -414,6 +445,9 @@ describe("SettingsPage", () => {
     expect(
       screen.getByRole("heading", { name: "LLM 配置" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Embedding 向量模型")).toBeInTheDocument();
+    expect(screen.getByText("Rerank 精排模型")).toBeInTheDocument();
+    expect(screen.getByText("API Secret（可选）")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "数据源配置" }),
     ).toBeInTheDocument();
@@ -421,6 +455,8 @@ describe("SettingsPage", () => {
     expect(screen.getByText("K8s 数据源")).toBeInTheDocument();
     expect(screen.getByText("Prometheus 数据源")).toBeInTheDocument();
     expect(await screen.findByText("default-llm")).toBeInTheDocument();
+    expect(await screen.findByText("default-embedding")).toBeInTheDocument();
+    expect(await screen.findByText("default-rerank")).toBeInTheDocument();
     expect(await screen.findByText("prod-logs")).toBeInTheDocument();
   });
 });

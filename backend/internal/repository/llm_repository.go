@@ -20,16 +20,18 @@ type LLMRepository interface {
 }
 
 type LLMConfigUpdates struct {
-	Name         *string
-	Provider     *string
-	BaseURL      *string
-	Model        *string
-	Purpose      *string
-	APIKeyRef    *string
-	APIKeyRefSet bool
-	Temperature  *float64
-	Enabled      *bool
-	IsDefault    *bool
+	Name            *string
+	Provider        *string
+	BaseURL         *string
+	Model           *string
+	Purpose         *string
+	APIKeyRef       *string
+	APIKeyRefSet    bool
+	APISecretRef    *string
+	APISecretRefSet bool
+	Temperature     *float64
+	Enabled         *bool
+	IsDefault       *bool
 }
 
 type GORMLLMRepository struct {
@@ -116,6 +118,9 @@ func (r *GORMLLMRepository) UpdateLLMConfig(ctx context.Context, id int64, updat
 		}
 		if updates.APIKeyRefSet {
 			values["api_key_ref"] = updates.APIKeyRef
+		}
+		if updates.APISecretRefSet {
+			values["api_secret_ref"] = updates.APISecretRef
 		}
 		if updates.Temperature != nil {
 			values["temperature"] = *updates.Temperature

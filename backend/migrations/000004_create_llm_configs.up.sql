@@ -6,6 +6,7 @@ CREATE TABLE llm_config (
     model VARCHAR(120) NOT NULL,
     purpose VARCHAR(30) NOT NULL DEFAULT 'chat',
     api_key_ref TEXT,
+    api_secret_ref TEXT,
     temperature NUMERIC(4,3) DEFAULT 0.2,
     enabled BOOLEAN NOT NULL DEFAULT true,
     is_default BOOLEAN NOT NULL DEFAULT false,

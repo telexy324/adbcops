@@ -33,16 +33,18 @@ type Usage struct {
 type ChatRequest struct {
 	BaseURL     string
 	APIKey      string
+	APISecret   string
 	Model       string
 	Temperature float64
 	Messages    []ChatMessage
 }
 
 type EmbeddingRequest struct {
-	BaseURL string
-	APIKey  string
-	Model   string
-	Input   []string
+	BaseURL   string
+	APIKey    string
+	APISecret string
+	Model     string
+	Input     []string
 }
 
 type EmbeddingResult struct {
@@ -55,6 +57,7 @@ type EmbeddingResult struct {
 type RerankRequest struct {
 	BaseURL   string
 	APIKey    string
+	APISecret string
 	Model     string
 	Query     string
 	Documents []string
@@ -120,6 +123,9 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*Ch
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if req.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+req.APIKey)
+	}
+	if req.APISecret != "" {
+		httpRequest.Header.Set("X-API-Secret", req.APISecret)
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
@@ -193,6 +199,9 @@ func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest
 	if req.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+req.APIKey)
 	}
+	if req.APISecret != "" {
+		httpRequest.Header.Set("X-API-Secret", req.APISecret)
+	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
 		return nil, fmt.Errorf("send embedding request: %w", err)
@@ -262,6 +271,9 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if req.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+req.APIKey)
+	}
+	if req.APISecret != "" {
+		httpRequest.Header.Set("X-API-Secret", req.APISecret)
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {

@@ -18,6 +18,7 @@ export type LLMConfig = {
   enabled: boolean;
   isDefault: boolean;
   apiKeyConfigured: boolean;
+  apiSecretConfigured: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -29,6 +30,7 @@ export type SaveLLMConfigInput = {
   model: string;
   purpose: "chat" | "embedding" | "rerank";
   apiKey?: string;
+  apiSecret?: string;
   temperature: number;
   enabled: boolean;
   isDefault: boolean;
@@ -87,6 +89,9 @@ export async function createLLMConfig(input: SaveLLMConfigInput) {
   const payload = { ...input };
   if (!payload.apiKey?.trim()) {
     delete payload.apiKey;
+  }
+  if (!payload.apiSecret?.trim()) {
+    delete payload.apiSecret;
   }
   const response = await apiClient.post<ApiEnvelope<LLMConfig>>(
     "/api/llm-configs",

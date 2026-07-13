@@ -135,12 +135,47 @@ const defaultLLMForm = {
   model: "gpt-compatible-model",
   purpose: "chat" as LLMPurpose,
   apiKey: "",
+  apiSecret: "",
   temperature: "0.2",
   enabled: true,
   isDefault: true,
 };
 
 type LLMPurpose = "chat" | "embedding" | "rerank";
+
+const llmPurposeKinds: Array<{
+  purpose: LLMPurpose;
+  title: string;
+  description: string;
+  defaultName: string;
+  defaultModel: string;
+  defaultTemperature: string;
+}> = [
+  {
+    purpose: "chat",
+    title: "LLM / Chat",
+    description: "用于分析报告、查询改写、Agent 总结和知识库问答生成。",
+    defaultName: "default-chat-model",
+    defaultModel: "gpt-compatible-model",
+    defaultTemperature: "0.2",
+  },
+  {
+    purpose: "embedding",
+    title: "Embedding 向量模型",
+    description: "用于知识库持久化向量索引、语义召回和相似度排序。",
+    defaultName: "default-embedding-model",
+    defaultModel: "text-embedding-compatible-model",
+    defaultTemperature: "0",
+  },
+  {
+    purpose: "rerank",
+    title: "Rerank 精排模型",
+    description: "用于知识库候选片段精排；不可用时自动降级为本地重排。",
+    defaultName: "default-rerank-model",
+    defaultModel: "rerank-compatible-model",
+    defaultTemperature: "0",
+  },
+];
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
@@ -171,7 +206,7 @@ export function SettingsPage() {
     onSuccess: (config) => {
       setNotice(`LLM 配置 ${config.name} 已保存。`);
       setError(null);
-      setLLMForm((current) => ({ ...current, apiKey: "" }));
+      setLLMForm((current) => ({ ...current, apiKey: "", apiSecret: "" }));
       queryClient.invalidateQueries({ queryKey: ["settings", "llm-configs"] });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
@@ -212,6 +247,24 @@ export function SettingsPage() {
     setSourceForm(sourceDefaults(template));
   }
 
+  function selectLLMPurpose(purpose: LLMPurpose) {
+    const template = llmPurposeKinds.find((item) => item.purpose === purpose)!;
+    setLLMForm((current) => ({
+      ...current,
+      name:
+        current.purpose === purpose || current.name.trim() === ""
+          ? current.name
+          : template.defaultName,
+      model:
+        current.purpose === purpose || current.model.trim() === ""
+          ? current.model
+          : template.defaultModel,
+      purpose,
+      temperature: template.defaultTemperature,
+      isDefault: true,
+    }));
+  }
+
   function submitLLM(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     llmMutation.mutate({
@@ -221,6 +274,7 @@ export function SettingsPage() {
       model: llmForm.model,
       purpose: llmForm.purpose,
       apiKey: llmForm.apiKey,
+      apiSecret: llmForm.apiSecret,
       temperature: Number(llmForm.temperature),
       enabled: llmForm.enabled,
       isDefault: llmForm.isDefault,
@@ -253,6 +307,16 @@ export function SettingsPage() {
 
   const llmConfigs = llmQuery.data ?? [];
   const dataSources = dataSourcesQuery.data ?? [];
+  const llmConfigsByPurpose = useMemo(
+    () =>
+      Object.fromEntries(
+        llmPurposeKinds.map((item) => [
+          item.purpose,
+          llmConfigs.filter((config) => config.purpose === item.purpose),
+        ]),
+      ) as Record<LLMPurpose, LLMConfig[]>,
+    [llmConfigs],
+  );
 
   return (
     <div className="mx-auto max-w-[1700px] space-y-6">
@@ -263,8 +327,8 @@ export function SettingsPage() {
             配置中心
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-            管理 LLM、日志、Kubernetes 和 Prometheus
-            数据源。凭据仅提交到后端加密存储，页面只展示“已配置”状态。
+            管理 Chat LLM、Embedding、Rerank
+            模型，以及日志、Kubernetes、Prometheus 和组件诊断数据源。凭据仅提交到后端加密存储，页面只展示“已配置”状态。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -296,11 +360,31 @@ export function SettingsPage() {
               LLM 配置
             </CardTitle>
             <CardDescription>
-              支持 OpenAI-compatible、DeepSeek、Qwen 等 provider。API Key
-              保存后不会明文回显。
+              支持分别配置 Chat、Embedding 和 Rerank 用途。知识库可在仅
+              Chat、Chat + Embedding、Chat + Embedding + Rerank
+              三种模式下运行，API Key 保存后不会明文回显。
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="mb-5 grid gap-3 md:grid-cols-3">
+              {llmPurposeKinds.map((item) => (
+                <button
+                  key={item.purpose}
+                  type="button"
+                  onClick={() => selectLLMPurpose(item.purpose)}
+                  className={cn(
+                    "rounded-xl border p-4 text-left transition-colors",
+                    llmForm.purpose === item.purpose
+                      ? "border-cyan-300 bg-cyan-50 text-cyan-900"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                  )}
+                >
+                  <KeyRound className="mb-3 size-5" aria-hidden="true" />
+                  <p className="font-semibold">{item.title}</p>
+                  <p className="mt-1 text-xs leading-5">{item.description}</p>
+                </button>
+              ))}
+            </div>
             <form className="space-y-4" onSubmit={submitLLM}>
               <div className="grid gap-3 md:grid-cols-2">
                 <Field label="名称">
@@ -360,12 +444,7 @@ export function SettingsPage() {
                     className={selectClassName}
                     value={llmForm.purpose}
                     onChange={(event) =>
-                      setLLMForm((current) => ({
-                        ...current,
-                        purpose: event.target.value as
-                          "chat" | "embedding" | "rerank",
-                        isDefault: true,
-                      }))
+                      selectLLMPurpose(event.target.value as LLMPurpose)
                     }
                   >
                     <option value="chat">LLM / Chat</option>
@@ -384,6 +463,19 @@ export function SettingsPage() {
                       }))
                     }
                     placeholder="保存后不回显"
+                  />
+                </Field>
+                <Field label="API Secret（可选）">
+                  <Input
+                    type="password"
+                    value={llmForm.apiSecret}
+                    onChange={(event) =>
+                      setLLMForm((current) => ({
+                        ...current,
+                        apiSecret: event.target.value,
+                      }))
+                    }
+                    placeholder="可为空，保存后不回显"
                   />
                 </Field>
                 <Field label="Temperature">
@@ -590,14 +682,44 @@ export function SettingsPage() {
           loading={llmQuery.isLoading}
           empty="暂无 LLM 配置。"
         >
-          {llmConfigs.map((item) => (
-            <LLMConfigRow
-              key={item.id}
-              item={item}
-              testing={testLLMMutation.isPending}
-              onTest={() => testLLMMutation.mutate(item.id)}
-            />
-          ))}
+          <div className="space-y-4">
+            {llmPurposeKinds.map((group) => (
+              <div
+                key={group.purpose}
+                className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3"
+              >
+                <div className="mb-3 flex flex-col justify-between gap-1 md:flex-row md:items-center">
+                  <div>
+                    <p className="font-semibold text-slate-900">
+                      {group.title}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {group.description}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-200">
+                    {llmConfigsByPurpose[group.purpose].length} 个配置
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {llmConfigsByPurpose[group.purpose].length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2 text-sm text-slate-500">
+                      尚未配置 {group.title}。
+                    </p>
+                  ) : (
+                    llmConfigsByPurpose[group.purpose].map((item) => (
+                      <LLMConfigRow
+                        key={item.id}
+                        item={item}
+                        testing={testLLMMutation.isPending}
+                        onTest={() => testLLMMutation.mutate(item.id)}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </ConfigList>
 
         <ConfigList
@@ -640,6 +762,9 @@ function LLMConfigRow({
             <Badge active={item.enabled}>enabled</Badge>
             <Badge active={item.isDefault}>default</Badge>
             <Badge active={item.apiKeyConfigured}>api key configured</Badge>
+            <Badge active={item.apiSecretConfigured}>
+              api secret configured
+            </Badge>
           </div>
         </div>
         <Button

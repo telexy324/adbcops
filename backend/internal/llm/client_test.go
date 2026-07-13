@@ -11,12 +11,16 @@ import (
 
 func TestOpenAICompatibleClientChat(t *testing.T) {
 	var sawAuthorization bool
+	var sawAPISecret bool
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
 		if r.Header.Get("Authorization") == "Bearer test-key" {
 			sawAuthorization = true
+		}
+		if r.Header.Get("X-API-Secret") == "test-secret" {
+			sawAPISecret = true
 		}
 		var request struct {
 			Model    string        `json:"model"`
@@ -39,6 +43,7 @@ func TestOpenAICompatibleClientChat(t *testing.T) {
 	result, err := client.Chat(context.Background(), ChatRequest{
 		BaseURL:     "https://llm.example",
 		APIKey:      "test-key",
+		APISecret:   "test-secret",
 		Model:       "mock-model",
 		Temperature: 0.2,
 		Messages:    []ChatMessage{{Role: "user", Content: "ping"}},
@@ -48,6 +53,9 @@ func TestOpenAICompatibleClientChat(t *testing.T) {
 	}
 	if !sawAuthorization {
 		t.Fatal("authorization header was not sent")
+	}
+	if !sawAPISecret {
+		t.Fatal("api secret header was not sent")
 	}
 	if result.Content != "pong" || result.Model != "mock-model" || result.Usage.TotalTokens != 2 {
 		t.Fatalf("result = %+v", result)

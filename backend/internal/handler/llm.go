@@ -28,6 +28,7 @@ type saveLLMConfigRequest struct {
 	Model       string   `json:"model" binding:"required"`
 	Purpose     string   `json:"purpose"`
 	APIKey      *string  `json:"apiKey"`
+	APISecret   *string  `json:"apiSecret"`
 	Temperature *float64 `json:"temperature"`
 	Enabled     *bool    `json:"enabled"`
 	IsDefault   bool     `json:"isDefault"`
@@ -40,6 +41,7 @@ type updateLLMConfigRequest struct {
 	Model       *string  `json:"model"`
 	Purpose     *string  `json:"purpose"`
 	APIKey      *string  `json:"apiKey"`
+	APISecret   *string  `json:"apiSecret"`
 	Temperature *float64 `json:"temperature"`
 	Enabled     *bool    `json:"enabled"`
 	IsDefault   *bool    `json:"isDefault"`
@@ -50,19 +52,20 @@ type testLLMConfigRequest struct {
 }
 
 type llmConfigResponse struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	Provider         string  `json:"provider"`
-	BaseURL          string  `json:"baseUrl"`
-	Model            string  `json:"model"`
-	Purpose          string  `json:"purpose"`
-	Temperature      float64 `json:"temperature"`
-	Enabled          bool    `json:"enabled"`
-	IsDefault        bool    `json:"isDefault"`
-	APIKeyConfigured bool    `json:"apiKeyConfigured"`
-	CreatedBy        *int64  `json:"createdBy,omitempty"`
-	CreatedAt        string  `json:"createdAt"`
-	UpdatedAt        string  `json:"updatedAt"`
+	ID                  int64   `json:"id"`
+	Name                string  `json:"name"`
+	Provider            string  `json:"provider"`
+	BaseURL             string  `json:"baseUrl"`
+	Model               string  `json:"model"`
+	Purpose             string  `json:"purpose"`
+	Temperature         float64 `json:"temperature"`
+	Enabled             bool    `json:"enabled"`
+	IsDefault           bool    `json:"isDefault"`
+	APIKeyConfigured    bool    `json:"apiKeyConfigured"`
+	APISecretConfigured bool    `json:"apiSecretConfigured"`
+	CreatedBy           *int64  `json:"createdBy,omitempty"`
+	CreatedAt           string  `json:"createdAt"`
+	UpdatedAt           string  `json:"updatedAt"`
 }
 
 func (h *LLMHandler) List(c *gin.Context) {
@@ -103,6 +106,7 @@ func (h *LLMHandler) Create(c *gin.Context) {
 		Model:       request.Model,
 		Purpose:     request.Purpose,
 		APIKey:      request.APIKey,
+		APISecret:   request.APISecret,
 		Temperature: temperature,
 		Enabled:     enabled,
 		IsDefault:   request.IsDefault,
@@ -143,6 +147,7 @@ func (h *LLMHandler) Update(c *gin.Context) {
 		Model:       request.Model,
 		Purpose:     request.Purpose,
 		APIKey:      request.APIKey,
+		APISecret:   request.APISecret,
 		Temperature: request.Temperature,
 		Enabled:     request.Enabled,
 		IsDefault:   request.IsDefault,
@@ -222,18 +227,19 @@ func handleLLMError(c *gin.Context, err error, fallback string) bool {
 
 func toLLMConfigResponse(config *model.LLMConfig) llmConfigResponse {
 	return llmConfigResponse{
-		ID:               config.ID,
-		Name:             config.Name,
-		Provider:         config.Provider,
-		BaseURL:          config.BaseURL,
-		Model:            config.Model,
-		Purpose:          config.Purpose,
-		Temperature:      config.Temperature,
-		Enabled:          config.Enabled,
-		IsDefault:        config.IsDefault,
-		APIKeyConfigured: config.APIKeyRef != nil && *config.APIKeyRef != "",
-		CreatedBy:        config.CreatedBy,
-		CreatedAt:        config.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:        config.UpdatedAt.Format(time.RFC3339),
+		ID:                  config.ID,
+		Name:                config.Name,
+		Provider:            config.Provider,
+		BaseURL:             config.BaseURL,
+		Model:               config.Model,
+		Purpose:             config.Purpose,
+		Temperature:         config.Temperature,
+		Enabled:             config.Enabled,
+		IsDefault:           config.IsDefault,
+		APIKeyConfigured:    config.APIKeyRef != nil && *config.APIKeyRef != "",
+		APISecretConfigured: config.APISecretRef != nil && *config.APISecretRef != "",
+		CreatedBy:           config.CreatedBy,
+		CreatedAt:           config.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:           config.UpdatedAt.Format(time.RFC3339),
 	}
 }

@@ -276,10 +276,18 @@ func (s *Service) generateLLMSummary(ctx context.Context, input RunInput, prepro
 			return "", false
 		}
 	}
+	apiSecret := ""
+	if config.APISecretRef != nil && *config.APISecretRef != "" && s.secrets != nil {
+		apiSecret, err = s.secrets.Decrypt(*config.APISecretRef)
+		if err != nil {
+			return "", false
+		}
+	}
 	prompt := buildReportPrompt(input, preprocessed, citations)
 	response, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
 		APIKey:      apiKey,
+		APISecret:   apiSecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,
 		Messages: []llmsvc.ChatMessage{

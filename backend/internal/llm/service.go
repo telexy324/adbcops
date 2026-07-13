@@ -50,6 +50,7 @@ type SaveInput struct {
 	Model       string
 	Purpose     string
 	APIKey      *string
+	APISecret   *string
 	Temperature float64
 	Enabled     bool
 	IsDefault   bool
@@ -63,6 +64,7 @@ type UpdateInput struct {
 	Model       *string
 	Purpose     *string
 	APIKey      *string
+	APISecret   *string
 	Temperature *float64
 	Enabled     *bool
 	IsDefault   *bool
@@ -103,17 +105,26 @@ func (s *Service) Create(ctx context.Context, input SaveInput) (*model.LLMConfig
 		}
 		apiKeyRef = &encrypted
 	}
+	var apiSecretRef *string
+	if input.APISecret != nil && strings.TrimSpace(*input.APISecret) != "" {
+		encrypted, err := s.secrets.Encrypt(strings.TrimSpace(*input.APISecret))
+		if err != nil {
+			return nil, fmt.Errorf("encrypt api secret: %w", err)
+		}
+		apiSecretRef = &encrypted
+	}
 	config := &model.LLMConfig{
-		Name:        normalized.Name,
-		Provider:    normalized.Provider,
-		BaseURL:     normalized.BaseURL,
-		Model:       normalized.Model,
-		Purpose:     normalized.Purpose,
-		APIKeyRef:   apiKeyRef,
-		Temperature: normalized.Temperature,
-		Enabled:     normalized.Enabled,
-		IsDefault:   normalized.IsDefault,
-		CreatedBy:   normalized.CreatedBy,
+		Name:         normalized.Name,
+		Provider:     normalized.Provider,
+		BaseURL:      normalized.BaseURL,
+		Model:        normalized.Model,
+		Purpose:      normalized.Purpose,
+		APIKeyRef:    apiKeyRef,
+		APISecretRef: apiSecretRef,
+		Temperature:  normalized.Temperature,
+		Enabled:      normalized.Enabled,
+		IsDefault:    normalized.IsDefault,
+		CreatedBy:    normalized.CreatedBy,
 	}
 	if err := s.configs.CreateLLMConfig(ctx, config); err != nil {
 		return nil, fmt.Errorf("create llm config: %w", err)
@@ -172,6 +183,17 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*mod
 			updates.APIKeyRef = &encrypted
 		}
 	}
+	if input.APISecret != nil {
+		updates.APISecretRefSet = true
+		apiSecret := strings.TrimSpace(*input.APISecret)
+		if apiSecret != "" {
+			encrypted, err := s.secrets.Encrypt(apiSecret)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt api secret: %w", err)
+			}
+			updates.APISecretRef = &encrypted
+		}
+	}
 	updates.Temperature = input.Temperature
 	updates.Enabled = input.Enabled
 	updates.IsDefault = input.IsDefault
@@ -207,6 +229,13 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 			return nil, fmt.Errorf("decrypt api key: %w", err)
 		}
 	}
+	apiSecret := ""
+	if config.APISecretRef != nil && *config.APISecretRef != "" {
+		apiSecret, err = s.secrets.Decrypt(*config.APISecretRef)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt api secret: %w", err)
+		}
+	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		prompt = model.DefaultLLMTestPrompt
@@ -218,10 +247,11 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 			return nil, ErrInvalidInput
 		}
 		result, err := client.Embed(ctx, EmbeddingRequest{
-			BaseURL: config.BaseURL,
-			APIKey:  apiKey,
-			Model:   config.Model,
-			Input:   []string{prompt},
+			BaseURL:   config.BaseURL,
+			APIKey:    apiKey,
+			APISecret: apiSecret,
+			Model:     config.Model,
+			Input:     []string{prompt},
 		})
 		if err != nil {
 			return nil, err
@@ -245,6 +275,7 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 		result, err := client.Rerank(ctx, RerankRequest{
 			BaseURL:   config.BaseURL,
 			APIKey:    apiKey,
+			APISecret: apiSecret,
 			Model:     config.Model,
 			Query:     prompt,
 			Documents: []string{prompt, "unrelated document"},
@@ -265,6 +296,7 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 	result, err := s.client.Chat(ctx, ChatRequest{
 		BaseURL:     config.BaseURL,
 		APIKey:      apiKey,
+		APISecret:   apiSecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,
 		Messages:    []ChatMessage{{Role: model.MessageRoleUser, Content: prompt}},

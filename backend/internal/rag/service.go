@@ -54,6 +54,11 @@ type Service struct {
 	client     llmsvc.Client
 }
 
+type modelCredential struct {
+	APIKey    string
+	APISecret string
+}
+
 type AskInput struct {
 	ConversationID *int64
 	Question       string
@@ -98,27 +103,27 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	if err != nil {
 		return nil, err
 	}
-	llmConfig, apiKey, llmReady, err := s.loadLLM(ctx)
+	llmConfig, llmCredential, llmReady, err := s.loadLLM(ctx)
 	if err != nil {
 		return nil, err
 	}
-	embeddingConfig, embeddingAPIKey, embeddingReady := s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
-	rerankConfig, rerankAPIKey, rerankReady := s.loadOptionalModel(ctx, model.LLMPurposeRerank)
-	rewritten := s.rewriteQuery(ctx, question, llmConfig, apiKey, llmReady)
+	embeddingConfig, embeddingCredential, embeddingReady := s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
+	rerankConfig, rerankCredential, rerankReady := s.loadOptionalModel(ctx, model.LLMPurposeRerank)
+	rewritten := s.rewriteQuery(ctx, question, llmConfig, llmCredential, llmReady)
 	chunks, err := s.recall(ctx, question, rewritten, limit*4)
 	if err != nil {
 		return nil, fmt.Errorf("recall knowledge chunks: %w", err)
 	}
 	if embeddingReady {
-		chunks = s.embeddingRank(ctx, rewritten, chunks, limit*3, embeddingConfig, embeddingAPIKey)
+		chunks = s.embeddingRank(ctx, rewritten, chunks, limit*3, embeddingConfig, embeddingCredential)
 	}
 	if rerankReady {
-		chunks = s.modelRerank(ctx, question, chunks, limit, rerankConfig, rerankAPIKey)
+		chunks = s.modelRerank(ctx, question, chunks, limit, rerankConfig, rerankCredential)
 	} else {
 		chunks = lexicalRerankChunks(question, rewritten, chunks, limit)
 	}
 	citations := buildCitations(chunks)
-	answer, err := s.answer(ctx, question, rewritten, chunks, citations, llmConfig, apiKey, llmReady)
+	answer, err := s.answer(ctx, question, rewritten, chunks, citations, llmConfig, llmCredential, llmReady)
 	if err != nil {
 		return nil, err
 	}
@@ -213,23 +218,19 @@ func (s *Service) ensureConversation(ctx context.Context, actor *model.AppUser, 
 	return conversation, nil
 }
 
-func (s *Service) loadLLM(ctx context.Context) (*model.LLMConfig, string, bool, error) {
+func (s *Service) loadLLM(ctx context.Context) (*model.LLMConfig, modelCredential, bool, error) {
 	config, err := s.repository.FindDefaultEnabledLLMConfig(ctx)
 	if errors.Is(err, repository.ErrNotFound) {
-		return nil, "", false, nil
+		return nil, modelCredential{}, false, nil
 	}
 	if err != nil {
-		return nil, "", false, fmt.Errorf("load default llm config: %w", err)
+		return nil, modelCredential{}, false, fmt.Errorf("load default llm config: %w", err)
 	}
-	apiKey := ""
-	if config.APIKeyRef != nil && *config.APIKeyRef != "" && s.secrets != nil {
-		decrypted, err := s.secrets.Decrypt(*config.APIKeyRef)
-		if err != nil {
-			return nil, "", false, fmt.Errorf("decrypt api key: %w", err)
-		}
-		apiKey = decrypted
+	credential, err := s.decryptModelCredential(config)
+	if err != nil {
+		return nil, modelCredential{}, false, err
 	}
-	return config, apiKey, s.client != nil, nil
+	return config, credential, s.client != nil, nil
 }
 
 func (s *Service) recall(ctx context.Context, question, rewritten string, limit int) ([]model.KBChunk, error) {
@@ -261,51 +262,70 @@ func (s *Service) recall(ctx context.Context, question, rewritten string, limit 
 	return recalled, nil
 }
 
-func (s *Service) loadOptionalModel(ctx context.Context, purpose string) (*model.LLMConfig, string, bool) {
+func (s *Service) loadOptionalModel(ctx context.Context, purpose string) (*model.LLMConfig, modelCredential, bool) {
 	if s.client == nil {
-		return nil, "", false
+		return nil, modelCredential{}, false
 	}
 	if purpose == model.LLMPurposeEmbedding {
 		if _, ok := s.client.(llmsvc.EmbeddingClient); !ok {
-			return nil, "", false
+			return nil, modelCredential{}, false
 		}
 	}
 	if purpose == model.LLMPurposeRerank {
 		if _, ok := s.client.(llmsvc.RerankClient); !ok {
-			return nil, "", false
+			return nil, modelCredential{}, false
 		}
 	}
 	config, err := s.repository.FindDefaultEnabledLLMConfigByPurpose(ctx, purpose)
 	if err != nil {
-		return nil, "", false
+		return nil, modelCredential{}, false
 	}
-	apiKey := ""
+	credential, err := s.decryptModelCredential(config)
+	if err != nil {
+		return nil, modelCredential{}, false
+	}
+	return config, credential, true
+}
+
+func (s *Service) decryptModelCredential(config *model.LLMConfig) (modelCredential, error) {
+	if config == nil || s.secrets == nil {
+		return modelCredential{}, nil
+	}
+	credential := modelCredential{}
 	if config.APIKeyRef != nil && *config.APIKeyRef != "" && s.secrets != nil {
 		decrypted, err := s.secrets.Decrypt(*config.APIKeyRef)
 		if err != nil {
-			return nil, "", false
+			return modelCredential{}, fmt.Errorf("decrypt api key: %w", err)
 		}
-		apiKey = decrypted
+		credential.APIKey = decrypted
 	}
-	return config, apiKey, true
+	if config.APISecretRef != nil && *config.APISecretRef != "" && s.secrets != nil {
+		decrypted, err := s.secrets.Decrypt(*config.APISecretRef)
+		if err != nil {
+			return modelCredential{}, fmt.Errorf("decrypt api secret: %w", err)
+		}
+		credential.APISecret = decrypted
+	}
+	return credential, nil
 }
 
-func (s *Service) embeddingRank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, apiKey string) []model.KBChunk {
+func (s *Service) embeddingRank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, credential modelCredential) []model.KBChunk {
 	client, ok := s.client.(llmsvc.EmbeddingClient)
 	if !ok || config == nil {
 		return chunks
 	}
 	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
-		BaseURL: config.BaseURL,
-		APIKey:  apiKey,
-		Model:   config.Model,
-		Input:   []string{query},
+		BaseURL:   config.BaseURL,
+		APIKey:    credential.APIKey,
+		APISecret: credential.APISecret,
+		Model:     config.Model,
+		Input:     []string{query},
 	})
 	if err != nil || result == nil || len(result.Embeddings) == 0 {
 		return chunks
 	}
 	queryEmbedding := result.Embeddings[0]
-	s.ensureChunkEmbeddings(ctx, client, config, apiKey)
+	s.ensureChunkEmbeddings(ctx, client, config, credential)
 	indexes, err := s.repository.ListPublishedChunkEmbeddings(ctx, config.Model, maxVectorCandidates)
 	if err != nil || len(indexes) == 0 {
 		return chunks
@@ -344,7 +364,7 @@ func (s *Service) embeddingRank(ctx context.Context, query string, chunks []mode
 	return ranked
 }
 
-func (s *Service) ensureChunkEmbeddings(ctx context.Context, client llmsvc.EmbeddingClient, config *model.LLMConfig, apiKey string) {
+func (s *Service) ensureChunkEmbeddings(ctx context.Context, client llmsvc.EmbeddingClient, config *model.LLMConfig, credential modelCredential) {
 	missing, err := s.repository.ListPublishedChunksMissingEmbedding(ctx, config.Model, maxVectorBuildBatch)
 	if err != nil || len(missing) == 0 {
 		return
@@ -354,10 +374,11 @@ func (s *Service) ensureChunkEmbeddings(ctx context.Context, client llmsvc.Embed
 		inputs = append(inputs, chunk.Content)
 	}
 	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
-		BaseURL: config.BaseURL,
-		APIKey:  apiKey,
-		Model:   config.Model,
-		Input:   inputs,
+		BaseURL:   config.BaseURL,
+		APIKey:    credential.APIKey,
+		APISecret: credential.APISecret,
+		Model:     config.Model,
+		Input:     inputs,
 	})
 	if err != nil || result == nil || len(result.Embeddings) != len(missing) {
 		return
@@ -384,7 +405,7 @@ func (s *Service) ensureChunkEmbeddings(ctx context.Context, client llmsvc.Embed
 	_ = s.repository.UpsertChunkEmbeddings(ctx, embeddings)
 }
 
-func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, apiKey string) []model.KBChunk {
+func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, credential modelCredential) []model.KBChunk {
 	client, ok := s.client.(llmsvc.RerankClient)
 	if !ok || config == nil || len(chunks) == 0 {
 		return lexicalRerankChunks(query, query, chunks, limit)
@@ -395,7 +416,8 @@ func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.
 	}
 	result, err := client.Rerank(ctx, llmsvc.RerankRequest{
 		BaseURL:   config.BaseURL,
-		APIKey:    apiKey,
+		APIKey:    credential.APIKey,
+		APISecret: credential.APISecret,
 		Model:     config.Model,
 		Query:     query,
 		Documents: documents,
@@ -431,14 +453,15 @@ func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.
 	return ranked
 }
 
-func (s *Service) rewriteQuery(ctx context.Context, question string, config *model.LLMConfig, apiKey string, ready bool) string {
+func (s *Service) rewriteQuery(ctx context.Context, question string, config *model.LLMConfig, credential modelCredential, ready bool) string {
 	fallback := ruleBasedRewrite(question)
 	if !ready || config == nil {
 		return fallback
 	}
 	result, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
-		APIKey:      apiKey,
+		APIKey:      credential.APIKey,
+		APISecret:   credential.APISecret,
 		Model:       config.Model,
 		Temperature: 0,
 		Messages: []llmsvc.ChatMessage{
@@ -456,7 +479,7 @@ func (s *Service) rewriteQuery(ctx context.Context, question string, config *mod
 	return rewritten
 }
 
-func (s *Service) answer(ctx context.Context, question, rewritten string, chunks []model.KBChunk, citations []Citation, config *model.LLMConfig, apiKey string, ready bool) (string, error) {
+func (s *Service) answer(ctx context.Context, question, rewritten string, chunks []model.KBChunk, citations []Citation, config *model.LLMConfig, credential modelCredential, ready bool) (string, error) {
 	if len(chunks) == 0 {
 		return noEvidenceAnswer, nil
 	}
@@ -465,7 +488,8 @@ func (s *Service) answer(ctx context.Context, question, rewritten string, chunks
 	}
 	result, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
-		APIKey:      apiKey,
+		APIKey:      credential.APIKey,
+		APISecret:   credential.APISecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,
 		Messages: []llmsvc.ChatMessage{
