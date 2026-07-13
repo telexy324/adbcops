@@ -232,6 +232,23 @@ func (h *TopologyHandler) TestSource(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *TopologyHandler) PreviewSource(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.MappingPreviewInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.PreviewSourceMapping(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "preview topology mapping failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *TopologyHandler) Upstream(c *gin.Context) {
 	result, err := h.service.Upstream(c.Request.Context(), traversalQueryFromRequest(c))
 	if handleTopologyError(c, err, "query upstream topology failed") {

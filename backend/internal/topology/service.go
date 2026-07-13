@@ -196,6 +196,64 @@ type SourceConfigTestResult struct {
 	Message      string `json:"message"`
 }
 
+type MappingPreviewInput struct {
+	MappingRules json.RawMessage `json:"mappingRules"`
+	SampleData   json.RawMessage `json:"sampleData"`
+	Limit        int             `json:"limit"`
+}
+
+type MappingPreviewResult struct {
+	Nodes      []PreviewNode `json:"nodes"`
+	Edges      []PreviewEdge `json:"edges"`
+	Unresolved []string      `json:"unresolved"`
+	Warnings   []string      `json:"warnings"`
+	Truncated  bool          `json:"truncated"`
+}
+
+type PreviewNode struct {
+	NodeKey    string         `json:"nodeKey"`
+	NodeType   string         `json:"nodeType"`
+	Name       string         `json:"name"`
+	Attributes map[string]any `json:"attributes,omitempty"`
+	Aliases    []string       `json:"aliases,omitempty"`
+}
+
+type PreviewEdge struct {
+	FromNodeKey  string   `json:"fromNodeKey"`
+	ToNodeKey    string   `json:"toNodeKey"`
+	RelationType string   `json:"relationType"`
+	Confidence   *float64 `json:"confidence,omitempty"`
+}
+
+type mappingRulesSpec struct {
+	NodeMappings []nodeMappingSpec `json:"nodeMappings"`
+	EdgeMappings []edgeMappingSpec `json:"edgeMappings"`
+}
+
+type nodeMappingSpec struct {
+	Name                string            `json:"name"`
+	EntityPath          string            `json:"entityPath"`
+	TargetNodeType      string            `json:"targetNodeType"`
+	ExternalKeyTemplate string            `json:"externalKeyTemplate"`
+	NameTemplate        string            `json:"nameTemplate"`
+	Attributes          map[string]string `json:"attributes"`
+	Aliases             []string          `json:"aliases"`
+}
+
+type edgeMappingSpec struct {
+	Name         string            `json:"name"`
+	EntityPath   string            `json:"entityPath"`
+	SourceLookup lookupMappingSpec `json:"sourceLookup"`
+	TargetLookup lookupMappingSpec `json:"targetLookup"`
+	RelationType string            `json:"relationType"`
+	Confidence   *float64          `json:"confidence"`
+}
+
+type lookupMappingSpec struct {
+	NodeType            string `json:"nodeType"`
+	ExternalKeyTemplate string `json:"externalKeyTemplate"`
+}
+
 func NewService(repository Repository, k8sReader K8sReader) *Service {
 	return &Service{repository: repository, k8sReader: k8sReader}
 }
@@ -399,6 +457,161 @@ func (s *Service) TestSourceConfig(ctx context.Context, id int64) (*SourceConfig
 		DataSourceID: source.DataSourceID,
 		Message:      "topology source config validated",
 	}, nil
+}
+
+func (s *Service) PreviewSourceMapping(ctx context.Context, id int64, input MappingPreviewInput) (*MappingPreviewResult, error) {
+	source, err := s.GetSourceConfig(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	mappingRules := source.MappingRules
+	if len(input.MappingRules) > 0 {
+		mappingRules = input.MappingRules
+	}
+	return s.PreviewMapping(ctx, MappingPreviewInput{
+		MappingRules: mappingRules,
+		SampleData:   input.SampleData,
+		Limit:        input.Limit,
+	})
+}
+
+func (s *Service) PreviewMapping(_ context.Context, input MappingPreviewInput) (*MappingPreviewResult, error) {
+	if len(input.MappingRules) == 0 || len(input.SampleData) == 0 {
+		return nil, ErrInvalidInput
+	}
+	if len(input.MappingRules) > 262144 || len(input.SampleData) > 524288 {
+		return nil, ErrInvalidInput
+	}
+	if containsSensitiveJSON(input.MappingRules) || containsSensitiveJSON(input.SampleData) {
+		return nil, ErrSensitiveConfig
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	var rules mappingRulesSpec
+	if err := json.Unmarshal(input.MappingRules, &rules); err != nil {
+		return nil, ErrInvalidInput
+	}
+	if len(rules.NodeMappings) == 0 && len(rules.EdgeMappings) == 0 {
+		return nil, ErrInvalidInput
+	}
+	var sample any
+	if err := json.Unmarshal(input.SampleData, &sample); err != nil {
+		return nil, ErrInvalidInput
+	}
+	result := &MappingPreviewResult{
+		Nodes:      []PreviewNode{},
+		Edges:      []PreviewEdge{},
+		Unresolved: []string{},
+		Warnings:   []string{},
+	}
+	for _, mapping := range rules.NodeMappings {
+		if result.Truncated {
+			break
+		}
+		if !validNodeMapping(mapping) {
+			result.Unresolved = append(result.Unresolved, "invalid node mapping: "+mapping.Name)
+			continue
+		}
+		entities, err := selectJSONPath(sample, mapping.EntityPath)
+		if err != nil {
+			result.Unresolved = append(result.Unresolved, mapping.Name+": "+err.Error())
+			continue
+		}
+		for _, entity := range entities {
+			if len(result.Nodes) >= limit {
+				result.Truncated = true
+				break
+			}
+			contextMap, ok := entity.(map[string]any)
+			if !ok {
+				result.Unresolved = append(result.Unresolved, mapping.Name+": entity is not object")
+				continue
+			}
+			nodeKey, err := renderTemplate(mapping.ExternalKeyTemplate, contextMap)
+			if err != nil || nodeKey == "" {
+				result.Unresolved = append(result.Unresolved, mapping.Name+": node key unresolved")
+				continue
+			}
+			name, err := renderTemplate(mapping.NameTemplate, contextMap)
+			if err != nil || name == "" {
+				result.Unresolved = append(result.Unresolved, mapping.Name+": node name unresolved")
+				continue
+			}
+			attributes := map[string]any{}
+			for key, template := range mapping.Attributes {
+				if sensitiveTopologyKey(key) {
+					return nil, ErrSensitiveConfig
+				}
+				value, err := renderTemplate(template, contextMap)
+				if err != nil {
+					result.Unresolved = append(result.Unresolved, mapping.Name+": attribute "+key+" unresolved")
+					continue
+				}
+				attributes[key] = value
+			}
+			aliases := []string{}
+			for _, template := range mapping.Aliases {
+				value, err := renderTemplate(template, contextMap)
+				if err == nil && value != "" {
+					aliases = append(aliases, value)
+				}
+			}
+			result.Nodes = append(result.Nodes, PreviewNode{
+				NodeKey:    nodeKey,
+				NodeType:   mapping.TargetNodeType,
+				Name:       name,
+				Attributes: attributes,
+				Aliases:    aliases,
+			})
+		}
+	}
+	for _, mapping := range rules.EdgeMappings {
+		if result.Truncated {
+			break
+		}
+		if !validEdgeMapping(mapping) {
+			result.Unresolved = append(result.Unresolved, "invalid edge mapping: "+mapping.Name)
+			continue
+		}
+		entities, err := selectJSONPath(sample, mapping.EntityPath)
+		if err != nil {
+			result.Unresolved = append(result.Unresolved, mapping.Name+": "+err.Error())
+			continue
+		}
+		for _, entity := range entities {
+			if len(result.Edges) >= limit {
+				result.Truncated = true
+				break
+			}
+			contextMap, ok := entity.(map[string]any)
+			if !ok {
+				result.Unresolved = append(result.Unresolved, mapping.Name+": entity is not object")
+				continue
+			}
+			from, err := renderTemplate(mapping.SourceLookup.ExternalKeyTemplate, contextMap)
+			if err != nil || from == "" {
+				result.Unresolved = append(result.Unresolved, mapping.Name+": source unresolved")
+				continue
+			}
+			to, err := renderTemplate(mapping.TargetLookup.ExternalKeyTemplate, contextMap)
+			if err != nil || to == "" {
+				result.Unresolved = append(result.Unresolved, mapping.Name+": target unresolved")
+				continue
+			}
+			result.Edges = append(result.Edges, PreviewEdge{
+				FromNodeKey:  from,
+				ToNodeKey:    to,
+				RelationType: mapping.RelationType,
+				Confidence:   mapping.Confidence,
+			})
+		}
+	}
+	if len(result.Nodes) == 0 && len(result.Edges) == 0 {
+		result.Warnings = append(result.Warnings, "mapping preview produced no nodes or edges")
+	}
+	return result, nil
 }
 
 func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.TopologyNode, error) {
@@ -1104,6 +1317,189 @@ func sensitiveTopologyKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func validNodeMapping(mapping nodeMappingSpec) bool {
+	return strings.TrimSpace(mapping.Name) != "" &&
+		validJSONPath(mapping.EntityPath) &&
+		validTypeKey(mapping.TargetNodeType) &&
+		validTemplate(mapping.ExternalKeyTemplate) &&
+		validTemplate(mapping.NameTemplate)
+}
+
+func validEdgeMapping(mapping edgeMappingSpec) bool {
+	if mapping.Confidence != nil && (*mapping.Confidence < 0 || *mapping.Confidence > 1) {
+		return false
+	}
+	return strings.TrimSpace(mapping.Name) != "" &&
+		validJSONPath(mapping.EntityPath) &&
+		validTypeKey(mapping.SourceLookup.NodeType) &&
+		validTypeKey(mapping.TargetLookup.NodeType) &&
+		validTypeKey(mapping.RelationType) &&
+		validTemplate(mapping.SourceLookup.ExternalKeyTemplate) &&
+		validTemplate(mapping.TargetLookup.ExternalKeyTemplate)
+}
+
+func validJSONPath(path string) bool {
+	if path == "$" {
+		return true
+	}
+	if !strings.HasPrefix(path, "$.") || len(path) > 200 {
+		return false
+	}
+	for _, segment := range strings.Split(strings.TrimPrefix(path, "$."), ".") {
+		if segment == "" {
+			return false
+		}
+		if strings.HasSuffix(segment, "[*]") {
+			segment = strings.TrimSuffix(segment, "[*]")
+		}
+		if !validPathSegment(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPathSegment(segment string) bool {
+	if segment == "" || len(segment) > 80 {
+		return false
+	}
+	for _, r := range segment {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validTemplate(template string) bool {
+	if strings.TrimSpace(template) == "" || len(template) > 500 {
+		return false
+	}
+	for index := 0; index < len(template); {
+		start := strings.Index(template[index:], "{{")
+		if start < 0 {
+			return true
+		}
+		start += index
+		end := strings.Index(template[start+2:], "}}")
+		if end < 0 {
+			return false
+		}
+		end += start + 2
+		token := strings.TrimSpace(template[start+2 : end])
+		if !validTemplateToken(token) {
+			return false
+		}
+		index = end + 2
+	}
+	return true
+}
+
+func validTemplateToken(token string) bool {
+	if token == "" || len(token) > 120 {
+		return false
+	}
+	for _, segment := range strings.Split(token, ".") {
+		if !validPathSegment(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func selectJSONPath(root any, path string) ([]any, error) {
+	if !validJSONPath(path) {
+		return nil, ErrInvalidInput
+	}
+	if path == "$" {
+		return []any{root}, nil
+	}
+	current := []any{root}
+	for _, rawSegment := range strings.Split(strings.TrimPrefix(path, "$."), ".") {
+		expand := strings.HasSuffix(rawSegment, "[*]")
+		segment := strings.TrimSuffix(rawSegment, "[*]")
+		next := []any{}
+		for _, item := range current {
+			object, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("path %s expects object", path)
+			}
+			value, ok := object[segment]
+			if !ok {
+				return nil, fmt.Errorf("path %s missing %s", path, segment)
+			}
+			if expand {
+				values, ok := value.([]any)
+				if !ok {
+					return nil, fmt.Errorf("path %s expects array", path)
+				}
+				next = append(next, values...)
+				continue
+			}
+			next = append(next, value)
+		}
+		current = next
+		if len(current) > 500 {
+			return current[:500], nil
+		}
+	}
+	return current, nil
+}
+
+func renderTemplate(template string, contextMap map[string]any) (string, error) {
+	if !validTemplate(template) {
+		return "", ErrInvalidInput
+	}
+	var builder strings.Builder
+	for index := 0; index < len(template); {
+		start := strings.Index(template[index:], "{{")
+		if start < 0 {
+			builder.WriteString(template[index:])
+			break
+		}
+		start += index
+		builder.WriteString(template[index:start])
+		end := strings.Index(template[start+2:], "}}")
+		if end < 0 {
+			return "", ErrInvalidInput
+		}
+		end += start + 2
+		token := strings.TrimSpace(template[start+2 : end])
+		value, ok := lookupTemplateValue(contextMap, token)
+		if !ok {
+			return "", ErrInvalidInput
+		}
+		builder.WriteString(fmt.Sprint(value))
+		index = end + 2
+	}
+	result := strings.TrimSpace(builder.String())
+	if len(result) > 500 {
+		return "", ErrInvalidInput
+	}
+	return result, nil
+}
+
+func lookupTemplateValue(contextMap map[string]any, token string) (any, bool) {
+	var current any = contextMap
+	for _, segment := range strings.Split(token, ".") {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[segment]
+		if !ok || current == nil {
+			return nil, false
+		}
+	}
+	switch current.(type) {
+	case map[string]any, []any:
+		return nil, false
+	default:
+		return current, true
+	}
 }
 
 func (s *Service) validateAllowedNodeTypes(ctx context.Context, relationType *model.TopologyRelationType) error {

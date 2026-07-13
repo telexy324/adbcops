@@ -192,6 +192,100 @@ func TestCreateSourceConfigRejectsUnsupportedSourceAndBadSchedule(t *testing.T) 
 	}
 }
 
+func TestPreviewMappingBuildsNodesAndEdgesWithoutWriting(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	source, err := service.CreateSourceConfig(context.Background(), SourceConfigInput{
+		Name:       "cmdb-topology",
+		SourceType: model.TopologySourceTypeManual,
+		MappingRules: json.RawMessage(`{
+			"nodeMappings": [
+				{
+					"name": "app-node",
+					"entityPath": "$.data.apps[*]",
+					"targetNodeType": "service",
+					"externalKeyTemplate": "prod:service:cmdb:{{id}}",
+					"nameTemplate": "{{name}}",
+					"attributes": {"owner": "{{owner}}"},
+					"aliases": ["{{shortName}}"]
+				}
+			],
+			"edgeMappings": [
+				{
+					"name": "app-db",
+					"entityPath": "$.data.dependencies[*]",
+					"sourceLookup": {"nodeType": "service", "externalKeyTemplate": "prod:service:cmdb:{{sourceId}}"},
+					"targetLookup": {"nodeType": "database", "externalKeyTemplate": "prod:database:cmdb:{{targetId}}"},
+					"relationType": "depends_on",
+					"confidence": 0.95
+				}
+			]
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create source config: %v", err)
+	}
+	result, err := service.PreviewSourceMapping(context.Background(), source.ID, MappingPreviewInput{
+		SampleData: json.RawMessage(`{
+			"data": {
+				"apps": [{"id": "payment-api", "name": "payment-api", "shortName": "pay-api", "owner": "ops"}],
+				"dependencies": [{"sourceId": "payment-api", "targetId": "pay-db"}]
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("preview mapping: %v", err)
+	}
+	if len(result.Nodes) != 1 || result.Nodes[0].NodeKey != "prod:service:cmdb:payment-api" || result.Nodes[0].Aliases[0] != "pay-api" {
+		t.Fatalf("unexpected preview nodes: %+v", result)
+	}
+	if len(result.Edges) != 1 || result.Edges[0].ToNodeKey != "prod:database:cmdb:pay-db" {
+		t.Fatalf("unexpected preview edges: %+v", result)
+	}
+	if len(repo.nodes) != 0 || len(repo.edges) != 0 {
+		t.Fatalf("preview should not write graph, nodes=%+v edges=%+v", repo.nodes, repo.edges)
+	}
+}
+
+func TestPreviewMappingReportsUnresolvedAndRejectsSensitiveFields(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	result, err := service.PreviewMapping(context.Background(), MappingPreviewInput{
+		MappingRules: json.RawMessage(`{
+			"nodeMappings": [{
+				"name": "app-node",
+				"entityPath": "$.items[*]",
+				"targetNodeType": "service",
+				"externalKeyTemplate": "prod:service:{{missing}}",
+				"nameTemplate": "{{name}}"
+			}]
+		}`),
+		SampleData: json.RawMessage(`{"items":[{"name":"payment-api"}]}`),
+	})
+	if err != nil {
+		t.Fatalf("preview mapping: %v", err)
+	}
+	if len(result.Unresolved) == 0 || len(result.Nodes) != 0 {
+		t.Fatalf("expected unresolved preview, got %+v", result)
+	}
+	_, err = service.PreviewMapping(context.Background(), MappingPreviewInput{
+		MappingRules: json.RawMessage(`{
+			"nodeMappings": [{
+				"name": "bad-node",
+				"entityPath": "$.items[*]",
+				"targetNodeType": "service",
+				"externalKeyTemplate": "prod:service:{{id}}",
+				"nameTemplate": "{{name}}",
+				"attributes": {"apiSecret": "{{secret}}"}
+			}]
+		}`),
+		SampleData: json.RawMessage(`{"items":[{"id":"a","name":"a","secret":"x"}]}`),
+	})
+	if !errors.Is(err, ErrSensitiveConfig) {
+		t.Fatalf("expected sensitive config error, got %v", err)
+	}
+}
+
 func TestSyncK8sGeneratesDeploymentPodServiceIngressRelations(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	reader := fakeK8sReader{resources: map[string][]k8ssvc.ResourceItem{

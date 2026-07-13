@@ -100,6 +100,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.PUT("/sources/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.UpdateSource)
 		topologyRoutes.DELETE("/sources/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.DeleteSource)
 		topologyRoutes.POST("/sources/:id/test", dependencies.RequireAdmin, dependencies.TopologyHandler.TestSource)
+		topologyRoutes.POST("/sources/:id/preview", dependencies.RequireAdmin, dependencies.TopologyHandler.PreviewSource)
 		topologyRoutes.POST("/nodes", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertNode)
 		topologyRoutes.POST("/edges", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertEdge)
 		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
