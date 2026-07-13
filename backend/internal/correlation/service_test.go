@@ -92,6 +92,33 @@ func TestAnalyzeCapsHighConfidenceWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAppliesCandidateLimitAfterScoringAndStableTieBreak(t *testing.T) {
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	events := &memoryEventRepository{events: []model.OpsEvent{
+		opsEvent(1, now, "alert", "latency_high", "payment api latency high", "payment-api", `{"evidenceKeys":["ev_target"]}`),
+		opsEvent(3, now.Add(-2*time.Minute), "release", "deploy", "payment deploy", "payment-api", `{"evidenceKeys":["ev_3"]}`),
+		opsEvent(2, now.Add(-2*time.Minute), "release", "deploy", "payment deploy", "payment-api", `{"evidenceKeys":["ev_2"]}`),
+		opsEvent(4, now.Add(-30*time.Minute), "manual_note", "note", "payment note", "payment-api", `{"evidenceKeys":["ev_4"]}`),
+	}}
+	service := NewService(events, nil)
+
+	result, err := service.Analyze(context.Background(), Query{TargetEventID: 1, BeforeMinutes: 60, AfterMinutes: 10, Limit: 2})
+	if err != nil {
+		t.Fatalf("analyze correlation: %v", err)
+	}
+	if len(result.Candidates) != 2 {
+		t.Fatalf("expected top 2 candidates, got %+v", result.Candidates)
+	}
+	if result.Candidates[0].Event.ID != 2 || result.Candidates[1].Event.ID != 3 {
+		t.Fatalf("expected stable id tie-break after score/time, got %+v", result.Candidates)
+	}
+	for _, candidate := range result.Candidates {
+		if len(candidate.ScoreDetails) != 5 || candidate.Reason == "" {
+			t.Fatalf("candidate must remain explainable after limiting: %+v", candidate)
+		}
+	}
+}
+
 func findDetail(details []ScoreDetail, name string) ScoreDetail {
 	for _, detail := range details {
 		if detail.Name == name {

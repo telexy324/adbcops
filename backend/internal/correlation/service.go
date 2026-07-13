@@ -144,10 +144,16 @@ func (s *Service) Analyze(ctx context.Context, query Query) (*Result, error) {
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
-			return candidates[i].Event.Time.Before(candidates[j].Event.Time)
+			if !candidates[i].Event.Time.Equal(candidates[j].Event.Time) {
+				return candidates[i].Event.Time.Before(candidates[j].Event.Time)
+			}
+			return candidates[i].Event.ID < candidates[j].Event.ID
 		}
 		return candidates[i].Score > candidates[j].Score
 	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
 	return &Result{
 		Target:       summarizeEvent(*target),
 		From:         from,
