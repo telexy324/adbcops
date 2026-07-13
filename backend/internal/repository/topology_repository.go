@@ -218,7 +218,16 @@ func (r *GORMTopologyRepository) FindTopologyNodes(ctx context.Context, filters 
 		Model(&model.TopologyNode{}).
 		Distinct("topology_node.*").
 		Joins("LEFT JOIN topology_node_alias ON topology_node_alias.node_id = topology_node.id").
-		Where("topology_node.node_key = ? OR topology_node.name = ? OR topology_node.display_name = ? OR topology_node_alias.alias = ?", queryText, queryText, queryText, queryText).
+		Where(
+			"topology_node.node_key = ? OR topology_node.name = ? OR topology_node.display_name = ? OR topology_node_alias.alias = ? OR topology_node.name ILIKE ? OR topology_node.display_name ILIKE ? OR topology_node_alias.alias ILIKE ?",
+			queryText,
+			queryText,
+			queryText,
+			queryText,
+			"%"+queryText+"%",
+			"%"+queryText+"%",
+			"%"+queryText+"%",
+		).
 		Order("topology_node.source_priority DESC, topology_node.id ASC").
 		Limit(limit)
 	if filters.Environment != "" {

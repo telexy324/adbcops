@@ -167,6 +167,40 @@ type TraversalResult struct {
 	CycleDetected bool                 `json:"cycleDetected"`
 }
 
+type ExpandTopologyQuery struct {
+	NodeKey         string
+	Depth           int
+	Direction       string
+	MaxNodes        int
+	MaxEdges        int
+	OnlyPropagating bool
+	Semantics       []string
+	Environment     string
+	Cluster         string
+	Namespace       string
+}
+
+type ExpandTopologyResult struct {
+	RootKey       string               `json:"rootKey"`
+	Direction     string               `json:"direction"`
+	Depth         int                  `json:"depth"`
+	Nodes         []model.TopologyNode `json:"nodes"`
+	Edges         []model.TopologyEdge `json:"edges"`
+	Paths         []TopologyPath       `json:"paths"`
+	CycleDetected bool                 `json:"cycleDetected"`
+	Truncated     bool                 `json:"truncated"`
+}
+
+type TopologyPath struct {
+	TargetNodeKey string   `json:"targetNodeKey"`
+	Via           string   `json:"via,omitempty"`
+	Hops          int      `json:"hops"`
+	NodeKeys      []string `json:"nodeKeys"`
+	EdgeKeys      []string `json:"edgeKeys"`
+	Confidence    float64  `json:"confidence"`
+	ImpactType    string   `json:"impactType"`
+}
+
 type CommonDependencyQuery struct {
 	NodeKeys    []string
 	Hops        int
@@ -1187,6 +1221,120 @@ func (s *Service) Downstream(ctx context.Context, query TraversalQuery) (*Traver
 	return s.traverse(ctx, query, "downstream")
 }
 
+func (s *Service) ExpandTopology(ctx context.Context, query ExpandTopologyQuery) (*ExpandTopologyResult, error) {
+	root := strings.TrimSpace(query.NodeKey)
+	if root == "" {
+		return nil, ErrInvalidInput
+	}
+	depth := normalizeExpandDepth(query.Depth)
+	maxNodes := normalizeMaxNodes(query.MaxNodes)
+	maxEdges := query.MaxEdges
+	if maxEdges <= 0 || maxEdges > 3000 {
+		maxEdges = 1000
+	}
+	direction := strings.TrimSpace(query.Direction)
+	if direction == "" {
+		direction = "downstream"
+	}
+	if direction != "upstream" && direction != "downstream" && direction != "both" {
+		return nil, ErrInvalidInput
+	}
+	semantics := normalizeSemanticsFilter(query.Semantics)
+	graph, err := s.Graph(ctx, Query{
+		Environment: query.Environment,
+		Cluster:     query.Cluster,
+		Namespace:   query.Namespace,
+		Limit:       maxNodes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	index := newGraphIndex(graph)
+	if _, ok := index.nodes[root]; !ok {
+		return nil, ErrTopologyNodeAbsent
+	}
+	result := &ExpandTopologyResult{RootKey: root, Direction: direction, Depth: depth}
+	type pathState struct {
+		nodeKey    string
+		nodeKeys   []string
+		edgeKeys   []string
+		confidence float64
+	}
+	queue := []pathState{{nodeKey: root, nodeKeys: []string{root}, confidence: 1}}
+	visitedDepth := map[string]int{root: 0}
+	nodeSeen := map[string]model.TopologyNode{root: index.nodes[root]}
+	edgeSeen := map[string]model.TopologyEdge{}
+	for len(queue) > 0 {
+		state := queue[0]
+		queue = queue[1:]
+		if len(state.edgeKeys) >= depth {
+			continue
+		}
+		for _, edge := range expandEdges(index, state.nodeKey, direction) {
+			relationType := relationTypeByKey(edge.EdgeType)
+			if !expandAllowsEdge(edge, relationType, query.OnlyPropagating, semantics) {
+				continue
+			}
+			next := edge.ToNodeKey
+			if direction == "upstream" || (direction == "both" && edge.ToNodeKey == state.nodeKey) {
+				next = edge.FromNodeKey
+			}
+			if _, ok := index.nodes[next]; !ok {
+				continue
+			}
+			if stringInSlice(next, state.nodeKeys) {
+				result.CycleDetected = true
+				continue
+			}
+			nextNodeKeys := append(append([]string{}, state.nodeKeys...), next)
+			nextEdgeKeys := append(append([]string{}, state.edgeKeys...), edge.EdgeKey)
+			confidence := state.confidence * edgeConfidence(edge)
+			if _, ok := nodeSeen[next]; !ok {
+				if len(nodeSeen)+1 > maxNodes {
+					result.Truncated = true
+					continue
+				}
+				nodeSeen[next] = index.nodes[next]
+			}
+			edgeSeen[edge.EdgeKey] = edge
+			if len(edgeSeen) > maxEdges {
+				result.Truncated = true
+				delete(edgeSeen, edge.EdgeKey)
+				continue
+			}
+			hops := len(nextEdgeKeys)
+			result.Paths = append(result.Paths, TopologyPath{
+				TargetNodeKey: next,
+				Via:           pathVia(nextNodeKeys),
+				Hops:          hops,
+				NodeKeys:      nextNodeKeys,
+				EdgeKeys:      nextEdgeKeys,
+				Confidence:    confidence,
+				ImpactType:    "potentially_affected",
+			})
+			if previousDepth, seen := visitedDepth[next]; !seen || hops < previousDepth {
+				visitedDepth[next] = hops
+				queue = append(queue, pathState{nodeKey: next, nodeKeys: nextNodeKeys, edgeKeys: nextEdgeKeys, confidence: confidence})
+			}
+		}
+	}
+	for _, node := range nodeSeen {
+		result.Nodes = append(result.Nodes, node)
+	}
+	for _, edge := range edgeSeen {
+		result.Edges = append(result.Edges, edge)
+	}
+	sortTopologyNodes(result.Nodes)
+	sortTopologyEdges(result.Edges)
+	sort.Slice(result.Paths, func(i, j int) bool {
+		if result.Paths[i].Hops == result.Paths[j].Hops {
+			return result.Paths[i].Confidence > result.Paths[j].Confidence
+		}
+		return result.Paths[i].Hops < result.Paths[j].Hops
+	})
+	return result, nil
+}
+
 func (s *Service) BlastRadius(ctx context.Context, query TraversalQuery) (*TraversalResult, error) {
 	result, err := s.traverse(ctx, query, "downstream")
 	if result != nil {
@@ -2192,6 +2340,87 @@ func directionalEdges(index graphIndex, key, direction string) []model.TopologyE
 		return index.incoming[key]
 	}
 	return index.outgoing[key]
+}
+
+func expandEdges(index graphIndex, key, direction string) []model.TopologyEdge {
+	switch direction {
+	case "upstream":
+		return index.incoming[key]
+	case "both":
+		edges := append([]model.TopologyEdge{}, index.outgoing[key]...)
+		edges = append(edges, index.incoming[key]...)
+		return edges
+	default:
+		return index.outgoing[key]
+	}
+}
+
+func normalizeExpandDepth(depth int) int {
+	if depth <= 0 {
+		return 2
+	}
+	if depth > 5 {
+		return 5
+	}
+	return depth
+}
+
+func normalizeSemanticsFilter(values []string) map[string]struct{} {
+	result := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result[value] = struct{}{}
+		}
+	}
+	return result
+}
+
+func relationTypeByKey(edgeType string) model.TopologyRelationType {
+	switch edgeType {
+	case model.TopologyEdgeTypeOwns:
+		return model.TopologyRelationType{Semantics: model.TopologyRelationSemanticsOwnership, PropagatesFailure: false}
+	case model.TopologyEdgeTypeObservedWith:
+		return model.TopologyRelationType{Semantics: model.TopologyRelationSemanticsObservation, PropagatesFailure: false}
+	case "associated_with":
+		return model.TopologyRelationType{Semantics: model.TopologyRelationSemanticsAnnotation, PropagatesFailure: false}
+	default:
+		return model.TopologyRelationType{Semantics: model.TopologyRelationSemanticsRuntimeDep, PropagatesFailure: true}
+	}
+}
+
+func expandAllowsEdge(edge model.TopologyEdge, relationType model.TopologyRelationType, onlyPropagating bool, semantics map[string]struct{}) bool {
+	if edge.Status == edgeStatusStale || edge.Status == edgeStatusExpired {
+		return false
+	}
+	if len(semantics) == 0 {
+		if relationType.Semantics == model.TopologyRelationSemanticsAnnotation || relationType.Semantics == model.TopologyRelationSemanticsObservation {
+			return false
+		}
+	} else if _, ok := semantics[relationType.Semantics]; !ok {
+		return false
+	}
+	if onlyPropagating && !relationType.PropagatesFailure {
+		return false
+	}
+	return true
+}
+
+func edgeConfidence(edge model.TopologyEdge) float64 {
+	if edge.ResolvedConfidence != nil {
+		return *edge.ResolvedConfidence
+	}
+	if edge.Confidence != nil {
+		return *edge.Confidence
+	}
+	return 0.8
+}
+
+func pathVia(nodeKeys []string) string {
+	if len(nodeKeys) <= 2 {
+		return ""
+	}
+	return nodeKeys[1]
 }
 
 func hasDirectedCycle(index graphIndex, nodeKeys map[string]struct{}, direction string) bool {

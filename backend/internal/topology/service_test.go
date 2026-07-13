@@ -949,6 +949,94 @@ func TestCommonDependencies(t *testing.T) {
 	}
 }
 
+func TestFindNodeFuzzyScopeDisambiguationAndLimit(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+	if _, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api", Environment: "prod"}); err != nil {
+		t.Fatalf("upsert prod node: %v", err)
+	}
+	if _, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api", Environment: "test"}); err != nil {
+		t.Fatalf("upsert test node: %v", err)
+	}
+	fuzzy, err := service.FindNode(context.Background(), FindNodeInput{Query: "pay", Limit: 1})
+	if err != nil {
+		t.Fatalf("find fuzzy node: %v", err)
+	}
+	if len(fuzzy.Candidates) != 1 {
+		t.Fatalf("expected limit to apply, got %+v", fuzzy)
+	}
+	ambiguous, err := service.FindNode(context.Background(), FindNodeInput{Query: "payment-api"})
+	if err != nil {
+		t.Fatalf("find ambiguous node: %v", err)
+	}
+	if !ambiguous.Ambiguous || len(ambiguous.Candidates) != 2 {
+		t.Fatalf("expected prod/test ambiguity, got %+v", ambiguous)
+	}
+	scoped, err := service.FindNode(context.Background(), FindNodeInput{Query: "payment-api", Environment: "prod"})
+	if err != nil {
+		t.Fatalf("find scoped node: %v", err)
+	}
+	if !scoped.Matched || scoped.Node == nil || scoped.Node.Environment == nil || *scoped.Node.Environment != "prod" {
+		t.Fatalf("expected scoped prod match, got %+v", scoped)
+	}
+}
+
+func TestExpandTopologyBuildsFlatPathsAndSkipsAnnotationByDefault(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b", "svc:c", "svc:note"},
+		[][3]string{
+			{"svc:a", "svc:b", model.TopologyEdgeTypeDependsOn},
+			{"svc:b", "svc:c", model.TopologyEdgeTypeDependsOn},
+			{"svc:a", "svc:note", "associated_with"},
+		},
+	)
+	repo.seedRelationType("associated_with")
+	service := NewService(repo, nil)
+
+	result, err := service.ExpandTopology(context.Background(), ExpandTopologyQuery{NodeKey: "svc:a"})
+	if err != nil {
+		t.Fatalf("expand topology: %v", err)
+	}
+	if result.Depth != 2 || len(result.Paths) != 2 {
+		t.Fatalf("expected default depth 2 and two dependency paths, got %+v", result)
+	}
+	for _, path := range result.Paths {
+		if path.TargetNodeKey == "svc:note" {
+			t.Fatalf("annotation edge should be skipped by default, got %+v", result.Paths)
+		}
+		if path.Confidence <= 0 || len(path.NodeKeys) != path.Hops+1 || len(path.EdgeKeys) != path.Hops {
+			t.Fatalf("expected flat path metadata, got %+v", path)
+		}
+	}
+	annotated, err := service.ExpandTopology(context.Background(), ExpandTopologyQuery{NodeKey: "svc:a", Semantics: []string{model.TopologyRelationSemanticsAnnotation}})
+	if err != nil {
+		t.Fatalf("expand annotation topology: %v", err)
+	}
+	if len(annotated.Paths) != 1 || annotated.Paths[0].TargetNodeKey != "svc:note" {
+		t.Fatalf("expected explicit annotation traversal, got %+v", annotated.Paths)
+	}
+}
+
+func TestExpandTopologyCapsDepthAndNodeLimit(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	seedManualGraph(t, repo,
+		[]string{"svc:a", "svc:b", "svc:c"},
+		[][3]string{
+			{"svc:a", "svc:b", model.TopologyEdgeTypeDependsOn},
+			{"svc:b", "svc:c", model.TopologyEdgeTypeDependsOn},
+		},
+	)
+	service := NewService(repo, nil)
+	result, err := service.ExpandTopology(context.Background(), ExpandTopologyQuery{NodeKey: "svc:a", Depth: 99, MaxNodes: 2})
+	if err != nil {
+		t.Fatalf("expand topology: %v", err)
+	}
+	if result.Depth != 5 || !result.Truncated {
+		t.Fatalf("expected max depth cap and truncation, got %+v", result)
+	}
+}
+
 func TestUpstreamAndBlastRadius(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	seedManualGraph(t, repo,
@@ -1290,10 +1378,11 @@ func (r *memoryTopologyRepository) FindTopologyNodes(_ context.Context, filters 
 		if len(filters.Kinds) > 0 && !stringInSlice(node.Kind, filters.Kinds) {
 			continue
 		}
-		matched := node.NodeKey == filters.Query || node.Name == filters.Query || (node.DisplayName != nil && *node.DisplayName == filters.Query)
+		query := strings.ToLower(filters.Query)
+		matched := node.NodeKey == filters.Query || node.Name == filters.Query || strings.Contains(strings.ToLower(node.Name), query) || (node.DisplayName != nil && (*node.DisplayName == filters.Query || strings.Contains(strings.ToLower(*node.DisplayName), query)))
 		if !matched {
 			for _, alias := range r.aliases {
-				if alias.NodeID == node.ID && alias.Alias == filters.Query {
+				if alias.NodeID == node.ID && (alias.Alias == filters.Query || strings.Contains(strings.ToLower(alias.Alias), query)) {
 					if filters.Environment == "" || alias.Environment == nil || *alias.Environment == filters.Environment {
 						matched = true
 						break
@@ -1305,6 +1394,9 @@ func (r *memoryTopologyRepository) FindTopologyNodes(_ context.Context, filters 
 			if _, ok := seen[node.NodeKey]; !ok {
 				result = append(result, node)
 				seen[node.NodeKey] = struct{}{}
+				if filters.Limit > 0 && len(result) >= filters.Limit {
+					return result, nil
+				}
 			}
 		}
 	}

@@ -329,12 +329,45 @@ func (h *TopologyHandler) Downstream(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *TopologyHandler) Expand(c *gin.Context) {
+	depth, _ := strconv.Atoi(c.Query("depth"))
+	maxNodes, _ := strconv.Atoi(c.Query("maxNodes"))
+	maxEdges, _ := strconv.Atoi(c.Query("maxEdges"))
+	result, err := h.service.ExpandTopology(c.Request.Context(), topologysvc.ExpandTopologyQuery{
+		NodeKey:         c.Query("nodeKey"),
+		Depth:           depth,
+		Direction:       c.Query("direction"),
+		MaxNodes:        maxNodes,
+		MaxEdges:        maxEdges,
+		OnlyPropagating: strings.EqualFold(c.Query("onlyPropagating"), "true"),
+		Semantics:       splitQueryCSV(c.Query("semantics")),
+		Environment:     c.Query("environment"),
+		Cluster:         c.Query("cluster"),
+		Namespace:       c.Query("namespace"),
+	})
+	if handleTopologyError(c, err, "expand topology failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *TopologyHandler) BlastRadius(c *gin.Context) {
 	result, err := h.service.BlastRadius(c.Request.Context(), traversalQueryFromRequest(c))
 	if handleTopologyError(c, err, "query topology blast radius failed") {
 		return
 	}
 	success(c, result)
+}
+
+func splitQueryCSV(value string) []string {
+	result := []string{}
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func (h *TopologyHandler) CommonDependencies(c *gin.Context) {

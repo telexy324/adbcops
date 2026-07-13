@@ -82,6 +82,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.GET("/graph", dependencies.TopologyHandler.Graph)
 		topologyRoutes.GET("/upstream", dependencies.TopologyHandler.Upstream)
 		topologyRoutes.GET("/downstream", dependencies.TopologyHandler.Downstream)
+		topologyRoutes.GET("/expand", dependencies.TopologyHandler.Expand)
 		topologyRoutes.GET("/common-dependencies", dependencies.TopologyHandler.CommonDependencies)
 		topologyRoutes.GET("/blast-radius", dependencies.TopologyHandler.BlastRadius)
 		topologyRoutes.POST("/find-node", dependencies.TopologyHandler.FindNode)
