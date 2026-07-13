@@ -2257,6 +2257,541 @@ observed_at
 expires_at
 ```
 
+## 52A. Topology Configuration & View 增量设计（v1.2）
+
+本增量将原有“节点和边的简单维护”升级为完整的 Topology Configuration & View 子系统。若本小节与前文简化 Topology 设计冲突，以本小节为准。
+
+Topology 必须成为 RCA、Incident、Correlation、Change Analysis、Alert Analysis、K8s Diagnosis、Nginx Diagnosis、Redis Diagnosis、Nacos Diagnosis、TiDB Diagnosis 的事实层，而不只是前端展示图。
+
+### 52A.1 受控类型目录
+
+节点类型使用闭集，节点的 `node_type` 必须引用 `topology_node_type`。默认节点类型包括：
+
+```text
+system
+application
+service
+api
+cluster
+namespace
+workload
+pod
+container
+node
+host
+edge_agent
+ingress
+load_balancer
+nginx
+nacos
+nacos_service
+service_instance
+redis
+redis_cluster
+redis_instance
+tidb_cluster
+tidb
+tikv
+pd
+database
+database_schema
+mq
+topic
+config_center
+external_api
+third_party_service
+storage
+pvc
+network_device
+virtual_ip
+```
+
+每种节点类型配置：
+
+```text
+type_key
+display_name
+category
+icon
+default_color
+identity_fields
+searchable_fields
+default_label_template
+default_detail_fields
+enabled
+```
+
+关系类型使用闭集，边的 `relation_type` 必须引用 `topology_relation_type`。默认关系类型包括：
+
+```text
+contains
+belongs_to
+deploys
+deployed_on
+runs_on
+owns
+routes_to
+calls
+depends_on
+hard_depends_on
+connects_to
+selects
+exposes
+stores_in
+reads_from
+writes_to
+replicates_to
+member_of
+configured_by
+registered_in
+monitored_by
+discovered_from
+associated_with
+observed_with
+```
+
+每个关系类型必须带语义标签：
+
+```text
+hard_dep
+runtime_dep
+traffic
+ownership
+containment
+configuration
+annotation
+observation
+```
+
+语义标签决定是否参与故障传播、Blast Radius、默认查询方向、是否可由自动数据覆盖、是否仅用于展示。
+
+关系边方向表示事实方向：
+
+```text
+src_node -> dst_node
+```
+
+故障传播方向必须独立配置，不得仅根据边方向推断影响方向：
+
+```text
+none
+src_to_dst
+dst_to_src
+both
+```
+
+示例：`service depends_on database` 的边方向为 `service -> database`，但数据库故障影响服务，传播方向应为 `dst_to_src`。
+
+### 52A.2 配置层级和来源优先级
+
+Topology 配置分为五层：
+
+```text
+Type Catalog
+    ↓
+Source Configuration
+    ↓
+Discovery / Mapping Rules
+    ↓
+Resolved Topology Graph
+    ↓
+Saved Views
+```
+
+拓扑来源：
+
+```text
+manual
+kubernetes
+trace_service_graph
+cmdb
+edge_agent
+nacos
+redis
+tidb
+nginx
+generic_http
+```
+
+多来源融合优先级：
+
+| source_type | priority |
+|---|---:|
+| manual_override | 100 |
+| cmdb | 90 |
+| kubernetes | 80 |
+| trace_service_graph | 70 |
+| nacos | 68 |
+| nginx | 66 |
+| tidb | 64 |
+| redis | 62 |
+| edge_agent | 60 |
+| observation_inference | 30 |
+
+规则：
+
+- 高优先级来源可以覆盖节点展示属性；
+- 不同来源的属性保留 provenance；
+- 人工 override 不直接删除自动发现记录；
+- 自动来源消失后进入 stale，不得立即物理删除；
+- 手工节点默认永久有效，除非人工删除；
+- 同一关系可由多个来源共同证明；
+- 多个来源证明同一关系时提高 confidence；
+- 来源冲突必须记录，不得静默覆盖。
+
+### 52A.3 节点身份、别名和解析
+
+每个节点必须具有稳定的 `external_key`，推荐格式：
+
+```text
+{environment}:{node_type}:{source_scope}:{identity}
+```
+
+Identity 规则：
+
+- Kubernetes：优先 `cluster_uid + resource_uid`，无 UID 时使用 `cluster + namespace + kind + name`；
+- Trace Service：`environment + service.name`，可附加 service.namespace / deployment.environment；
+- CMDB：`cmdb_source + ci_type + ci_id`；
+- Redis：`environment + redis_cluster_name` 或 `environment + endpoint`；
+- TiDB：`environment + cluster_name` 或 `environment + component + advertise_address`；
+- Nacos：`environment + namespace + group + service_name`；
+- Nginx：`environment + nginx_instance_or_ingress + server_name`。
+
+别名来源：
+
+```text
+manual
+cmdb_name
+k8s_name
+service_name
+dns
+vip
+host_name
+short_name
+historical_name
+```
+
+名称解析顺序：
+
+1. external_key 精确匹配；
+2. alias 精确匹配；
+3. name 精确匹配；
+4. scope 内匹配；
+5. pg_trgm 模糊匹配；
+6. 返回多个候选时不得自动选择，必须返回 candidates 和 disambiguation 信息。
+
+### 52A.4 Source Configuration 和 Mapping DSL
+
+通用 Source Config：
+
+```json
+{
+  "name": "prod-k8s-topology",
+  "sourceType": "kubernetes",
+  "dataSourceId": 12,
+  "enabled": true,
+  "priority": 80,
+  "schedule": "*/5 * * * *",
+  "scope": {
+    "environment": "prod",
+    "allowedNamespaces": ["pay", "loan"]
+  },
+  "mappingRules": {},
+  "staleAfterSeconds": 900,
+  "deleteAfterSeconds": 604800
+}
+```
+
+受控 Mapping DSL 支持 Node Mapping 和 Edge Mapping，用于 CMDB / generic_http 等来源映射为 TopologyNode / TopologyEdge。
+
+安全限制：
+
+- 不执行任意代码；
+- 不支持 Shell；
+- 仅支持白名单模板函数；
+- JSONPath 深度和结果数量受限；
+- Template 输出长度受限；
+- 保存前前后端都要验证；
+- Mapping 运行需要审计；
+- 不允许通过 Mapping 读取凭据字段。
+
+### 52A.5 专用来源推导
+
+Kubernetes 自动生成：
+
+```text
+cluster contains namespace
+namespace contains workload
+workload deploys pod
+pod runs_on node
+service selects pod
+ingress routes_to service
+service exposes endpoint
+pvc belongs_to namespace
+pod connects_to pvc
+```
+
+Trace Service Graph 生成：
+
+```text
+service_a calls service_b
+service_a routes_to service_b
+```
+
+Trace 关系必须有 TTL；低请求量关系可标记低 confidence；不得因短暂无流量立即删除。
+
+Nacos 生成：
+
+```text
+application depends_on nacos
+service registered_in nacos
+nacos_service contains service_instance
+service_instance runs_on host
+```
+
+Nacos 服务实例与 K8s Pod 仅在 `instance_ip + port` 与 `pod_ip + container_port` 匹配且达到置信度阈值时建立 `associated_with`。
+
+Redis 生成：
+
+```text
+application depends_on redis_cluster
+redis_cluster contains redis_instance
+redis_instance replicates_to redis_instance
+redis_instance runs_on host
+```
+
+仅日志推断出的应用到 Redis 连接关系语义必须为 `observation`，不得默认作为强依赖传播。
+
+TiDB 生成：
+
+```text
+application depends_on tidb_cluster
+tidb_cluster contains tidb
+tidb_cluster contains tikv
+tidb_cluster contains pd
+tidb runs_on host
+tikv runs_on host
+pd runs_on host
+database_schema belongs_to tidb_cluster
+```
+
+Nginx 生成：
+
+```text
+nginx routes_to service
+ingress routes_to service
+load_balancer routes_to nginx
+nginx runs_on host
+nginx configured_by config_source
+```
+
+从配置元数据读取 upstream 时需要解析为 K8s Service、Pod、Host 或 external API；解析失败时创建低置信度 external node，等待后续合并。
+
+### 52A.6 多来源融合、Stale 和冲突
+
+节点融合：
+
+- 同一 `external_key` 只保留一个 resolved node；
+- 每个属性保留来源记录；
+- resolved 属性按 priority 选择；
+- manual locked fields 不被自动来源覆盖。
+
+关系融合：
+
+- 同一 `source_node + target_node + relation_type` 只形成一条 resolved edge；
+- 保存多个 observation；
+- confidence 可按 `1 - Π(1 - source_confidence)` 融合，最终不超过 1。
+
+来源同步后未再次观察到时：
+
+```text
+active -> stale -> expired
+```
+
+手工节点和手工边不自动过期；Trace 和 observation 关系必须配置 TTL。
+
+冲突类型：
+
+```text
+identity_conflict
+attribute_conflict
+relation_conflict
+type_conflict
+direction_conflict
+```
+
+冲突必须记录并在管理页面展示，不阻断其余同步；高风险 identity/type 冲突不自动合并；admin 可创建 merge rule 或 manual override。
+
+### 52A.7 Topology Query Service
+
+Find Node 输入支持 name、environment、nodeTypes、limit，匹配 external key、name、alias、attributes 中配置的 searchable fields。
+
+Expand Topology 默认：
+
+```text
+depth=2
+max_depth=5
+direction=both
+only_propagating=true
+include_stale=false
+max_nodes=200
+max_edges=500
+```
+
+`upstream` / `downstream` 以业务依赖和影响语义解释，而不是简单 SQL 边方向。Query Service 必须根据 `failure_propagation`、relation semantics 和 requested direction 决定可遍历方向。
+
+`only_propagating=true` 时只遍历：
+
+```text
+hard_dep
+runtime_dep
+traffic
+```
+
+以及明确配置 `propagates_failure=true` 的关系。
+
+Expand 输出必须为扁平列表，减少 LLM Prompt 大小，并包含：
+
+- hops；
+- relation type；
+- semantics；
+- reachedVia；
+- via node；
+- path node ids；
+- path edge ids；
+- path confidence；
+- propagates failure；
+- truncated。
+
+Explain Path 用于解释两个节点为何相关，Blast Radius 从故障节点出发只沿故障传播方向遍历，输出直接/间接受影响、业务系统、核心级别、活跃告警、关联 Incident、影响路径和置信度。
+
+### 52A.8 Topology Skills 和 Agent
+
+新增或升级 Skills：
+
+```text
+find_topology_node
+expand_topology
+explain_topology_path
+calculate_blast_radius
+find_common_dependency
+find_common_runtime_host
+find_dependency_cycles
+get_topology_node_detail
+get_topology_neighbors
+sync_topology_source
+preview_topology_mapping
+validate_topology_mapping
+resolve_topology_conflict
+```
+
+`find_topology_node` 和 `expand_topology` 为 `safe_read`；`sync_topology_source` 仅 admin 或内部调度器使用，必须审计、记录 sync run、支持取消、单来源加锁、禁止同一来源并发同步。
+
+Topology Agent 职责：
+
+- 节点名称解析；
+- 选择查询方向和深度；
+- 判断是否仅遍历传播关系；
+- 获取依赖图；
+- 计算潜在影响面；
+- 查找共同依赖；
+- 解释根因到症状的路径；
+- 提供 Incident Agent 可引用的 Evidence；
+- 不将图可达性等同于真实故障。
+
+只有拓扑关系、没有对应异常证据时，节点只能标记为 `potentially_affected`，不得标记为 `observed_affected`。
+
+### 52A.9 Workflow 集成
+
+Alert Diagnosis 升级为：
+
+```text
+parse_alert
+  -> find_topology_node
+  -> correlate_incident
+  -> expand_topology(depth=2, only_propagating=true)
+  -> query_related_alerts
+  -> collect_related_node_evidence
+  -> calculate_blast_radius
+  -> build_timeline
+  -> incident_agent
+  -> report
+```
+
+通用 RCA：
+
+```text
+extract_entities
+  -> find_topology_node
+  -> collect_primary_evidence
+  -> expand_topology
+  -> find_common_dependency
+  -> collect_neighbor_evidence
+  -> query_recent_changes
+  -> correlate
+  -> rank_root_causes
+  -> explain_topology_path
+  -> report
+```
+
+默认工具预算：
+
+```text
+TOPOLOGY_DEFAULT_DEPTH=2
+TOPOLOGY_MAX_DEPTH=5
+TOPOLOGY_MAX_NODES=200
+TOPOLOGY_MAX_EDGES=500
+TOPOLOGY_MAX_PATHS=20
+TOPOLOGY_AGENT_MAX_CALLS=5
+```
+
+### 52A.10 Topology Evidence
+
+每次拓扑查询必须生成 Evidence。RCA 报告引用拓扑时必须引用 `evidence_key`，不得只写“根据拓扑可知”。
+
+拓扑可达性和真实影响必须严格区分：
+
+```text
+potentially_affected
+observed_affected
+```
+
+### 52A.11 安全与权限
+
+仅 admin 可以：
+
+- 修改 Node Type；
+- 修改 Relation Type；
+- 修改 propagation；
+- 创建 Source Config；
+- 手工创建公共节点/关系；
+- 解决冲突；
+- 执行同步；
+- 创建 public View。
+
+Topology 查询必须应用 Environment、System、Data Source、Namespace、敏感节点属性策略。
+
+默认不得进入节点属性的敏感字段：
+
+```text
+password
+token
+secret
+private_key
+authorization
+cookie
+connection_password
+```
+
+连接串需脱敏，例如：
+
+```text
+mysql://user:***@host:4000/db
+redis://:***@host:6379
+```
+
+所有查询必须限制 depth、nodes、edges、paths、timeout、response bytes，防止图爆炸。
+
 ## 53. Correlation Engine
 
 关联规则分四层。
@@ -2762,6 +3297,251 @@ CREATE TABLE topology_edge (
 );
 ```
 
+### 70.1 Topology v1.2 增量表结构
+
+新增节点类型表：
+
+```sql
+CREATE TABLE topology_node_type (
+    id BIGSERIAL PRIMARY KEY,
+    type_key VARCHAR(80) NOT NULL UNIQUE,
+    display_name VARCHAR(120) NOT NULL,
+    category VARCHAR(80),
+    icon VARCHAR(120),
+    default_color VARCHAR(50),
+    identity_fields JSONB,
+    searchable_fields JSONB,
+    label_template TEXT,
+    detail_fields JSONB,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    built_in BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+新增关系类型表：
+
+```sql
+CREATE TABLE topology_relation_type (
+    id BIGSERIAL PRIMARY KEY,
+    type_key VARCHAR(80) NOT NULL UNIQUE,
+    display_name VARCHAR(120) NOT NULL,
+    semantics VARCHAR(50) NOT NULL,
+    failure_propagation VARCHAR(30) NOT NULL DEFAULT 'none',
+    default_direction VARCHAR(30) NOT NULL DEFAULT 'both',
+    propagates_failure BOOLEAN NOT NULL DEFAULT false,
+    allowed_source_types JSONB,
+    allowed_target_types JSONB,
+    style JSONB,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    built_in BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    CHECK (semantics IN (
+        'hard_dep',
+        'runtime_dep',
+        'traffic',
+        'ownership',
+        'containment',
+        'configuration',
+        'annotation',
+        'observation'
+    )),
+    CHECK (failure_propagation IN (
+        'none',
+        'src_to_dst',
+        'dst_to_src',
+        'both'
+    ))
+);
+```
+
+扩展节点表：
+
+```sql
+ALTER TABLE topology_node
+    ADD COLUMN node_type_id BIGINT REFERENCES topology_node_type(id),
+    ADD COLUMN display_name VARCHAR(255),
+    ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'active',
+    ADD COLUMN source_priority INT NOT NULL DEFAULT 0,
+    ADD COLUMN locked_fields JSONB,
+    ADD COLUMN resolved_attributes JSONB,
+    ADD COLUMN first_observed_at TIMESTAMP,
+    ADD COLUMN last_observed_at TIMESTAMP,
+    ADD COLUMN stale_at TIMESTAMP,
+    ADD COLUMN deleted_at TIMESTAMP;
+```
+
+迁移要求：
+
+- 将旧 `node_type` 字符串映射到 `topology_node_type`；
+- 迁移完成前保留旧字段；
+- 应用切换后再单独 migration 删除旧字段；
+- 不在同一 migration 中直接破坏兼容。
+
+扩展关系表：
+
+```sql
+ALTER TABLE topology_edge
+    ADD COLUMN relation_type_id BIGINT REFERENCES topology_relation_type(id),
+    ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'active',
+    ADD COLUMN source_priority INT NOT NULL DEFAULT 0,
+    ADD COLUMN resolved_confidence NUMERIC(5,4),
+    ADD COLUMN first_observed_at TIMESTAMP,
+    ADD COLUMN last_observed_at TIMESTAMP,
+    ADD COLUMN stale_at TIMESTAMP,
+    ADD COLUMN deleted_at TIMESTAMP;
+```
+
+新增节点来源观察表：
+
+```sql
+CREATE TABLE topology_node_observation (
+    id BIGSERIAL PRIMARY KEY,
+    node_id BIGINT NOT NULL REFERENCES topology_node(id) ON DELETE CASCADE,
+    source_config_id BIGINT,
+    source_type VARCHAR(50) NOT NULL,
+    source_record_key VARCHAR(255),
+    source_priority INT NOT NULL DEFAULT 0,
+    observed_name VARCHAR(255),
+    observed_attributes JSONB,
+    confidence NUMERIC(5,4),
+    observed_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    raw_ref JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE(node_id, source_type, source_record_key)
+);
+```
+
+新增关系来源观察表：
+
+```sql
+CREATE TABLE topology_edge_observation (
+    id BIGSERIAL PRIMARY KEY,
+    edge_id BIGINT NOT NULL REFERENCES topology_edge(id) ON DELETE CASCADE,
+    source_config_id BIGINT,
+    source_type VARCHAR(50) NOT NULL,
+    source_record_key VARCHAR(255),
+    source_priority INT NOT NULL DEFAULT 0,
+    observed_attributes JSONB,
+    confidence NUMERIC(5,4),
+    observed_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    raw_ref JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE(edge_id, source_type, source_record_key)
+);
+```
+
+新增别名表：
+
+```sql
+CREATE TABLE topology_node_alias (
+    id BIGSERIAL PRIMARY KEY,
+    node_id BIGINT NOT NULL REFERENCES topology_node(id) ON DELETE CASCADE,
+    alias VARCHAR(255) NOT NULL,
+    alias_type VARCHAR(50),
+    environment VARCHAR(50),
+    source_type VARCHAR(50),
+    confidence NUMERIC(5,4),
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE(node_id, alias)
+);
+
+CREATE INDEX idx_topology_alias_trgm
+ON topology_node_alias USING gin (alias gin_trgm_ops);
+```
+
+新增来源配置表：
+
+```sql
+CREATE TABLE topology_source_config (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(120) NOT NULL UNIQUE,
+    source_type VARCHAR(50) NOT NULL,
+    data_source_id BIGINT REFERENCES data_source(id),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    priority INT NOT NULL DEFAULT 50,
+    schedule VARCHAR(120),
+    scope JSONB,
+    mapping_rules JSONB,
+    stale_after_seconds INT NOT NULL DEFAULT 900,
+    delete_after_seconds INT NOT NULL DEFAULT 604800,
+    last_sync_at TIMESTAMP,
+    next_sync_at TIMESTAMP,
+    created_by BIGINT REFERENCES app_user(id),
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+新增同步任务表：
+
+```sql
+CREATE TABLE topology_sync_run (
+    id BIGSERIAL PRIMARY KEY,
+    source_config_id BIGINT NOT NULL REFERENCES topology_source_config(id) ON DELETE CASCADE,
+    trigger_type VARCHAR(30) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'pending',
+    discovered_nodes INT NOT NULL DEFAULT 0,
+    discovered_edges INT NOT NULL DEFAULT 0,
+    created_nodes INT NOT NULL DEFAULT 0,
+    updated_nodes INT NOT NULL DEFAULT 0,
+    stale_nodes INT NOT NULL DEFAULT 0,
+    created_edges INT NOT NULL DEFAULT 0,
+    updated_edges INT NOT NULL DEFAULT 0,
+    stale_edges INT NOT NULL DEFAULT 0,
+    conflict_count INT NOT NULL DEFAULT 0,
+    warning_count INT NOT NULL DEFAULT 0,
+    error_message TEXT,
+    detail JSONB,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+新增冲突表：
+
+```sql
+CREATE TABLE topology_conflict (
+    id BIGSERIAL PRIMARY KEY,
+    conflict_type VARCHAR(50) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'open',
+    node_id BIGINT REFERENCES topology_node(id),
+    edge_id BIGINT REFERENCES topology_edge(id),
+    source_config_id BIGINT REFERENCES topology_source_config(id),
+    description TEXT NOT NULL,
+    candidates JSONB,
+    resolution JSONB,
+    resolved_by BIGINT REFERENCES app_user(id),
+    resolved_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+新增保存视图表：
+
+```sql
+CREATE TABLE topology_saved_view (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    description TEXT,
+    owner_id BIGINT NOT NULL REFERENCES app_user(id),
+    visibility VARCHAR(30) NOT NULL DEFAULT 'private',
+    center_node_id BIGINT REFERENCES topology_node(id),
+    query_config JSONB NOT NULL,
+    display_config JSONB NOT NULL,
+    layout_data JSONB,
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    CHECK (visibility IN ('private', 'team', 'public'))
+);
+```
+
 ## 71. Incident
 
 ```sql
@@ -3057,6 +3837,100 @@ POST /api/topology/sync/kubernetes
 
 人工写入仅 admin。
 
+### 86.1 Topology v1.2 API 增量
+
+类型目录：
+
+```text
+GET    /api/topology/node-types
+POST   /api/topology/node-types
+PUT    /api/topology/node-types/{id}
+POST   /api/topology/node-types/{id}/enable
+POST   /api/topology/node-types/{id}/disable
+
+GET    /api/topology/relation-types
+POST   /api/topology/relation-types
+PUT    /api/topology/relation-types/{id}
+POST   /api/topology/relation-types/{id}/enable
+POST   /api/topology/relation-types/{id}/disable
+```
+
+要求：
+
+- 内置类型不得删除；
+- 已被引用类型不得删除；
+- 修改传播语义必须记录审计；
+- 修改后提示可能影响 RCA 和 Blast Radius。
+
+节点、关系和别名：
+
+```text
+GET    /api/topology/nodes
+POST   /api/topology/nodes
+GET    /api/topology/nodes/{id}
+PUT    /api/topology/nodes/{id}
+DELETE /api/topology/nodes/{id}
+
+GET    /api/topology/edges
+POST   /api/topology/edges
+GET    /api/topology/edges/{id}
+PUT    /api/topology/edges/{id}
+DELETE /api/topology/edges/{id}
+
+POST   /api/topology/nodes/{id}/aliases
+DELETE /api/topology/nodes/{id}/aliases/{aliasId}
+```
+
+人工节点/边 API admin only；删除采用软删除；自动发现节点不能直接物理删除；可以创建 manual override。
+
+查询：
+
+```text
+POST /api/topology/find-node
+POST /api/topology/expand
+POST /api/topology/explain-path
+POST /api/topology/blast-radius
+POST /api/topology/common-dependencies
+GET  /api/topology/graph
+```
+
+来源配置：
+
+```text
+GET    /api/topology/sources
+POST   /api/topology/sources
+GET    /api/topology/sources/{id}
+PUT    /api/topology/sources/{id}
+DELETE /api/topology/sources/{id}
+POST   /api/topology/sources/{id}/test
+POST   /api/topology/sources/{id}/preview
+POST   /api/topology/sources/{id}/sync
+GET    /api/topology/sources/{id}/runs
+GET    /api/topology/sync-runs/{runId}
+POST   /api/topology/sync-runs/{runId}/cancel
+```
+
+冲突：
+
+```text
+GET  /api/topology/conflicts
+GET  /api/topology/conflicts/{id}
+POST /api/topology/conflicts/{id}/resolve
+POST /api/topology/conflicts/{id}/ignore
+```
+
+保存视图：
+
+```text
+GET    /api/topology/views
+POST   /api/topology/views
+GET    /api/topology/views/{id}
+PUT    /api/topology/views/{id}
+DELETE /api/topology/views/{id}
+POST   /api/topology/views/{id}/clone
+POST   /api/topology/views/{id}/set-default
+```
+
 ## 87. Incident API
 
 ```text
@@ -3165,6 +4039,274 @@ Chat 不只是问答，应支持：
 - Blast Radius；
 - 选择节点发起分析；
 - 关联 Incident。
+
+### 93.1 Topology v1.2 页面结构
+
+页面：
+
+```text
+/topology
+/topology/views
+/topology/types
+/topology/sources
+/topology/conflicts
+/topology/sync-runs
+```
+
+Topology Map 顶部查询栏：
+
+- Environment；
+- System；
+- Center Node；
+- Direction；
+- Depth；
+- Only Propagating；
+- Node Types；
+- Relation Types；
+- Semantics；
+- Active/Stale；
+- Saved View。
+
+左侧：
+
+- 节点类型图例；
+- 关系语义图例；
+- 过滤器；
+- 来源过滤。
+
+中间：
+
+- React Flow 图；
+- MiniMap；
+- Zoom；
+- Fit View；
+- Expand Upstream；
+- Expand Downstream；
+- Blast Radius。
+
+右侧 Detail Drawer：
+
+```text
+Overview
+Attributes
+Health
+Active Alerts
+Recent Changes
+Evidence
+Neighbors
+Sources
+Conflicts
+Actions
+```
+
+允许操作：
+
+- 以此为中心；
+- 展开上游；
+- 展开下游；
+- 计算 Blast Radius；
+- 发起分析；
+- 关联 Incident；
+- admin 添加人工关系。
+
+### 93.2 Type Catalog 页面
+
+Node Types 展示和编辑：
+
+- 类型键；
+- 显示名；
+- 分类；
+- 图标；
+- 颜色；
+- 标签模板；
+- 搜索字段；
+- 启用状态。
+
+Relation Types 展示和编辑：
+
+- 类型键；
+- 显示名；
+- semantics；
+- failure propagation；
+- 允许源/目标类型；
+- 图样式；
+- 是否传播故障。
+
+修改 `semantics` 或 `failure_propagation` 时必须显示警告：
+
+```text
+该修改会改变 Blast Radius 和 RCA 的依赖遍历结果。
+```
+
+### 93.3 Source Config Wizard
+
+步骤：
+
+```text
+1. Choose Source Type
+2. Choose Data Source
+3. Configure Scope
+4. Configure Mapping
+5. Preview
+6. Resolve Warnings
+7. Save and Sync
+```
+
+Preview 需要展示：
+
+- 节点样本；
+- 关系样本；
+- 未解析项；
+- 冲突；
+- 预计数量；
+- 敏感字段提示。
+
+### 93.4 Conflict Center
+
+展示：
+
+- 冲突类型；
+- 资源；
+- 来源；
+- 候选值；
+- 优先级；
+- 推荐处理；
+- 影响。
+
+处理方式：
+
+```text
+merge
+keep_separate
+prefer_source
+manual_override
+ignore
+```
+
+### 93.5 Saved Topology View
+
+View 保存查询和展示配置，不改变真实拓扑数据。
+
+Query Config：
+
+- centerNodeId；
+- depth；
+- direction；
+- onlyPropagating；
+- includeStale；
+- nodeTypes；
+- relationTypes；
+- semantics；
+- environment；
+- systemName；
+- maxNodes。
+
+Display Config：
+
+- layout：dagre-lr / dagre-tb / force / concentric / radial / manual；
+- showLabels；
+- showRelationLabels；
+- groupBy；
+- colorBy；
+- sizeBy；
+- showHealthBadge；
+- showAlertBadge；
+- showChangeBadge；
+- showConfidence；
+- collapseContainers；
+- collapsePods；
+- edgeAnimation。
+
+View 可见范围：
+
+```text
+private
+team
+public
+```
+
+普通 user 可以创建自己的 private View，只能查看有权限的 View，不能修改公共 View，不能修改节点类型、关系类型和 Source。
+
+### 93.6 组件专用拓扑视图
+
+Nacos View 默认节点：
+
+```text
+application
+service
+nacos
+nacos_service
+service_instance
+pod
+host
+```
+
+诊断操作：
+
+- 查看无健康实例服务；
+- 查看实例漂移；
+- 查看跨 Namespace/Group 混用；
+- 查看应用与 Nacos 配置变更关联。
+
+Redis View 默认节点：
+
+```text
+application
+service
+redis_cluster
+redis_instance
+host
+node
+```
+
+诊断操作：
+
+- 主从关系；
+- Cluster 节点；
+- 同 Host 风险；
+- 多应用共同 Redis 依赖；
+- Blast Radius。
+
+TiDB View 默认节点：
+
+```text
+application
+service
+tidb_cluster
+tidb
+tikv
+pd
+database_schema
+host
+```
+
+诊断操作：
+
+- 集群组件分布；
+- 单 Host 集中风险；
+- 应用依赖；
+- Schema 归属；
+- TiKV/PD 故障影响。
+
+Nginx View 默认节点：
+
+```text
+load_balancer
+nginx
+ingress
+service
+workload
+pod
+external_api
+```
+
+诊断操作：
+
+- 入口到后端路径；
+- 502/503/504 影响路径；
+- 无 Endpoint；
+- 共同 upstream；
+- 多层 Nginx 路径。
 
 ## 94. Incident Detail
 
@@ -3320,6 +4462,34 @@ AGENT_MAX_SKILL_CALLS=20
 AGENT_TIMEOUT_SECONDS=180
 ```
 
+### 102A. Topology 限制
+
+```dotenv
+TOPOLOGY_DEFAULT_DEPTH=2
+TOPOLOGY_MAX_DEPTH=5
+TOPOLOGY_MAX_NODES=200
+TOPOLOGY_MAX_EDGES=500
+TOPOLOGY_MAX_PATHS=20
+TOPOLOGY_QUERY_TIMEOUT_SECONDS=15
+
+TOPOLOGY_DEFAULT_ONLY_PROPAGATING=true
+TOPOLOGY_INCLUDE_STALE_DEFAULT=false
+
+TOPOLOGY_SYNC_MAX_CONCURRENT=2
+TOPOLOGY_SYNC_TIMEOUT_SECONDS=300
+TOPOLOGY_DEFAULT_STALE_AFTER_SECONDS=900
+TOPOLOGY_DEFAULT_DELETE_AFTER_SECONDS=604800
+
+TOPOLOGY_TRACE_LOOKBACK_MINUTES=30
+TOPOLOGY_TRACE_MIN_REQUEST_COUNT=10
+TOPOLOGY_TRACE_EDGE_TTL_SECONDS=1800
+
+TOPOLOGY_ALIAS_SEARCH_LIMIT=10
+TOPOLOGY_MAPPING_PREVIEW_MAX_ITEMS=500
+TOPOLOGY_CONFLICT_MAX_CANDIDATES=20
+TOPOLOGY_AGENT_MAX_CALLS=5
+```
+
 ### 102.1 Nacos、Redis、TiDB、Nginx 限制
 
 ```dotenv
@@ -3382,6 +4552,24 @@ NGINX_CONFIG_CONTENT_ENABLED=false
 - Correlation 评分；
 - 引用真实性校验。
 
+### 103.1 Topology v1.2 单元测试重点
+
+- relation failure propagation；
+- upstream/downstream 转换；
+- only_propagating；
+- BFS depth；
+- 环；
+- max node；
+- alias ambiguity；
+- identity merge；
+- priority；
+- locked field；
+- confidence fusion；
+- stale/expired；
+- Mapping DSL；
+- JSONPath 限制；
+- Sensitive field filtering。
+
 ## 104. 集成测试
 
 使用 Testcontainers：
@@ -3402,6 +4590,41 @@ NGINX_CONFIG_CONTENT_ENABLED=false
 6. Workflow 失败降级；
 7. 普通用户数据隔离。
 
+### 104.1 Topology v1.2 集成测试数据集
+
+建立以下测试图：
+
+```text
+Internet
+  -> LoadBalancer
+  -> Nginx
+  -> Ingress
+  -> payment-api
+      -> Redis
+      -> TiDB
+      -> Nacos
+```
+
+K8s：
+
+```text
+payment-api Deployment
+  -> ReplicaSet
+  -> Pod A / Pod B
+  -> Node 1 / Node 2
+```
+
+场景：
+
+1. TiDB 故障影响 payment-api；
+2. Redis 故障影响多个应用；
+3. Node 1 故障只影响 Pod A；
+4. Nginx 503 与 Endpoint 为空；
+5. Annotation 不传播；
+6. Trace Edge 过期；
+7. CMDB 和 K8s 名称不同但 alias 合并；
+8. prod/test 同名节点歧义。
+
 ## 105. E2E
 
 - admin 登录；
@@ -3413,6 +4636,21 @@ NGINX_CONFIG_CONTENT_ENABLED=false
 - 查看 Workflow 进度；
 - 查看 Incident；
 - 权限拒绝。
+
+### 105.1 Topology v1.2 E2E
+
+1. admin 配置 K8s Source；
+2. Preview；
+3. Sync；
+4. 查看图；
+5. 保存 View；
+6. 选择 payment-api；
+7. Expand upstream/downstream；
+8. 计算 Blast Radius；
+9. 发起 RCA；
+10. 报告引用 Topology Evidence；
+11. 修改关系传播语义；
+12. 审计中可追溯。
 
 ---
 
@@ -4350,6 +5588,184 @@ GET /api/health
 
 - Deployment/Pod/Service/Ingress 关系可生成。
 
+### Task 4.3A：Topology Type Catalog
+
+实现：
+
+- node type 和 relation type 表；
+- 内置类型初始化；
+- semantics；
+- failure propagation；
+- 类型管理 API。
+
+验收：
+
+- 节点和关系只能引用启用类型；
+- 内置类型不可删除；
+- propagation 修改有审计；
+- 非法 source/target 类型组合被拒绝；
+- migration 可从 v1.1 平滑升级。
+
+### Task 4.3B：Topology Source Configuration
+
+实现：
+
+- source config；
+- schedule；
+- scope；
+- priority；
+- stale/delete policy；
+- CRUD/Test。
+
+验收：
+
+- 只允许支持的 source type；
+- data source 权限校验；
+- schedule 校验；
+- 凭据不进入 topology 配置；
+- 普通 user 无写权限。
+
+### Task 4.3C：Mapping DSL 和 Preview
+
+实现：
+
+- Node Mapping；
+- Edge Mapping；
+- JSONPath；
+- 安全模板；
+- preview。
+
+验收：
+
+- 不执行任意代码；
+- Preview 不写库；
+- 数量和字节限制；
+- 无法解析项明确显示；
+- 敏感字段不进入映射结果。
+
+### Task 4.3D：Topology Identity、Alias 与 Resolver
+
+实现：
+
+- external key；
+- identity rules；
+- alias；
+- 多来源节点融合；
+- 属性优先级；
+- locked fields。
+
+验收：
+
+- 同一 K8s UID 不产生重复节点；
+- Trace service 可与 K8s service 合并；
+- 歧义名称返回候选；
+- manual locked field 不被覆盖；
+- 冲突有记录。
+
+### Task 4.3E：Topology Edge Resolver
+
+实现：
+
+- 多来源关系；
+- semantics；
+- failure propagation；
+- confidence fusion；
+- stale/expired。
+
+验收：
+
+- 同关系多来源不重复；
+- observation 不默认传播故障；
+- Trace edge 到期后 stale；
+- 手工边不自动过期；
+- confidence 计算可解释。
+
+### Task 4.3F：Kubernetes Topology Sync
+
+实现：
+
+- Cluster/Namespace/Workload/Pod/Node/Service/Endpoint/Ingress/PVC；
+- 自动节点和关系；
+- 定时同步。
+
+验收：
+
+- Namespace 白名单；
+- Service selector 到 Pod；
+- Ingress 到 Service；
+- Pod 到 Node；
+- stale 处理；
+- 同步可审计。
+
+### Task 4.3G：Trace Service Graph Sync
+
+实现：
+
+- service graph 数据读取；
+- calls/routes_to；
+- min request count；
+- TTL；
+- alias merge。
+
+验收：
+
+- 低流量边低 confidence；
+- TTL 生效；
+- 不因单次空查询立即删除；
+- 与 K8s/CMDB 节点正确合并。
+
+### Task 4.3H：Nacos、Redis、TiDB、Nginx Topology Sync
+
+实现：
+
+- Nacos 服务/实例；
+- Redis Cluster/Instance/Replication；
+- TiDB/TiKV/PD；
+- Nginx/Ingress/Upstream；
+- Host/Pod 关联。
+
+验收：
+
+- 不读取敏感配置；
+- 中间件节点 identity 稳定；
+- 自动关系带正确 source 和 confidence；
+- 日志推断边为 observation；
+- 写操作不存在。
+
+### Task 4.3I：Topology Sync Runtime
+
+实现：
+
+- sync run；
+- 单来源锁；
+- timeout；
+- cancel；
+- statistics；
+- stale transition。
+
+验收：
+
+- 同一来源不并发；
+- partial failure 保留成功部分；
+- 重启后可查历史；
+- 统计准确；
+- 超时不会遗留 running 状态。
+
+### Task 4.3J：Topology Conflict Center
+
+实现：
+
+- identity / attribute / relation / type / direction conflict；
+- 管理 API；
+- resolution。
+
+验收：
+
+- 冲突不会静默覆盖；
+- merge / keep / prefer / manual / ignore；
+- 处理有审计；
+- resolution 可重复应用。
+
 ### Task 4.4：Topology 查询
 
 实现：
@@ -4364,6 +5780,118 @@ GET /api/health
 
 - 环检测；
 - 最大节点限制。
+
+### Task 4.4A：find_topology_node
+
+实现：
+
+- external key；
+- alias；
+- exact；
+- fuzzy；
+- scope；
+- disambiguation。
+
+验收：
+
+- 同名 prod/test 返回歧义；
+- 不跨用户无权环境返回；
+- pg_trgm index 生效；
+- limit 生效。
+
+### Task 4.4B：expand_topology
+
+实现：
+
+- BFS；
+- depth；
+- direction；
+- only_propagating；
+- semantics/filter；
+- flat path metadata。
+
+验收：
+
+- 默认 depth 2；
+- max depth 5；
+- failure propagation 方向正确；
+- annotation 默认不遍历；
+- node/edge cap；
+- 输出 via/path/hops/confidence。
+
+### Task 4.4C：Path 和 Blast Radius
+
+实现：
+
+- explain path；
+- potential vs observed impact；
+- common dependency；
+- active alert cross-check。
+
+验收：
+
+- 图可达不直接标记 observed；
+- 多路径有排序；
+- 每个结果生成 Evidence；
+- 环和大图安全；
+- 影响路径可用于 RCA 引用。
+
+### Task 4.4D：Saved Topology Views
+
+实现：
+
+- private/team/public；
+- query config；
+- display config；
+- layout data；
+- clone/default。
+
+验收：
+
+- 普通用户不能修改公共 View；
+- 布局不修改真实节点；
+- View 引用无权限节点时过滤；
+- 配置 Schema 校验。
+
+### Task 4.4E：Topology Map 前端
+
+实现：
+
+- React Flow；
+- Filter；
+- Direction；
+- Depth；
+- Only Propagating；
+- Node Drawer；
+- Expand；
+- Blast Radius；
+- Saved View。
+
+验收：
+
+- 200 节点内交互流畅；
+- 展示 truncated；
+- 节点和关系图例；
+- 健康、告警、变更 Badge；
+- 点击节点可发起分析。
+
+### Task 4.4F：Topology Configuration 前端
+
+实现：
+
+- Type Catalog；
+- Source Wizard；
+- Mapping Preview；
+- Sync Run；
+- Conflict Center。
+
+验收：
+
+- propagation 修改警告；
+- Preview 后才能保存 Mapping；
+- 同步进度；
+- 冲突处理；
+- 敏感字段不展示。
 
 ### Task 4.5：Timeline Engine
 
@@ -4393,6 +5921,23 @@ GET /api/health
 
 - 每个评分项可解释；
 - 无证据不产生高置信根因。
+
+### Task 4.6A：Topology Correlation 集成
+
+实现：
+
+- Correlation Engine 使用 path、semantics、confidence；
+- Incident Agent 引用 Topology Evidence；
+- common dependency 加分；
+- observed affected 验证。
+
+验收：
+
+- 仅 observation 关系不能产生高拓扑分；
+- hard_dep 多源证明提高分数；
+- 根因候选展示路径；
+- 支持证据和反证；
+- 修改 relation semantics 后结果可追溯。
 
 ### Task 4.7：Change Agent 和 Change Skill
 
@@ -4590,6 +6135,31 @@ GET /api/health
 15. 创建 Incident；
 16. 输出带证据、引用、置信度和风险提示的报告；
 17. 永不自动执行生产修复动作。
+
+### 112.1 Topology Configuration & View 完成标准
+
+Topology Configuration & View 完成后必须做到：
+
+1. 节点/关系类型受控；
+2. 关系包含语义和传播方向；
+3. 支持人工、CMDB、K8s、Trace、中间件来源；
+4. 支持多来源融合和冲突；
+5. 支持别名和歧义处理；
+6. 支持 Preview 和 Sync；
+7. 支持 stale/expired；
+8. 支持 Find Node；
+9. 支持方向和深度可配置的 Expand；
+10. 支持 only propagating；
+11. 输出完整路径元数据；
+12. 支持 Explain Path；
+13. 支持 Common Dependency；
+14. 支持 Blast Radius；
+15. 支持保存的 Topology View；
+16. 支持 Nacos、Redis、TiDB、Nginx 专项视图；
+17. Topology 结果生成 Evidence；
+18. RCA 报告可引用路径；
+19. 图可达性和实际受影响严格区分；
+20. 所有操作只读、安全、可审计。
 
 ---
 
