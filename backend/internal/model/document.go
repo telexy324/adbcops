@@ -12,6 +12,8 @@ const (
 
 	DocumentFileTypeMarkdown = "md"
 	DocumentFileTypeText     = "txt"
+	DocumentFileTypeDocx     = "docx"
+	DocumentFileTypeXlsx     = "xlsx"
 )
 
 type KBDocument struct {

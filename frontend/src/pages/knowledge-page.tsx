@@ -163,7 +163,7 @@ export function KnowledgePage() {
   function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file) {
-      setError("请选择 .md 或 .txt 文件。");
+      setError("请选择 .md、.txt、.docx 或 .xlsx 文件。");
       return;
     }
     uploadMutation.mutate({ file, ...uploadForm });
@@ -309,7 +309,7 @@ export function KnowledgePage() {
               <Field label="选择文件">
                 <Input
                   type="file"
-                  accept=".md,.txt,text/plain,text/markdown"
+                  accept=".md,.txt,.docx,.xlsx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={(event) => setFile(event.target.files?.[0] ?? null)}
                 />
               </Field>

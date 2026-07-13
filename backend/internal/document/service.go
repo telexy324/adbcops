@@ -202,11 +202,11 @@ func (s *Service) Reprocess(ctx context.Context, actor *model.AppUser, id int64)
 	if err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(document.FilePath)
+	content, err := ExtractText(document)
 	if err != nil {
-		return nil, fmt.Errorf("read document file: %w", err)
+		return nil, err
 	}
-	chunks := BuildChunks(document, string(content), s.chunkSize, s.chunkOverlap)
+	chunks := BuildChunks(document, content, s.chunkSize, s.chunkOverlap)
 	if len(chunks) == 0 {
 		return nil, ErrInvalidFile
 	}
@@ -325,6 +325,10 @@ func detectFileType(name string) (string, string, error) {
 		return model.DocumentFileTypeMarkdown, ext, nil
 	case ".txt":
 		return model.DocumentFileTypeText, ext, nil
+	case ".docx":
+		return model.DocumentFileTypeDocx, ext, nil
+	case ".xlsx":
+		return model.DocumentFileTypeXlsx, ext, nil
 	default:
 		return "", "", ErrUnsupportedExt
 	}

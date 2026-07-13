@@ -12,6 +12,8 @@ import (
 
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
+	docx "github.com/fumiama/go-docx"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestUploadStoresAllowedFileWithCreator(t *testing.T) {
@@ -102,6 +104,58 @@ func TestReprocessTypicalMarkdownCreatesContinuousNonEmptyChunks(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Content, "数据库连接池") && (results[0].SearchText == nil || !strings.Contains(*results[0].SearchText, "数据库连接池")) {
 		t.Fatalf("top result did not recall database pool chunk: %+v", results[0])
+	}
+}
+
+func TestReprocessDocxExtractsParagraphText(t *testing.T) {
+	store := newFakeRepository()
+	service := newTestServiceWithChunk(t, store, t.TempDir(), 4096, 80, 10)
+	actor := &model.AppUser{ID: 7, Role: model.RoleUser}
+	document, err := service.Upload(context.Background(), actor, newBytesFileHeader(t, "runbook.docx", minimalDocx(t, []string{
+		"支付系统排障手册",
+		"数据库连接池耗尽时先查看活跃连接和慢查询。",
+	})), UploadMetadata{Title: "Docx Runbook"})
+	if err != nil {
+		t.Fatalf("Upload(docx) error = %v", err)
+	}
+	if document.FileType != model.DocumentFileTypeDocx {
+		t.Fatalf("FileType = %q, want docx", document.FileType)
+	}
+
+	chunks, err := service.Reprocess(context.Background(), actor, document.ID)
+	if err != nil {
+		t.Fatalf("Reprocess(docx) error = %v", err)
+	}
+	if len(chunks) == 0 || !strings.Contains(chunks[0].Content, "数据库连接池") {
+		t.Fatalf("docx chunks = %+v", chunks)
+	}
+}
+
+func TestReprocessXlsxExtractsWorksheetText(t *testing.T) {
+	store := newFakeRepository()
+	service := newTestServiceWithChunk(t, store, t.TempDir(), 16384, 80, 10)
+	actor := &model.AppUser{ID: 7, Role: model.RoleUser}
+	document, err := service.Upload(context.Background(), actor, newBytesFileHeader(t, "capacity.xlsx", minimalXlsx(t, [][]string{
+		{"系统", "指标", "阈值"},
+		{"支付系统", "数据库连接池", "80%"},
+	})), UploadMetadata{Title: "Xlsx Capacity"})
+	if err != nil {
+		t.Fatalf("Upload(xlsx) error = %v", err)
+	}
+	if document.FileType != model.DocumentFileTypeXlsx {
+		t.Fatalf("FileType = %q, want xlsx", document.FileType)
+	}
+
+	chunks, err := service.Reprocess(context.Background(), actor, document.ID)
+	if err != nil {
+		t.Fatalf("Reprocess(xlsx) error = %v", err)
+	}
+	joined := ""
+	for _, chunk := range chunks {
+		joined += chunk.Content
+	}
+	if !strings.Contains(joined, "支付系统") || !strings.Contains(joined, "数据库连接池") {
+		t.Fatalf("xlsx chunks = %+v", chunks)
 	}
 }
 
@@ -261,13 +315,18 @@ func newTestServiceWithChunk(t *testing.T, store *fakeRepository, dir string, ma
 
 func newFileHeader(t *testing.T, name, content string) *multipart.FileHeader {
 	t.Helper()
+	return newBytesFileHeader(t, name, []byte(content))
+}
+
+func newBytesFileHeader(t *testing.T, name string, content []byte) *multipart.FileHeader {
+	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("file", name)
 	if err != nil {
 		t.Fatalf("CreateFormFile() error = %v", err)
 	}
-	if _, err := part.Write([]byte(content)); err != nil {
+	if _, err := part.Write(content); err != nil {
 		t.Fatalf("write multipart file: %v", err)
 	}
 	if err := writer.Close(); err != nil {
@@ -283,6 +342,42 @@ func newFileHeader(t *testing.T, name, content string) *multipart.FileHeader {
 		t.Fatal("multipart form did not contain file")
 	}
 	return files[0]
+}
+
+func minimalDocx(t *testing.T, paragraphs []string) []byte {
+	t.Helper()
+	document := docx.New()
+	for _, paragraph := range paragraphs {
+		document.AddParagraph().AddText(paragraph)
+	}
+	var body bytes.Buffer
+	if _, err := document.WriteTo(&body); err != nil {
+		t.Fatalf("write docx: %v", err)
+	}
+	return body.Bytes()
+}
+
+func minimalXlsx(t *testing.T, rows [][]string) []byte {
+	t.Helper()
+	file := excelize.NewFile()
+	defer file.Close()
+	sheetName := "Sheet1"
+	for rowIndex, row := range rows {
+		for columnIndex, cell := range row {
+			cellName, err := excelize.CoordinatesToCellName(columnIndex+1, rowIndex+1)
+			if err != nil {
+				t.Fatalf("cell coordinates: %v", err)
+			}
+			if err := file.SetCellValue(sheetName, cellName, cell); err != nil {
+				t.Fatalf("set xlsx cell %s: %v", cellName, err)
+			}
+		}
+	}
+	var body bytes.Buffer
+	if err := file.Write(&body); err != nil {
+		t.Fatalf("write xlsx: %v", err)
+	}
+	return body.Bytes()
 }
 
 type fakeRepository struct {
