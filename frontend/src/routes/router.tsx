@@ -7,6 +7,7 @@ import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
 import { NotFoundPage } from "@/pages/not-found-page";
 import { OperationsPage } from "@/pages/operations-page";
+import { SettingsPage } from "@/pages/settings-page";
 import { WorkflowPage } from "@/pages/workflow-page";
 
 export const router = createBrowserRouter([
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: "/knowledge", element: <KnowledgePage /> },
       { path: "/workflows", element: <WorkflowPage /> },
       { path: "/operations", element: <OperationsPage /> },
+      { path: "/settings", element: <SettingsPage /> },
     ],
   },
   {

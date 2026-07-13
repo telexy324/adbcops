@@ -1025,8 +1025,8 @@ Workflow 使用 JSON DSL 持久化。
     }
   ],
   "edges": [
-    {"from": "collect-pod", "to": "correlate"},
-    {"from": "collect-metrics", "to": "correlate"}
+    { "from": "collect-pod", "to": "correlate" },
+    { "from": "collect-metrics", "to": "correlate" }
   ]
 }
 ```
@@ -3293,6 +3293,23 @@ GET /api/health
 验收：
 
 - user 只能查看自己的任务。
+
+### Task 2.12：配置前端
+
+实现：
+
+- LLM 配置页面；
+- 日志数据源配置；
+- K8s 数据源配置；
+- Prometheus 数据源配置；
+- 配置测试入口；
+- 凭据仅提交不回显。
+
+验收：
+
+- LLM API Key 不在页面明文回显；
+- 数据源凭据不在页面明文回显；
+- 配置后可在分析页面使用数据源 ID。
 
 ---
 

@@ -28,6 +28,7 @@ const navigation = [
   { label: "工作流", icon: Workflow, to: "/workflows", enabled: true },
   { label: "拓扑视图", icon: Network, to: "/operations", enabled: true },
   { label: "故障中心", icon: Siren, to: "/operations", enabled: true },
+  { label: "配置中心", icon: Settings, to: "/settings", enabled: true },
 ];
 
 export function AppShell() {

@@ -9,6 +9,7 @@ import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
 import { OperationsPage } from "@/pages/operations-page";
+import { SettingsPage } from "@/pages/settings-page";
 import { WorkflowPage } from "@/pages/workflow-page";
 
 vi.mock("@/api/auth", () => ({
@@ -193,6 +194,43 @@ vi.mock("@/api/operations", () => ({
   toAPIErrorMessage: vi.fn(() => "请求失败"),
 }));
 
+vi.mock("@/api/config", () => ({
+  createDataSource: vi.fn(),
+  createLLMConfig: vi.fn(),
+  listDataSources: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      name: "prod-logs",
+      sourceType: "elasticsearch",
+      environment: "prod",
+      config: { baseUrl: "https://es.example.com", index: "logs-*" },
+      credentialConfigured: true,
+      enabled: true,
+      readOnly: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  listLLMConfigs: vi.fn().mockResolvedValue([
+    {
+      id: 1,
+      name: "default-llm",
+      provider: "openai-compatible",
+      baseUrl: "https://api.openai.example/v1",
+      model: "ops-model",
+      temperature: 0.2,
+      enabled: true,
+      isDefault: true,
+      apiKeyConfigured: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
+  ]),
+  testDataSource: vi.fn(),
+  testLLMConfig: vi.fn(),
+  toAPIErrorMessage: vi.fn(() => "请求失败"),
+}));
+
 function renderWithQueryClient(element: ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -336,5 +374,26 @@ describe("OperationsPage", () => {
     expect(
       screen.getByRole("heading", { name: "报告导出 Markdown" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("SettingsPage", () => {
+  it("renders LLM and data source configuration panels", async () => {
+    renderWithQueryClient(<SettingsPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "配置中心" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "LLM 配置" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "数据源配置" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("日志数据源")).toBeInTheDocument();
+    expect(screen.getByText("K8s 数据源")).toBeInTheDocument();
+    expect(screen.getByText("Prometheus 数据源")).toBeInTheDocument();
+    expect(await screen.findByText("default-llm")).toBeInTheDocument();
+    expect(await screen.findByText("prod-logs")).toBeInTheDocument();
   });
 });
