@@ -60,24 +60,25 @@ const (
 )
 
 type TopologyNode struct {
-	ID                 int64     `gorm:"column:id;primaryKey" json:"id"`
-	NodeKey            string    `gorm:"column:node_key;size:255;not null;unique" json:"nodeKey"`
-	Kind               string    `gorm:"column:kind;size:60;not null" json:"kind"`
-	NodeTypeID         *int64    `gorm:"column:node_type_id" json:"nodeTypeId,omitempty"`
-	Name               string    `gorm:"column:name;size:255;not null" json:"name"`
-	DisplayName        *string   `gorm:"column:display_name;size:255" json:"displayName,omitempty"`
-	Environment        *string   `gorm:"column:environment;size:80" json:"environment,omitempty"`
-	Cluster            *string   `gorm:"column:cluster;size:120" json:"cluster,omitempty"`
-	Namespace          *string   `gorm:"column:namespace;size:120" json:"namespace,omitempty"`
-	Labels             []byte    `gorm:"column:labels;type:jsonb" json:"labels,omitempty"`
-	Properties         []byte    `gorm:"column:properties;type:jsonb" json:"properties,omitempty"`
-	SourceType         string    `gorm:"column:source_type;size:50;not null" json:"sourceType"`
-	SourcePriority     int       `gorm:"column:source_priority;not null" json:"sourcePriority"`
-	LockedFields       []byte    `gorm:"column:locked_fields;type:jsonb" json:"lockedFields,omitempty"`
-	ResolvedAttributes []byte    `gorm:"column:resolved_attributes;type:jsonb" json:"resolvedAttributes,omitempty"`
-	SourceRef          []byte    `gorm:"column:source_ref;type:jsonb" json:"sourceRef,omitempty"`
-	CreatedAt          time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt          time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ID                 int64      `gorm:"column:id;primaryKey" json:"id"`
+	NodeKey            string     `gorm:"column:node_key;size:255;not null;unique" json:"nodeKey"`
+	Kind               string     `gorm:"column:kind;size:60;not null" json:"kind"`
+	NodeTypeID         *int64     `gorm:"column:node_type_id" json:"nodeTypeId,omitempty"`
+	Name               string     `gorm:"column:name;size:255;not null" json:"name"`
+	DisplayName        *string    `gorm:"column:display_name;size:255" json:"displayName,omitempty"`
+	Environment        *string    `gorm:"column:environment;size:80" json:"environment,omitempty"`
+	Cluster            *string    `gorm:"column:cluster;size:120" json:"cluster,omitempty"`
+	Namespace          *string    `gorm:"column:namespace;size:120" json:"namespace,omitempty"`
+	Labels             []byte     `gorm:"column:labels;type:jsonb" json:"labels,omitempty"`
+	Properties         []byte     `gorm:"column:properties;type:jsonb" json:"properties,omitempty"`
+	SourceType         string     `gorm:"column:source_type;size:50;not null" json:"sourceType"`
+	SourcePriority     int        `gorm:"column:source_priority;not null" json:"sourcePriority"`
+	LockedFields       []byte     `gorm:"column:locked_fields;type:jsonb" json:"lockedFields,omitempty"`
+	ResolvedAttributes []byte     `gorm:"column:resolved_attributes;type:jsonb" json:"resolvedAttributes,omitempty"`
+	SourceRef          []byte     `gorm:"column:source_ref;type:jsonb" json:"sourceRef,omitempty"`
+	DeletedAt          *time.Time `gorm:"column:deleted_at" json:"deletedAt,omitempty"`
+	CreatedAt          time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt          time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
 }
 
 func (TopologyNode) TableName() string {

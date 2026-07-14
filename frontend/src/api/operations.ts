@@ -43,6 +43,29 @@ export type TopologyGraph = {
   edges: TopologyEdge[];
 };
 
+export type TopologyNodeInput = {
+  nodeKey?: string;
+  kind: string;
+  name: string;
+  displayName?: string;
+  environment?: string;
+  cluster?: string;
+  namespace?: string;
+  labels?: Record<string, unknown>;
+  properties?: Record<string, unknown>;
+  sourceType?: string;
+};
+
+export type TopologyEdgeInput = {
+  edgeKey?: string;
+  fromNodeKey: string;
+  toNodeKey: string;
+  edgeType: string;
+  confidence?: number;
+  properties?: Record<string, unknown>;
+  sourceType?: string;
+};
+
 export type BlastRadius = TopologyGraph & {
   rootKey: string;
   direction: string;
@@ -363,6 +386,76 @@ export async function getTopologyGraph(limit = 80) {
   const response = await apiClient.get<ApiEnvelope<TopologyGraph>>(
     "/api/topology/graph",
     { params: { limit } },
+  );
+  return response.data.data;
+}
+
+export async function createTopologyNode(input: TopologyNodeInput) {
+  const response = await apiClient.post<ApiEnvelope<TopologyNode>>(
+    "/api/topology/nodes",
+    {
+      ...input,
+      sourceType: input.sourceType ?? "manual",
+      labels: input.labels ?? {},
+      properties: input.properties ?? {},
+    },
+  );
+  return response.data.data;
+}
+
+export async function updateTopologyNode(input: {
+  id: number;
+  data: TopologyNodeInput;
+}) {
+  const response = await apiClient.put<ApiEnvelope<TopologyNode>>(
+    `/api/topology/nodes/${input.id}`,
+    {
+      ...input.data,
+      sourceType: input.data.sourceType ?? "manual",
+      labels: input.data.labels ?? {},
+      properties: input.data.properties ?? {},
+    },
+  );
+  return response.data.data;
+}
+
+export async function deleteTopologyNode(id: number) {
+  const response = await apiClient.delete<ApiEnvelope<{ deleted: boolean }>>(
+    `/api/topology/nodes/${id}`,
+  );
+  return response.data.data;
+}
+
+export async function createTopologyEdge(input: TopologyEdgeInput) {
+  const response = await apiClient.post<ApiEnvelope<TopologyEdge>>(
+    "/api/topology/edges",
+    {
+      ...input,
+      sourceType: input.sourceType ?? "manual",
+      properties: input.properties ?? {},
+    },
+  );
+  return response.data.data;
+}
+
+export async function updateTopologyEdge(input: {
+  id: number;
+  data: TopologyEdgeInput;
+}) {
+  const response = await apiClient.put<ApiEnvelope<TopologyEdge>>(
+    `/api/topology/edges/${input.id}`,
+    {
+      ...input.data,
+      sourceType: input.data.sourceType ?? "manual",
+      properties: input.data.properties ?? {},
+    },
+  );
+  return response.data.data;
+}
+
+export async function deleteTopologyEdge(id: number) {
+  const response = await apiClient.delete<ApiEnvelope<{ deleted: boolean }>>(
+    `/api/topology/edges/${id}`,
   );
   return response.data.data;
 }

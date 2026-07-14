@@ -4080,6 +4080,10 @@ Topology Map 顶部查询栏：
 - MiniMap；
 - Zoom；
 - Fit View；
+- Background 网格；
+- Controls；
+- Manual Draw 面板；
+- 拖拽节点连接点创建人工关系；
 - Expand Upstream；
 - Expand Downstream；
 - Blast Radius。
@@ -5857,18 +5861,29 @@ GET /api/health
 
 实现：
 
-- React Flow；
+- 基于 React Flow（`@xyflow/react`）渲染节点和关系，不得使用手写 SVG 作为主画布；
 - Filter；
 - Direction；
 - Depth；
 - Only Propagating；
 - Node Drawer；
+- Manual Draw；
+- 手工新增节点；
+- 手工连线新增关系；
+- 编辑/删除人工节点和人工关系；
 - Expand；
 - Blast Radius；
 - Saved View。
 
 验收：
 
+- 图谱数据返回后必须能绘制节点和关系；
+- 空数据时必须展示可操作的空状态；
+- 空图时可手工创建第一个节点；
+- 拖拽 React Flow 节点连接点后必须创建 manual 关系并刷新图；
+- 选中节点/关系后可载入表单修改或删除；
+- 非 manual 来源节点/关系不得被前端静默修改，后端拒绝时必须显示错误；
+- React Flow 必须启用 MiniMap、Zoom Controls、Background 和 Fit View；
 - 200 节点内交互流畅；
 - 展示 truncated；
 - 节点和关系图例；

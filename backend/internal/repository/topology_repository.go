@@ -14,7 +14,11 @@ type TopologyRepository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
 	FindEdgeByKey(ctx context.Context, edgeKey string) (*model.TopologyEdge, error)
+	FindEdgeByID(ctx context.Context, id int64) (*model.TopologyEdge, error)
+	UpdateTopologyNode(ctx context.Context, node *model.TopologyNode) error
 	UpdateTopologyEdge(ctx context.Context, edge *model.TopologyEdge) error
+	SoftDeleteTopologyNode(ctx context.Context, id int64, deletedAt time.Time) error
+	SoftDeleteTopologyEdge(ctx context.Context, id int64, deletedAt time.Time) error
 	UpsertTopologyEdgeObservation(ctx context.Context, observation *model.TopologyEdgeObservation) error
 	ListTopologyEdgeObservations(ctx context.Context, edgeID int64) ([]model.TopologyEdgeObservation, error)
 	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
@@ -137,7 +141,7 @@ func (r *GORMTopologyRepository) UpsertEdge(ctx context.Context, edge *model.Top
 
 func (r *GORMTopologyRepository) FindEdgeByKey(ctx context.Context, edgeKey string) (*model.TopologyEdge, error) {
 	var edge model.TopologyEdge
-	if err := r.db.WithContext(ctx).Where("edge_key = ?", edgeKey).First(&edge).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("edge_key = ? AND deleted_at IS NULL", edgeKey).First(&edge).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, ErrNotFound
 		}
@@ -146,9 +150,53 @@ func (r *GORMTopologyRepository) FindEdgeByKey(ctx context.Context, edgeKey stri
 	return &edge, nil
 }
 
+func (r *GORMTopologyRepository) FindEdgeByID(ctx context.Context, id int64) (*model.TopologyEdge, error) {
+	var edge model.TopologyEdge
+	if err := r.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&edge).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find topology edge by id: %w", err)
+	}
+	return &edge, nil
+}
+
+func (r *GORMTopologyRepository) UpdateTopologyNode(ctx context.Context, node *model.TopologyNode) error {
+	if err := r.db.WithContext(ctx).Save(node).Error; err != nil {
+		return fmt.Errorf("update topology node: %w", err)
+	}
+	return nil
+}
+
 func (r *GORMTopologyRepository) UpdateTopologyEdge(ctx context.Context, edge *model.TopologyEdge) error {
 	if err := r.db.WithContext(ctx).Save(edge).Error; err != nil {
 		return fmt.Errorf("update topology edge: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) SoftDeleteTopologyNode(ctx context.Context, id int64, deletedAt time.Time) error {
+	result := r.db.WithContext(ctx).Model(&model.TopologyNode{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Updates(map[string]any{"deleted_at": deletedAt, "updated_at": deletedAt})
+	if result.Error != nil {
+		return fmt.Errorf("soft delete topology node: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *GORMTopologyRepository) SoftDeleteTopologyEdge(ctx context.Context, id int64, deletedAt time.Time) error {
+	result := r.db.WithContext(ctx).Model(&model.TopologyEdge{}).
+		Where("id = ? AND deleted_at IS NULL", id).
+		Updates(map[string]any{"deleted_at": deletedAt, "status": "expired", "updated_at": deletedAt})
+	if result.Error != nil {
+		return fmt.Errorf("soft delete topology edge: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
 	}
 	return nil
 }
@@ -175,7 +223,11 @@ func (r *GORMTopologyRepository) ListTopologyEdgeObservations(ctx context.Contex
 
 func (r *GORMTopologyRepository) FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error) {
 	var node model.TopologyNode
-	if err := r.db.WithContext(ctx).Where("node_key = ?", nodeKey).First(&node).Error; err != nil {
+	query := r.db.WithContext(ctx).Where("node_key = ?", nodeKey)
+	if r.hasColumn(&model.TopologyNode{}, "deleted_at") {
+		query = query.Where("deleted_at IS NULL")
+	}
+	if err := query.First(&node).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, ErrNotFound
 		}
@@ -186,7 +238,11 @@ func (r *GORMTopologyRepository) FindNodeByKey(ctx context.Context, nodeKey stri
 
 func (r *GORMTopologyRepository) FindNodeByID(ctx context.Context, id int64) (*model.TopologyNode, error) {
 	var node model.TopologyNode
-	if err := r.db.WithContext(ctx).First(&node, id).Error; err != nil {
+	query := r.db.WithContext(ctx).Where("id = ?", id)
+	if r.hasColumn(&model.TopologyNode{}, "deleted_at") {
+		query = query.Where("deleted_at IS NULL")
+	}
+	if err := query.First(&node).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, ErrNotFound
 		}
@@ -201,6 +257,9 @@ func (r *GORMTopologyRepository) ListNodes(ctx context.Context, filters Topology
 		limit = 500
 	}
 	query := r.db.WithContext(ctx).Order("kind ASC, name ASC").Limit(limit)
+	if r.hasColumn(&model.TopologyNode{}, "deleted_at") {
+		query = query.Where("deleted_at IS NULL")
+	}
 	if filters.Environment != "" {
 		query = query.Where("environment = ?", filters.Environment)
 	}
@@ -220,18 +279,26 @@ func (r *GORMTopologyRepository) ListNodes(ctx context.Context, filters Topology
 	return nodes, nil
 }
 
+func (r *GORMTopologyRepository) hasColumn(modelValue any, columnName string) bool {
+	return r.db.Migrator().HasColumn(modelValue, columnName)
+}
+
 func (r *GORMTopologyRepository) FindTopologyNodes(ctx context.Context, filters TopologyNodeLookupFilters) ([]model.TopologyNode, error) {
 	limit := filters.Limit
 	if limit <= 0 || limit > 20 {
 		limit = 10
 	}
 	queryText := filters.Query
+	nodePredicate := "topology_node.node_key = ? OR topology_node.name = ? OR topology_node.display_name = ? OR topology_node_alias.alias = ? OR topology_node.name ILIKE ? OR topology_node.display_name ILIKE ? OR topology_node_alias.alias ILIKE ?"
+	if r.hasColumn(&model.TopologyNode{}, "deleted_at") {
+		nodePredicate = "topology_node.deleted_at IS NULL AND (" + nodePredicate + ")"
+	}
 	query := r.db.WithContext(ctx).
 		Model(&model.TopologyNode{}).
 		Distinct("topology_node.*").
 		Joins("LEFT JOIN topology_node_alias ON topology_node_alias.node_id = topology_node.id").
 		Where(
-			"topology_node.node_key = ? OR topology_node.name = ? OR topology_node.display_name = ? OR topology_node_alias.alias = ? OR topology_node.name ILIKE ? OR topology_node.display_name ILIKE ? OR topology_node_alias.alias ILIKE ?",
+			nodePredicate,
 			queryText,
 			queryText,
 			queryText,
@@ -341,8 +408,12 @@ func (r *GORMTopologyRepository) ListEdges(ctx context.Context, filters Topology
 	}
 	query := r.db.WithContext(ctx).
 		Joins("JOIN topology_node from_node ON from_node.node_key = topology_edge.from_node_key").
+		Where("topology_edge.deleted_at IS NULL").
 		Order("topology_edge.edge_type ASC, topology_edge.from_node_key ASC, topology_edge.to_node_key ASC").
 		Limit(limit)
+	if r.hasColumn(&model.TopologyNode{}, "deleted_at") {
+		query = query.Where("from_node.deleted_at IS NULL")
+	}
 	if filters.Environment != "" {
 		query = query.Where("from_node.environment = ?", filters.Environment)
 	}

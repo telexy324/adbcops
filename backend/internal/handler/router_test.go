@@ -244,6 +244,24 @@ func TestToolRoutesExposeManagementButNotGenericInvoke(t *testing.T) {
 	}
 }
 
+func TestOptionsPreflightDoesNot404(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(discardLogger(), RouterDependencies{})
+
+	request := httptest.NewRequest(http.MethodOptions, "/api/topology/nodes", nil)
+	request.Header.Set("Origin", "http://127.0.0.1:5173")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if response.Header().Get("Access-Control-Allow-Origin") != "http://127.0.0.1:5173" {
+		t.Fatalf("missing CORS allow origin header: %+v", response.Header())
+	}
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }

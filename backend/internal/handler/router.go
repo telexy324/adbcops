@@ -42,6 +42,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 	_ = router.SetTrustedProxies(nil)
 	router.Use(
 		appmiddleware.RequestID(),
+		appmiddleware.CORS(),
 		appmiddleware.Logger(logger),
 		appmiddleware.Metrics(),
 		appmiddleware.Audit(dependencies.AuditRecorder, logger),
@@ -115,11 +116,19 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.POST("/sources/:id/preview", dependencies.RequireAdmin, dependencies.TopologyHandler.PreviewSource)
 		topologyRoutes.POST("/sources/:id/run", dependencies.RequireAdmin, dependencies.TopologyHandler.RunSourceSync)
 		topologyRoutes.GET("/sync-runs", dependencies.TopologyHandler.ListSyncRuns)
+		topologyRoutes.GET("/nodes", dependencies.TopologyHandler.ListNodes)
 		topologyRoutes.POST("/nodes", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertNode)
+		topologyRoutes.GET("/nodes/:id", dependencies.TopologyHandler.GetNode)
+		topologyRoutes.PUT("/nodes/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.UpdateNode)
+		topologyRoutes.DELETE("/nodes/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.DeleteNode)
 		topologyRoutes.GET("/nodes/:id/aliases", dependencies.TopologyHandler.ListNodeAliases)
 		topologyRoutes.POST("/nodes/:id/aliases", dependencies.RequireAdmin, dependencies.TopologyHandler.AddNodeAlias)
 		topologyRoutes.DELETE("/nodes/:id/aliases/:aliasId", dependencies.RequireAdmin, dependencies.TopologyHandler.DeleteNodeAlias)
+		topologyRoutes.GET("/edges", dependencies.TopologyHandler.ListEdges)
 		topologyRoutes.POST("/edges", dependencies.RequireAdmin, dependencies.TopologyHandler.UpsertEdge)
+		topologyRoutes.GET("/edges/:id", dependencies.TopologyHandler.GetEdge)
+		topologyRoutes.PUT("/edges/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.UpdateEdge)
+		topologyRoutes.DELETE("/edges/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.DeleteEdge)
 		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
 		topologyRoutes.POST("/sync/trace", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncTrace)
 		topologyRoutes.POST("/sync/component", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncComponent)

@@ -86,6 +86,25 @@ vi.mock("@/api/workflows", () => ({
 }));
 
 vi.mock("@/api/operations", () => ({
+  createTopologyEdge: vi.fn().mockResolvedValue({
+    id: 11,
+    edgeKey: "service:payment-api->database:orders:depends_on",
+    fromNodeKey: "service:payment-api",
+    toNodeKey: "database:orders",
+    edgeType: "depends_on",
+    sourceType: "manual",
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
+  createTopologyNode: vi.fn().mockResolvedValue({
+    id: 10,
+    nodeKey: "prod:service:manual:payment-api",
+    kind: "service",
+    name: "payment-api",
+    sourceType: "manual",
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
   createTopologySavedView: vi.fn().mockResolvedValue({
     id: 1,
     name: "生产服务依赖视图",
@@ -98,6 +117,8 @@ vi.mock("@/api/operations", () => ({
     updatedAt: "2026-07-12T10:00:00Z",
   }),
   confirmRootCause: vi.fn(),
+  deleteTopologyEdge: vi.fn().mockResolvedValue({ deleted: true }),
+  deleteTopologyNode: vi.fn().mockResolvedValue({ deleted: true }),
   expandTopology: vi.fn().mockResolvedValue({
     rootKey: "service:payment-api",
     direction: "both",
@@ -409,6 +430,25 @@ vi.mock("@/api/operations", () => ({
     createdAt: "2026-07-12T10:00:00Z",
   }),
   toAPIErrorMessage: vi.fn(() => "请求失败"),
+  updateTopologyEdge: vi.fn().mockResolvedValue({
+    id: 11,
+    edgeKey: "service:payment-api->database:orders:depends_on",
+    fromNodeKey: "service:payment-api",
+    toNodeKey: "database:orders",
+    edgeType: "depends_on",
+    sourceType: "manual",
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
+  updateTopologyNode: vi.fn().mockResolvedValue({
+    id: 10,
+    nodeKey: "prod:service:manual:payment-api",
+    kind: "service",
+    name: "payment-api",
+    sourceType: "manual",
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
   updateTopologyRelationType: vi.fn(),
   updateTopologySource: vi.fn().mockResolvedValue({
     id: 1,
@@ -656,6 +696,7 @@ describe("TopologyPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Filter / Expand")).toBeInTheDocument();
     expect(screen.getByText("Saved View")).toBeInTheDocument();
+    expect(screen.getByText("Manual Draw")).toBeInTheDocument();
     expect(screen.getByText("图例")).toBeInTheDocument();
     expect(
       screen.getByText("点击拓扑图中的节点查看详情。"),

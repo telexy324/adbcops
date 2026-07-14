@@ -168,6 +168,102 @@ func TestEdgeResolverFusesMultiSourceConfidenceWithoutDuplicateEdge(t *testing.T
 	}
 }
 
+func TestManualTopologyNodeCRUDByID(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+
+	node, err := service.UpsertNode(context.Background(), NodeInput{
+		Kind:       "service",
+		Name:       "payment-api",
+		Properties: json.RawMessage(`{"owner":"payments"}`),
+	})
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	updated, err := service.UpdateNode(context.Background(), node.ID, NodeInput{
+		Kind:       "service",
+		Name:       "payment-api-v2",
+		Properties: json.RawMessage(`{"owner":"platform"}`),
+	})
+	if err != nil {
+		t.Fatalf("update node: %v", err)
+	}
+	if updated.ID != node.ID || updated.NodeKey != node.NodeKey || updated.Name != "payment-api-v2" {
+		t.Fatalf("unexpected updated node: %+v", updated)
+	}
+	if err := service.DeleteNode(context.Background(), node.ID); err != nil {
+		t.Fatalf("delete node: %v", err)
+	}
+	if _, err := service.GetNode(context.Background(), node.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected deleted node to be hidden, got %v", err)
+	}
+	graph, err := service.Graph(context.Background(), Query{})
+	if err != nil {
+		t.Fatalf("query graph: %v", err)
+	}
+	if len(graph.Nodes) != 0 {
+		t.Fatalf("expected deleted node to be filtered, got %+v", graph.Nodes)
+	}
+}
+
+func TestManualTopologyEdgeCRUDByID(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+
+	from, err := service.UpsertNode(context.Background(), NodeInput{Kind: "service", Name: "payment-api"})
+	if err != nil {
+		t.Fatalf("create from node: %v", err)
+	}
+	to, err := service.UpsertNode(context.Background(), NodeInput{Kind: "database", Name: "payment-db"})
+	if err != nil {
+		t.Fatalf("create to node: %v", err)
+	}
+	edge, err := service.UpsertEdge(context.Background(), EdgeInput{
+		FromNodeKey: from.NodeKey,
+		ToNodeKey:   to.NodeKey,
+		EdgeType:    model.TopologyEdgeTypeDependsOn,
+		Confidence:  ptr(0.6),
+	})
+	if err != nil {
+		t.Fatalf("create edge: %v", err)
+	}
+	updated, err := service.UpdateEdge(context.Background(), edge.ID, EdgeInput{
+		FromNodeKey: from.NodeKey,
+		ToNodeKey:   to.NodeKey,
+		EdgeType:    model.TopologyEdgeTypeDependsOn,
+		Confidence:  ptr(0.9),
+	})
+	if err != nil {
+		t.Fatalf("update edge: %v", err)
+	}
+	if updated.ID != edge.ID || updated.EdgeKey != edge.EdgeKey || updated.Confidence == nil || *updated.Confidence != 0.9 {
+		t.Fatalf("unexpected updated edge: %+v", updated)
+	}
+	if err := service.DeleteEdge(context.Background(), edge.ID); err != nil {
+		t.Fatalf("delete edge: %v", err)
+	}
+	if _, err := service.GetEdge(context.Background(), edge.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected deleted edge to be hidden, got %v", err)
+	}
+}
+
+func TestRejectsManualDeleteForDiscoveredTopology(t *testing.T) {
+	repo := newMemoryTopologyRepository()
+	service := NewService(repo, nil)
+
+	node, err := service.UpsertNode(context.Background(), NodeInput{
+		Kind:       "service",
+		Name:       "payment-api",
+		SourceType: model.TopologySourceTypeKubernetes,
+	})
+	if err != nil {
+		t.Fatalf("create discovered node: %v", err)
+	}
+	if err := service.DeleteNode(context.Background(), node.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected forbidden node delete, got %v", err)
+	}
+}
+
 func TestObservationRelationDoesNotPropagateFailure(t *testing.T) {
 	repo := newMemoryTopologyRepository()
 	service := NewService(repo, nil)
@@ -1468,18 +1564,64 @@ func (r *memoryTopologyRepository) UpsertEdge(_ context.Context, edge *model.Top
 
 func (r *memoryTopologyRepository) FindEdgeByKey(_ context.Context, edgeKey string) (*model.TopologyEdge, error) {
 	edge, ok := r.edges[edgeKey]
-	if !ok {
+	if !ok || edge.DeletedAt != nil {
 		return nil, repository.ErrNotFound
 	}
 	return &edge, nil
 }
 
-func (r *memoryTopologyRepository) UpdateTopologyEdge(_ context.Context, edge *model.TopologyEdge) error {
-	if _, ok := r.edges[edge.EdgeKey]; !ok {
-		return repository.ErrNotFound
+func (r *memoryTopologyRepository) FindEdgeByID(_ context.Context, id int64) (*model.TopologyEdge, error) {
+	for _, edge := range r.edges {
+		if edge.ID == id && edge.DeletedAt == nil {
+			return &edge, nil
+		}
 	}
-	r.edges[edge.EdgeKey] = *edge
-	return nil
+	return nil, repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) UpdateTopologyNode(_ context.Context, node *model.TopologyNode) error {
+	for key, existing := range r.nodes {
+		if existing.ID == node.ID {
+			delete(r.nodes, key)
+			r.nodes[node.NodeKey] = *node
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) UpdateTopologyEdge(_ context.Context, edge *model.TopologyEdge) error {
+	for key, existing := range r.edges {
+		if existing.ID == edge.ID {
+			delete(r.edges, key)
+			r.edges[edge.EdgeKey] = *edge
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) SoftDeleteTopologyNode(_ context.Context, id int64, deletedAt time.Time) error {
+	for key, node := range r.nodes {
+		if node.ID == id && node.DeletedAt == nil {
+			node.DeletedAt = &deletedAt
+			r.nodes[key] = node
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
+func (r *memoryTopologyRepository) SoftDeleteTopologyEdge(_ context.Context, id int64, deletedAt time.Time) error {
+	for key, edge := range r.edges {
+		if edge.ID == id && edge.DeletedAt == nil {
+			edge.DeletedAt = &deletedAt
+			edge.Status = edgeStatusExpired
+			r.edges[key] = edge
+			return nil
+		}
+	}
+	return repository.ErrNotFound
 }
 
 func (r *memoryTopologyRepository) UpsertTopologyEdgeObservation(_ context.Context, observation *model.TopologyEdgeObservation) error {
@@ -1506,7 +1648,7 @@ func (r *memoryTopologyRepository) ListTopologyEdgeObservations(_ context.Contex
 
 func (r *memoryTopologyRepository) FindNodeByKey(_ context.Context, nodeKey string) (*model.TopologyNode, error) {
 	node, ok := r.nodes[nodeKey]
-	if !ok {
+	if !ok || node.DeletedAt != nil {
 		return nil, repository.ErrNotFound
 	}
 	return &node, nil
@@ -1514,7 +1656,7 @@ func (r *memoryTopologyRepository) FindNodeByKey(_ context.Context, nodeKey stri
 
 func (r *memoryTopologyRepository) FindNodeByID(_ context.Context, id int64) (*model.TopologyNode, error) {
 	for _, node := range r.nodes {
-		if node.ID == id {
+		if node.ID == id && node.DeletedAt == nil {
 			return &node, nil
 		}
 	}
@@ -1525,6 +1667,9 @@ func (r *memoryTopologyRepository) FindTopologyNodes(_ context.Context, filters 
 	result := []model.TopologyNode{}
 	seen := map[string]struct{}{}
 	for _, node := range r.nodes {
+		if node.DeletedAt != nil {
+			continue
+		}
 		if filters.Environment != "" && (node.Environment == nil || *node.Environment != filters.Environment) {
 			continue
 		}
@@ -1639,6 +1784,9 @@ func (r *memoryTopologyRepository) UpdateTopologyConflict(_ context.Context, con
 func (r *memoryTopologyRepository) ListNodes(_ context.Context, _ repository.TopologyFilters) ([]model.TopologyNode, error) {
 	result := make([]model.TopologyNode, 0, len(r.nodes))
 	for _, node := range r.nodes {
+		if node.DeletedAt != nil {
+			continue
+		}
 		result = append(result, node)
 	}
 	return result, nil
@@ -1647,6 +1795,9 @@ func (r *memoryTopologyRepository) ListNodes(_ context.Context, _ repository.Top
 func (r *memoryTopologyRepository) ListEdges(_ context.Context, _ repository.TopologyFilters) ([]model.TopologyEdge, error) {
 	result := make([]model.TopologyEdge, 0, len(r.edges))
 	for _, edge := range r.edges {
+		if edge.DeletedAt != nil {
+			continue
+		}
 		result = append(result, edge)
 	}
 	return result, nil

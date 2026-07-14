@@ -2,31 +2,57 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Background,
+  type Connection,
+  Controls,
+  Handle,
+  MarkerType,
+  MiniMap,
+  Position,
+  ReactFlow,
+  type Edge as FlowEdge,
+  type Node as FlowNode,
+  type NodeProps,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import {
   BellRing,
   CheckCircle2,
   GitBranch,
   Loader2,
   Network,
+  Pencil,
+  Plus,
   Radius,
   Save,
   Search,
+  Trash2,
   X,
   Zap,
 } from "lucide-react";
 
 import {
+  createTopologyEdge,
+  createTopologyNode,
   createTopologySavedView,
+  deleteTopologyEdge,
+  deleteTopologyNode,
   expandTopology,
   getBlastRadius,
   getTopologyGraph,
   listTopologySavedViews,
   toAPIErrorMessage,
+  updateTopologyEdge,
+  updateTopologyNode,
   type BlastRadius,
   type ExpandTopologyInput,
   type ExpandTopologyResult,
+  type TopologyEdge,
+  type TopologyEdgeInput,
   type TopologyDirection,
   type TopologyGraph,
   type TopologyNode,
+  type TopologyNodeInput,
   type TopologySavedView,
 } from "@/api/operations";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -52,9 +78,28 @@ type TopologyQueryState = {
   onlyPropagating: boolean;
 };
 
-type CanvasNode = TopologyNode & {
-  x: number;
-  y: number;
+type TopologyFlowNodeData = {
+  topologyNode: TopologyNode;
+  isRoot: boolean;
+};
+
+type TopologyFlowNode = FlowNode<TopologyFlowNodeData, "topologyNode">;
+
+type ManualNodeForm = {
+  nodeKey: string;
+  kind: string;
+  name: string;
+  displayName: string;
+  environment: string;
+  cluster: string;
+  namespace: string;
+};
+
+type ManualEdgeForm = {
+  fromNodeKey: string;
+  toNodeKey: string;
+  edgeType: string;
+  confidence: string;
 };
 
 const defaultQuery: TopologyQueryState = {
@@ -68,6 +113,23 @@ const defaultQuery: TopologyQueryState = {
   onlyPropagating: false,
 };
 
+const emptyNodeForm: ManualNodeForm = {
+  nodeKey: "",
+  kind: "service",
+  name: "",
+  displayName: "",
+  environment: "prod",
+  cluster: "",
+  namespace: "",
+};
+
+const emptyEdgeForm: ManualEdgeForm = {
+  fromNodeKey: "",
+  toNodeKey: "",
+  edgeType: "depends_on",
+  confidence: "1",
+};
+
 const nodePalette = [
   "bg-cyan-50 text-cyan-700 border-cyan-200",
   "bg-violet-50 text-violet-700 border-violet-200",
@@ -77,6 +139,10 @@ const nodePalette = [
   "bg-slate-50 text-slate-700 border-slate-200",
 ];
 
+const topologyNodeTypes = {
+  topologyNode: TopologyFlowNodeCard,
+};
+
 export function TopologyPage() {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState<TopologyQueryState>(defaultQuery);
@@ -84,6 +150,11 @@ export function TopologyPage() {
   const [expanded, setExpanded] = useState<ExpandTopologyResult | null>(null);
   const [blast, setBlast] = useState<BlastRadius | null>(null);
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
+  const [editingEdgeId, setEditingEdgeId] = useState<number | null>(null);
+  const [nodeForm, setNodeForm] = useState<ManualNodeForm>(emptyNodeForm);
+  const [edgeForm, setEdgeForm] = useState<ManualEdgeForm>(emptyEdgeForm);
   const [viewName, setViewName] = useState("生产服务依赖视图");
   const [visibility, setVisibility] =
     useState<TopologySavedView["visibility"]>("private");
@@ -152,6 +223,13 @@ export function TopologyPage() {
     () => activeGraph.nodes.find((node) => node.nodeKey === selectedNodeKey),
     [activeGraph.nodes, selectedNodeKey],
   );
+  const selectedEdge = useMemo(
+    () =>
+      activeGraph.edges.find(
+        (edge) => edgeKeyOf(edge) === selectedEdgeKey || edge.edgeKey === selectedEdgeKey,
+      ),
+    [activeGraph.edges, selectedEdgeKey],
+  );
 
   const kindLegend = useMemo(
     () =>
@@ -169,6 +247,87 @@ export function TopologyPage() {
   const truncated = Boolean(expanded?.truncated);
   const loading =
     graphQuery.isLoading || expandMutation.isPending || blastMutation.isPending;
+
+  function refreshGraph(message: string) {
+    setNotice(message);
+    setError(null);
+    setExpanded(null);
+    setBlast(null);
+    setGraphMode("graph");
+    void queryClient.invalidateQueries({ queryKey: ["topology", "graph"] });
+  }
+
+  const createNodeMutation = useMutation({
+    mutationFn: createTopologyNode,
+    onSuccess: (node) => {
+      setSelectedNodeKey(node.nodeKey);
+      setEditingNodeId(null);
+      setNodeForm(emptyNodeForm);
+      refreshGraph(`节点已创建：${node.name}`);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const updateNodeMutation = useMutation({
+    mutationFn: updateTopologyNode,
+    onSuccess: (node) => {
+      setSelectedNodeKey(node.nodeKey);
+      setEditingNodeId(null);
+      refreshGraph(`节点已更新：${node.name}`);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const deleteNodeMutation = useMutation({
+    mutationFn: deleteTopologyNode,
+    onSuccess: () => {
+      setSelectedNodeKey(null);
+      setEditingNodeId(null);
+      setNodeForm(emptyNodeForm);
+      refreshGraph("节点已删除。");
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const createEdgeMutation = useMutation({
+    mutationFn: createTopologyEdge,
+    onSuccess: (edge) => {
+      setSelectedEdgeKey(edgeKeyOf(edge));
+      setEditingEdgeId(null);
+      setEdgeForm(emptyEdgeForm);
+      refreshGraph(`关系已创建：${edge.edgeType}`);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const updateEdgeMutation = useMutation({
+    mutationFn: updateTopologyEdge,
+    onSuccess: (edge) => {
+      setSelectedEdgeKey(edgeKeyOf(edge));
+      setEditingEdgeId(null);
+      refreshGraph(`关系已更新：${edge.edgeType}`);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const deleteEdgeMutation = useMutation({
+    mutationFn: deleteTopologyEdge,
+    onSuccess: () => {
+      setSelectedEdgeKey(null);
+      setEditingEdgeId(null);
+      setEdgeForm(emptyEdgeForm);
+      refreshGraph("关系已删除。");
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const manualSaving =
+    createNodeMutation.isPending ||
+    updateNodeMutation.isPending ||
+    deleteNodeMutation.isPending ||
+    createEdgeMutation.isPending ||
+    updateEdgeMutation.isPending ||
+    deleteEdgeMutation.isPending;
 
   function patchQuery(patch: Partial<TopologyQueryState>) {
     setQuery((current) => ({ ...current, ...patch }));
@@ -217,7 +376,7 @@ export function TopologyPage() {
       centerNodeId: selected?.id,
       queryConfig: currentExpandInput() as Record<string, unknown>,
       displayConfig: {
-        layout: "svg-layered",
+        layout: "react-flow-layered",
         showLabels: true,
         graphMode,
         selectedNodeKey,
@@ -226,6 +385,108 @@ export function TopologyPage() {
         nodeCount: activeGraph.nodes.length,
         edgeCount: activeGraph.edges.length,
       },
+    });
+  }
+
+  function nodeInputFromForm(): TopologyNodeInput | null {
+    const name = nodeForm.name.trim();
+    const kind = nodeForm.kind.trim();
+    if (!name || !kind) {
+      setError("节点名称和类型不能为空。");
+      return null;
+    }
+    return {
+      nodeKey: nodeForm.nodeKey.trim() || undefined,
+      kind,
+      name,
+      displayName: nodeForm.displayName.trim() || undefined,
+      environment: nodeForm.environment.trim() || undefined,
+      cluster: nodeForm.cluster.trim() || undefined,
+      namespace: nodeForm.namespace.trim() || undefined,
+      sourceType: "manual",
+    };
+  }
+
+  function edgeInputFromForm(): TopologyEdgeInput | null {
+    const fromNodeKey = edgeForm.fromNodeKey.trim();
+    const toNodeKey = edgeForm.toNodeKey.trim();
+    const edgeType = edgeForm.edgeType.trim();
+    if (!fromNodeKey || !toNodeKey || !edgeType) {
+      setError("关系的起点、终点和类型不能为空。");
+      return null;
+    }
+    const confidence = Number(edgeForm.confidence);
+    return {
+      fromNodeKey,
+      toNodeKey,
+      edgeType,
+      confidence:
+        Number.isFinite(confidence) && confidence >= 0 && confidence <= 1
+          ? confidence
+          : 1,
+      sourceType: "manual",
+    };
+  }
+
+  function submitManualNode() {
+    const input = nodeInputFromForm();
+    if (!input) {
+      return;
+    }
+    if (editingNodeId) {
+      updateNodeMutation.mutate({ id: editingNodeId, data: input });
+      return;
+    }
+    createNodeMutation.mutate(input);
+  }
+
+  function submitManualEdge() {
+    const input = edgeInputFromForm();
+    if (!input) {
+      return;
+    }
+    if (editingEdgeId) {
+      updateEdgeMutation.mutate({ id: editingEdgeId, data: input });
+      return;
+    }
+    createEdgeMutation.mutate(input);
+  }
+
+  function loadNodeForEdit(node: TopologyNode) {
+    setEditingNodeId(node.id);
+    setSelectedNodeKey(node.nodeKey);
+    setNodeForm({
+      nodeKey: node.nodeKey,
+      kind: node.kind,
+      name: node.name,
+      displayName: node.displayName ?? "",
+      environment: node.environment ?? "",
+      cluster: node.cluster ?? "",
+      namespace: node.namespace ?? "",
+    });
+  }
+
+  function loadEdgeForEdit(edge: TopologyEdge) {
+    setEditingEdgeId(edge.id);
+    setSelectedEdgeKey(edgeKeyOf(edge));
+    setEdgeForm({
+      fromNodeKey: edge.fromNodeKey,
+      toNodeKey: edge.toNodeKey,
+      edgeType: edge.edgeType,
+      confidence: String(edge.confidence ?? 1),
+    });
+  }
+
+  function createEdgeFromConnection(connection: Connection) {
+    if (!connection.source || !connection.target) {
+      return;
+    }
+    createEdgeMutation.mutate({
+      fromNodeKey: connection.source,
+      toNodeKey: connection.target,
+      edgeType: edgeForm.edgeType.trim() || "depends_on",
+      confidence: 1,
+      sourceType: "manual",
     });
   }
 
@@ -239,8 +500,8 @@ export function TopologyPage() {
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
             支持筛选、方向/深度控制、Only
-            Propagating、节点抽屉、展开、影响面和保存视图。 当前用轻量 SVG
-            画布承载 200 节点内交互，后续可平滑替换为 React Flow。
+            Propagating、节点抽屉、展开、影响面和保存视图。当前使用 React
+            Flow 承载 200 节点内交互，支持缩放、拖拽、MiniMap 和 Fit View。
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -311,6 +572,53 @@ export function TopologyPage() {
             onLoad={loadSavedView}
             onSave={saveCurrentView}
           />
+
+          <ManualDrawCard
+            nodeForm={nodeForm}
+            edgeForm={edgeForm}
+            editingNodeId={editingNodeId}
+            editingEdgeId={editingEdgeId}
+            selectedNode={selectedNode}
+            selectedEdge={selectedEdge}
+            nodes={activeGraph.nodes}
+            saving={manualSaving}
+            onNodeFormChange={(patch) =>
+              setNodeForm((current) => ({ ...current, ...patch }))
+            }
+            onEdgeFormChange={(patch) =>
+              setEdgeForm((current) => ({ ...current, ...patch }))
+            }
+            onSubmitNode={submitManualNode}
+            onSubmitEdge={submitManualEdge}
+            onResetNode={() => {
+              setEditingNodeId(null);
+              setNodeForm(emptyNodeForm);
+            }}
+            onResetEdge={() => {
+              setEditingEdgeId(null);
+              setEdgeForm(emptyEdgeForm);
+            }}
+            onLoadSelectedNode={() => {
+              if (selectedNode) {
+                loadNodeForEdit(selectedNode);
+              }
+            }}
+            onLoadSelectedEdge={() => {
+              if (selectedEdge) {
+                loadEdgeForEdit(selectedEdge);
+              }
+            }}
+            onDeleteNode={() => {
+              if (editingNodeId) {
+                deleteNodeMutation.mutate(editingNodeId);
+              }
+            }}
+            onDeleteEdge={() => {
+              if (editingEdgeId) {
+                deleteEdgeMutation.mutate(editingEdgeId);
+              }
+            }}
+          />
         </div>
 
         <TopologyCanvasCard
@@ -319,7 +627,10 @@ export function TopologyPage() {
           rootKey={expanded?.rootKey ?? blast?.rootKey ?? query.nodeKey}
           paths={expanded?.paths ?? []}
           selectedNodeKey={selectedNodeKey}
+          selectedEdgeKey={selectedEdgeKey}
           onSelectNode={setSelectedNodeKey}
+          onSelectEdge={(edgeKey) => setSelectedEdgeKey(edgeKey)}
+          onConnect={createEdgeFromConnection}
         />
 
         <div className="space-y-6">
@@ -581,28 +892,300 @@ function SavedViewsCard({
   );
 }
 
+function ManualDrawCard({
+  nodeForm,
+  edgeForm,
+  editingNodeId,
+  editingEdgeId,
+  selectedNode,
+  selectedEdge,
+  nodes,
+  saving,
+  onNodeFormChange,
+  onEdgeFormChange,
+  onSubmitNode,
+  onSubmitEdge,
+  onResetNode,
+  onResetEdge,
+  onLoadSelectedNode,
+  onLoadSelectedEdge,
+  onDeleteNode,
+  onDeleteEdge,
+}: {
+  nodeForm: ManualNodeForm;
+  edgeForm: ManualEdgeForm;
+  editingNodeId: number | null;
+  editingEdgeId: number | null;
+  selectedNode?: TopologyNode;
+  selectedEdge?: TopologyEdge;
+  nodes: TopologyNode[];
+  saving: boolean;
+  onNodeFormChange: (patch: Partial<ManualNodeForm>) => void;
+  onEdgeFormChange: (patch: Partial<ManualEdgeForm>) => void;
+  onSubmitNode: () => void;
+  onSubmitEdge: () => void;
+  onResetNode: () => void;
+  onResetEdge: () => void;
+  onLoadSelectedNode: () => void;
+  onLoadSelectedEdge: () => void;
+  onDeleteNode: () => void;
+  onDeleteEdge: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="grid size-10 place-items-center rounded-xl bg-emerald-50 text-emerald-700">
+            <Pencil className="size-5" aria-hidden="true" />
+          </div>
+          <div>
+            <CardTitle>Manual Draw</CardTitle>
+            <CardDescription>
+              手工创建节点；在画布中拖拽节点连接点可绘制关系。
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="space-y-3 rounded-lg border border-slate-200 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <SectionTitle>
+              {editingNodeId ? "编辑节点" : "新建节点"}
+            </SectionTitle>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onLoadSelectedNode}
+              disabled={!selectedNode || saving}
+            >
+              <Pencil className="size-4" />
+              载入选中
+            </Button>
+          </div>
+          <Field label="Name">
+            <Input
+              value={nodeForm.name}
+              onChange={(event) => onNodeFormChange({ name: event.target.value })}
+              placeholder="payment-api"
+            />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Kind">
+              <Input
+                value={nodeForm.kind}
+                onChange={(event) =>
+                  onNodeFormChange({ kind: event.target.value })
+                }
+                placeholder="service"
+              />
+            </Field>
+            <Field label="Environment">
+              <Input
+                value={nodeForm.environment}
+                onChange={(event) =>
+                  onNodeFormChange({ environment: event.target.value })
+                }
+                placeholder="prod"
+              />
+            </Field>
+          </div>
+          <Field label="Node Key">
+            <Input
+              value={nodeForm.nodeKey}
+              onChange={(event) =>
+                onNodeFormChange({ nodeKey: event.target.value })
+              }
+              placeholder="留空自动生成"
+              disabled={Boolean(editingNodeId)}
+            />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Cluster">
+              <Input
+                value={nodeForm.cluster}
+                onChange={(event) =>
+                  onNodeFormChange({ cluster: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Namespace">
+              <Input
+                value={nodeForm.namespace}
+                onChange={(event) =>
+                  onNodeFormChange({ namespace: event.target.value })
+                }
+              />
+            </Field>
+          </div>
+          <Field label="Display Name">
+            <Input
+              value={nodeForm.displayName}
+              onChange={(event) =>
+                onNodeFormChange({ displayName: event.target.value })
+              }
+            />
+          </Field>
+          <div className="grid grid-cols-3 gap-2">
+            <Button
+              type="button"
+              onClick={onSubmitNode}
+              disabled={saving || nodeForm.name.trim() === ""}
+            >
+              <Plus className="size-4" />
+              保存
+            </Button>
+            <Button type="button" variant="outline" onClick={onResetNode}>
+              重置
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-rose-200 text-rose-700 hover:bg-rose-50"
+              onClick={onDeleteNode}
+              disabled={saving || !editingNodeId}
+            >
+              <Trash2 className="size-4" />
+              删除
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-3 rounded-lg border border-slate-200 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <SectionTitle>
+              {editingEdgeId ? "编辑关系" : "新建关系"}
+            </SectionTitle>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onLoadSelectedEdge}
+              disabled={!selectedEdge || saving}
+            >
+              <Pencil className="size-4" />
+              载入选中
+            </Button>
+          </div>
+          <Field label="From">
+            <NodeKeySelect
+              value={edgeForm.fromNodeKey}
+              nodes={nodes}
+              onChange={(value) => onEdgeFormChange({ fromNodeKey: value })}
+            />
+          </Field>
+          <Field label="To">
+            <NodeKeySelect
+              value={edgeForm.toNodeKey}
+              nodes={nodes}
+              onChange={(value) => onEdgeFormChange({ toNodeKey: value })}
+            />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Relation Type">
+              <Input
+                value={edgeForm.edgeType}
+                onChange={(event) =>
+                  onEdgeFormChange({ edgeType: event.target.value })
+                }
+                placeholder="depends_on"
+              />
+            </Field>
+            <Field label="Confidence">
+              <Input
+                type="number"
+                min={0}
+                max={1}
+                step={0.1}
+                value={edgeForm.confidence}
+                onChange={(event) =>
+                  onEdgeFormChange({ confidence: event.target.value })
+                }
+              />
+            </Field>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Button
+              type="button"
+              onClick={onSubmitEdge}
+              disabled={
+                saving ||
+                edgeForm.fromNodeKey.trim() === "" ||
+                edgeForm.toNodeKey.trim() === ""
+              }
+            >
+              <Plus className="size-4" />
+              保存
+            </Button>
+            <Button type="button" variant="outline" onClick={onResetEdge}>
+              重置
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-rose-200 text-rose-700 hover:bg-rose-50"
+              onClick={onDeleteEdge}
+              disabled={saving || !editingEdgeId}
+            >
+              <Trash2 className="size-4" />
+              删除
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NodeKeySelect({
+  value,
+  nodes,
+  onChange,
+}: {
+  value: string;
+  nodes: TopologyNode[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <option value="">选择节点</option>
+      {nodes.map((node) => (
+        <option key={node.nodeKey} value={node.nodeKey}>
+          {node.name} · {node.nodeKey}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function TopologyCanvasCard({
   graph,
   loading,
   rootKey,
   paths,
   selectedNodeKey,
+  selectedEdgeKey,
   onSelectNode,
+  onSelectEdge,
+  onConnect,
 }: {
   graph: TopologyGraph;
   loading: boolean;
   rootKey: string;
   paths: ExpandTopologyResult["paths"];
   selectedNodeKey: string | null;
+  selectedEdgeKey: string | null;
   onSelectNode: (nodeKey: string) => void;
+  onSelectEdge: (edgeKey: string) => void;
+  onConnect: (connection: Connection) => void;
 }) {
-  const layout = useMemo(
-    () => buildCanvasLayout(graph, rootKey, paths),
-    [graph, paths, rootKey],
-  );
-  const nodeByKey = useMemo(
-    () => new Map(layout.nodes.map((node) => [node.nodeKey, node])),
-    [layout.nodes],
+  const { nodes, edges } = useMemo(
+    () => buildFlowElements(graph, rootKey, paths, selectedNodeKey, selectedEdgeKey),
+    [graph, paths, rootKey, selectedNodeKey, selectedEdgeKey],
   );
 
   return (
@@ -616,7 +1199,7 @@ function TopologyCanvasCard({
             <div>
               <CardTitle>Topology Map</CardTitle>
               <CardDescription>
-                点击节点打开 Drawer；关系箭头表示依赖/调用方向。
+                React Flow 画布，点击节点打开 Drawer；关系箭头表示依赖/调用方向。
               </CardDescription>
             </div>
           </div>
@@ -629,123 +1212,42 @@ function TopologyCanvasCard({
         </div>
       </CardHeader>
       <CardContent className="p-0">
-        <div className="relative min-h-[720px] overflow-auto bg-[radial-gradient(circle_at_1px_1px,#cbd5e1_1px,transparent_0)] [background-size:24px_24px]">
+        <div className="h-[720px] bg-slate-50">
           {graph.nodes.length === 0 ? (
-            <div className="grid min-h-[720px] place-items-center p-8 text-center text-sm text-slate-500">
-              暂无拓扑数据，可先同步 K8s / Trace / 组件数据源。
+            <div className="grid h-full place-items-center p-8 text-center text-sm text-slate-500">
+              暂无拓扑数据，可先同步 K8s / Trace / 组件数据源，或在配置中心手工维护节点和关系。
             </div>
           ) : (
-            <svg
-              role="img"
-              aria-label="拓扑图"
-              width={layout.width}
-              height={layout.height}
-              className="min-h-[720px]"
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={topologyNodeTypes}
+              fitView
+              fitViewOptions={{ padding: 0.22, maxZoom: 1.2 }}
+              minZoom={0.2}
+              maxZoom={1.8}
+              nodesDraggable
+              nodesConnectable
+              elementsSelectable
+              onConnect={onConnect}
+              onNodeClick={(_, node) => onSelectNode(node.id)}
+              onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
             >
-              <defs>
-                <marker
-                  id="arrow"
-                  markerWidth="10"
-                  markerHeight="10"
-                  refX="9"
-                  refY="3"
-                  orient="auto"
-                  markerUnits="strokeWidth"
-                >
-                  <path d="M0,0 L0,6 L9,3 z" fill="#64748b" />
-                </marker>
-              </defs>
-
-              {graph.edges.map((edge) => {
-                const from = nodeByKey.get(edge.fromNodeKey);
-                const to = nodeByKey.get(edge.toNodeKey);
-                if (!from || !to) {
-                  return null;
+              <Background gap={24} color="#cbd5e1" />
+              <Controls showInteractive={false} />
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={(node) =>
+                  node.id === rootKey
+                    ? "#f59e0b"
+                    : node.id === selectedNodeKey
+                      ? "#0891b2"
+                      : "#94a3b8"
                 }
-                const selected =
-                  selectedNodeKey === edge.fromNodeKey ||
-                  selectedNodeKey === edge.toNodeKey;
-                return (
-                  <g
-                    key={
-                      edge.edgeKey || `${edge.fromNodeKey}-${edge.toNodeKey}`
-                    }
-                  >
-                    <line
-                      x1={from.x + 92}
-                      y1={from.y + 28}
-                      x2={to.x + 8}
-                      y2={to.y + 28}
-                      stroke={selected ? "#0891b2" : "#94a3b8"}
-                      strokeWidth={selected ? 2.4 : 1.4}
-                      markerEnd="url(#arrow)"
-                    />
-                    <text
-                      x={(from.x + to.x) / 2 + 50}
-                      y={(from.y + to.y) / 2 + 18}
-                      className="fill-slate-500 text-[11px]"
-                    >
-                      {edge.edgeType}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {layout.nodes.map((node) => {
-                const selected = selectedNodeKey === node.nodeKey;
-                const root = node.nodeKey === rootKey;
-                return (
-                  <g
-                    key={node.nodeKey}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onSelectNode(node.nodeKey)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        onSelectNode(node.nodeKey);
-                      }
-                    }}
-                    className="cursor-pointer"
-                  >
-                    <rect
-                      x={node.x}
-                      y={node.y}
-                      width="184"
-                      height="72"
-                      rx="14"
-                      fill={selected ? "#ecfeff" : root ? "#fef3c7" : "#ffffff"}
-                      stroke={
-                        selected ? "#0891b2" : root ? "#f59e0b" : "#cbd5e1"
-                      }
-                      strokeWidth={selected || root ? 2 : 1.2}
-                      filter="drop-shadow(0 10px 16px rgb(15 23 42 / 0.08))"
-                    />
-                    <text
-                      x={node.x + 14}
-                      y={node.y + 24}
-                      className="fill-slate-950 text-[13px] font-semibold"
-                    >
-                      {truncate(node.displayName || node.name, 22)}
-                    </text>
-                    <text
-                      x={node.x + 14}
-                      y={node.y + 43}
-                      className="fill-slate-500 text-[11px]"
-                    >
-                      {truncate(node.nodeKey, 28)}
-                    </text>
-                    <text
-                      x={node.x + 14}
-                      y={node.y + 61}
-                      className="fill-cyan-700 text-[11px] font-medium"
-                    >
-                      {node.kind}
-                    </text>
-                    <BadgeDots node={node} x={node.x + 132} y={node.y + 54} />
-                  </g>
-                );
-              })}
-            </svg>
+                className="!bg-white/90"
+              />
+            </ReactFlow>
           )}
         </div>
       </CardContent>
@@ -753,29 +1255,70 @@ function TopologyCanvasCard({
   );
 }
 
-function BadgeDots({
-  node,
-  x,
-  y,
-}: {
-  node: TopologyNode;
-  x: number;
-  y: number;
-}) {
+function TopologyFlowNodeCard({ data, selected }: NodeProps<TopologyFlowNode>) {
+  const node = data.topologyNode;
+  return (
+    <div
+      className={cn(
+        "relative w-[220px] rounded-lg border bg-white px-4 py-3 shadow-sm transition-shadow",
+        selected
+          ? "border-cyan-400 shadow-cyan-100"
+          : data.isRoot
+            ? "border-amber-400"
+            : "border-slate-200",
+      )}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!size-2 !border-slate-300 !bg-white"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!size-2 !border-slate-300 !bg-white"
+      />
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-slate-950">
+            {node.displayName || node.name}
+          </p>
+          <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
+            {node.nodeKey}
+          </p>
+        </div>
+        <StatusDots node={node} />
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <span className="truncate rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-medium text-cyan-700">
+          {node.kind}
+        </span>
+        <span className="truncate text-[11px] text-slate-500">
+          {node.namespace || node.environment || node.sourceType}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function StatusDots({ node }: { node: TopologyNode }) {
   const status = nodeStatus(node);
   const alerting = hasFlag(node, ["alert", "alerting", "hasAlert"]);
   const changed = hasFlag(node, ["change", "changed", "recentChange"]);
   return (
-    <g aria-label="节点状态徽标">
-      <circle
-        cx={x}
-        cy={y}
-        r="5"
-        fill={status === "healthy" ? "#22c55e" : "#f97316"}
+    <div
+      className="mt-1 flex shrink-0 items-center gap-1.5"
+      aria-label="节点状态徽标"
+    >
+      <span
+        className={cn(
+          "size-2.5 rounded-full",
+          status === "healthy" ? "bg-emerald-500" : "bg-orange-500",
+        )}
       />
-      {alerting && <circle cx={x + 18} cy={y} r="5" fill="#ef4444" />}
-      {changed && <circle cx={x + 36} cy={y} r="5" fill="#8b5cf6" />}
-    </g>
+      {alerting && <span className="size-2.5 rounded-full bg-rose-500" />}
+      {changed && <span className="size-2.5 rounded-full bg-violet-500" />}
+    </div>
   );
 }
 
@@ -995,6 +1538,14 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function SectionTitle({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+      {children}
+    </p>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div className="min-w-24 rounded-xl bg-slate-50 px-4 py-3">
@@ -1079,7 +1630,66 @@ function BadgeLegend({ color, text }: { color: string; text: string }) {
   );
 }
 
-function buildCanvasLayout(
+function buildFlowElements(
+  graph: TopologyGraph,
+  rootKey: string,
+  paths: ExpandTopologyResult["paths"],
+  selectedNodeKey: string | null,
+  selectedEdgeKey: string | null,
+) {
+  const layoutNodes = buildLayeredLayout(graph, rootKey, paths);
+  const visibleKeys = new Set(layoutNodes.map((node) => node.nodeKey));
+  const nodes: TopologyFlowNode[] = layoutNodes.map((node) => ({
+    id: node.nodeKey,
+    type: "topologyNode",
+    position: { x: node.x, y: node.y },
+    data: {
+      topologyNode: node,
+      isRoot: node.nodeKey === rootKey,
+    },
+    selected: node.nodeKey === selectedNodeKey,
+    draggable: true,
+  }));
+  const edges: FlowEdge[] = graph.edges
+    .filter(
+      (edge) =>
+        visibleKeys.has(edge.fromNodeKey) && visibleKeys.has(edge.toNodeKey),
+    )
+    .map((edge) => {
+      const selected =
+        selectedEdgeKey === edgeKeyOf(edge) ||
+        selectedNodeKey === edge.fromNodeKey ||
+        selectedNodeKey === edge.toNodeKey;
+      return {
+        id: edgeKeyOf(edge),
+        source: edge.fromNodeKey,
+        target: edge.toNodeKey,
+        label: edge.edgeType,
+        type: "smoothstep",
+        animated: selected,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: selected ? "#0891b2" : "#64748b",
+        },
+        style: {
+          stroke: selected ? "#0891b2" : "#94a3b8",
+          strokeWidth: selected ? 2.4 : 1.5,
+        },
+        labelStyle: {
+          fill: "#475569",
+          fontSize: 11,
+          fontWeight: 500,
+        },
+        labelBgStyle: {
+          fill: "#ffffff",
+          fillOpacity: 0.86,
+        },
+      };
+    });
+  return { nodes, edges };
+}
+
+function buildLayeredLayout(
   graph: TopologyGraph,
   rootKey: string,
   paths: ExpandTopologyResult["paths"],
@@ -1115,11 +1725,9 @@ function buildCanvasLayout(
     groups.set(level, group);
   });
 
-  const nodes: CanvasNode[] = [];
-  const xGap = 260;
-  const yGap = 118;
-  const left = 40;
-  const top = 48;
+  const nodes: Array<TopologyNode & { x: number; y: number }> = [];
+  const xGap = 330;
+  const yGap = 126;
   Array.from(groups.entries())
     .sort(([leftLevel], [rightLevel]) => leftLevel - rightLevel)
     .forEach(([level, group]) => {
@@ -1130,19 +1738,12 @@ function buildCanvasLayout(
         .forEach((node, row) => {
           nodes.push({
             ...node,
-            x: left + level * xGap,
-            y: top + row * yGap,
+            x: level * xGap,
+            y: row * yGap,
           });
         });
     });
-
-  const maxX = Math.max(...nodes.map((node) => node.x), 0);
-  const maxY = Math.max(...nodes.map((node) => node.y), 0);
-  return {
-    nodes,
-    width: Math.max(960, maxX + 260),
-    height: Math.max(720, maxY + 140),
-  };
+  return nodes;
 }
 
 function normalizeObject(value: unknown): Record<string, unknown> {
@@ -1175,6 +1776,13 @@ function directionValue(
   return value === "upstream" || value === "downstream" || value === "both"
     ? value
     : fallback;
+}
+
+function edgeKeyOf(edge: TopologyEdge) {
+  return (
+    edge.edgeKey ||
+    `${edge.fromNodeKey}->${edge.toNodeKey}:${edge.edgeType}`
+  ).toLowerCase();
 }
 
 function clampNumber(value: string, min: number, max: number) {

@@ -2,7 +2,7 @@
 
 ## 镜像
 
-根目录 `Dockerfile` 会构建两个 Go 二进制：
+`backend/Dockerfile` 会构建两个 Go 二进制：
 
 - `/app/server`：HTTP API 服务；
 - `/app/migrate`：数据库迁移命令。

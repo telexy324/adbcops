@@ -23,7 +23,7 @@ x-api-env: &api-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
       POSTGRES_USER: ${DB_USER:?DB_USER is required}
@@ -40,11 +40,13 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
+    networks:
+      - aiops_net
 
   migrate:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: backend/Dockerfile
     image: aiops-platform:local
     command: ["/app/migrate", "up"]
     entrypoint: []
@@ -54,11 +56,13 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    networks:
+      - aiops_net
 
   api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: backend/Dockerfile
     image: aiops-platform:local
     command: ["/app/server"]
     entrypoint: []
@@ -80,7 +84,35 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    networks:
+      - aiops_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    image: aiops-platform-frontend:local
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - aiops_net
 
 volumes:
   postgres_data:
   uploads_data:
+
+networks:
+  aiops_net:
+    driver: bridge

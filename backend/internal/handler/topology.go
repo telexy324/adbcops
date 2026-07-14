@@ -34,6 +34,36 @@ func (h *TopologyHandler) Graph(c *gin.Context) {
 	success(c, graph)
 }
 
+func (h *TopologyHandler) ListNodes(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	nodes, err := h.service.ListNodes(c.Request.Context(), topologysvc.Query{
+		Environment: c.Query("environment"),
+		Cluster:     c.Query("cluster"),
+		Namespace:   c.Query("namespace"),
+		Kind:        c.Query("kind"),
+		Limit:       limit,
+	})
+	if handleTopologyError(c, err, "list topology nodes failed") {
+		return
+	}
+	success(c, nodes)
+}
+
+func (h *TopologyHandler) ListEdges(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	edges, err := h.service.ListEdges(c.Request.Context(), topologysvc.Query{
+		Environment: c.Query("environment"),
+		Cluster:     c.Query("cluster"),
+		Namespace:   c.Query("namespace"),
+		Kind:        c.Query("kind"),
+		Limit:       limit,
+	})
+	if handleTopologyError(c, err, "list topology edges failed") {
+		return
+	}
+	success(c, edges)
+}
+
 func (h *TopologyHandler) FindNode(c *gin.Context) {
 	var request topologysvc.FindNodeInput
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -521,6 +551,46 @@ func (h *TopologyHandler) UpsertNode(c *gin.Context) {
 	success(c, node)
 }
 
+func (h *TopologyHandler) GetNode(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	node, err := h.service.GetNode(c.Request.Context(), id)
+	if handleTopologyError(c, err, "get topology node failed") {
+		return
+	}
+	success(c, node)
+}
+
+func (h *TopologyHandler) UpdateNode(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.NodeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	node, err := h.service.UpdateNode(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "update topology node failed") {
+		return
+	}
+	success(c, node)
+}
+
+func (h *TopologyHandler) DeleteNode(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteNode(c.Request.Context(), id); handleTopologyError(c, err, "delete topology node failed") {
+		return
+	}
+	success(c, gin.H{"deleted": true})
+}
+
 func (h *TopologyHandler) ListNodeAliases(c *gin.Context) {
 	id, ok := idFromParam(c)
 	if !ok {
@@ -573,6 +643,46 @@ func (h *TopologyHandler) UpsertEdge(c *gin.Context) {
 		return
 	}
 	success(c, edge)
+}
+
+func (h *TopologyHandler) GetEdge(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	edge, err := h.service.GetEdge(c.Request.Context(), id)
+	if handleTopologyError(c, err, "get topology edge failed") {
+		return
+	}
+	success(c, edge)
+}
+
+func (h *TopologyHandler) UpdateEdge(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.EdgeInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	edge, err := h.service.UpdateEdge(c.Request.Context(), id, request)
+	if handleTopologyError(c, err, "update topology edge failed") {
+		return
+	}
+	success(c, edge)
+}
+
+func (h *TopologyHandler) DeleteEdge(c *gin.Context) {
+	id, ok := idFromParam(c)
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteEdge(c.Request.Context(), id); handleTopologyError(c, err, "delete topology edge failed") {
+		return
+	}
+	success(c, gin.H{"deleted": true})
 }
 
 func (h *TopologyHandler) SyncK8s(c *gin.Context) {

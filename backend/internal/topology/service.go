@@ -46,7 +46,11 @@ type Repository interface {
 	UpsertNode(ctx context.Context, node *model.TopologyNode) error
 	UpsertEdge(ctx context.Context, edge *model.TopologyEdge) error
 	FindEdgeByKey(ctx context.Context, edgeKey string) (*model.TopologyEdge, error)
+	FindEdgeByID(ctx context.Context, id int64) (*model.TopologyEdge, error)
+	UpdateTopologyNode(ctx context.Context, node *model.TopologyNode) error
 	UpdateTopologyEdge(ctx context.Context, edge *model.TopologyEdge) error
+	SoftDeleteTopologyNode(ctx context.Context, id int64, deletedAt time.Time) error
+	SoftDeleteTopologyEdge(ctx context.Context, id int64, deletedAt time.Time) error
 	UpsertTopologyEdgeObservation(ctx context.Context, observation *model.TopologyEdgeObservation) error
 	ListTopologyEdgeObservations(ctx context.Context, edgeID int64) ([]model.TopologyEdgeObservation, error)
 	FindNodeByKey(ctx context.Context, nodeKey string) (*model.TopologyNode, error)
@@ -1347,6 +1351,69 @@ func (s *Service) UpsertNode(ctx context.Context, input NodeInput) (*model.Topol
 	return node, nil
 }
 
+func (s *Service) GetNode(ctx context.Context, id int64) (*model.TopologyNode, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.FindNodeByID(ctx, id)
+}
+
+func (s *Service) UpdateNode(ctx context.Context, id int64, input NodeInput) (*model.TopologyNode, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	existing, err := s.repository.FindNodeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.SourceType != model.TopologySourceManual {
+		return nil, ErrForbidden
+	}
+	if strings.TrimSpace(input.NodeKey) == "" {
+		input.NodeKey = existing.NodeKey
+	} else if strings.TrimSpace(input.NodeKey) != existing.NodeKey {
+		return nil, ErrInvalidInput
+	}
+	if strings.TrimSpace(input.SourceType) == "" {
+		input.SourceType = model.TopologySourceManual
+	} else if strings.TrimSpace(input.SourceType) != model.TopologySourceManual {
+		return nil, ErrForbidden
+	}
+	node, err := normalizeNode(input)
+	if err != nil {
+		return nil, err
+	}
+	nodeType, err := s.repository.FindTopologyNodeTypeByKey(ctx, node.Kind)
+	if err != nil {
+		return nil, err
+	}
+	if !nodeType.Enabled {
+		return nil, ErrTopologyTypeDisabled
+	}
+	node.ID = existing.ID
+	node.NodeTypeID = &nodeType.ID
+	node.CreatedAt = existing.CreatedAt
+	node.DeletedAt = existing.DeletedAt
+	if err := s.repository.UpdateTopologyNode(ctx, node); err != nil {
+		return nil, err
+	}
+	return node, nil
+}
+
+func (s *Service) DeleteNode(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return ErrInvalidInput
+	}
+	existing, err := s.repository.FindNodeByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if existing.SourceType != model.TopologySourceManual {
+		return ErrForbidden
+	}
+	return s.repository.SoftDeleteTopologyNode(ctx, id, time.Now().UTC())
+}
+
 func (s *Service) UpsertEdge(ctx context.Context, input EdgeInput) (*model.TopologyEdge, error) {
 	edge, err := normalizeEdge(input)
 	if err != nil {
@@ -1377,6 +1444,78 @@ func (s *Service) UpsertEdge(ctx context.Context, input EdgeInput) (*model.Topol
 		return nil, err
 	}
 	return persisted, nil
+}
+
+func (s *Service) GetEdge(ctx context.Context, id int64) (*model.TopologyEdge, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.FindEdgeByID(ctx, id)
+}
+
+func (s *Service) UpdateEdge(ctx context.Context, id int64, input EdgeInput) (*model.TopologyEdge, error) {
+	if id <= 0 {
+		return nil, ErrInvalidInput
+	}
+	existing, err := s.repository.FindEdgeByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.SourceType != model.TopologySourceManual {
+		return nil, ErrForbidden
+	}
+	if strings.TrimSpace(input.EdgeKey) == "" {
+		input.EdgeKey = existing.EdgeKey
+	} else if strings.TrimSpace(input.EdgeKey) != existing.EdgeKey {
+		return nil, ErrInvalidInput
+	}
+	if strings.TrimSpace(input.SourceType) == "" {
+		input.SourceType = model.TopologySourceManual
+	} else if strings.TrimSpace(input.SourceType) != model.TopologySourceManual {
+		return nil, ErrForbidden
+	}
+	edge, err := normalizeEdge(input)
+	if err != nil {
+		return nil, err
+	}
+	relationType, err := s.repository.FindTopologyRelationTypeByKey(ctx, edge.EdgeType)
+	if err != nil {
+		return nil, err
+	}
+	if !relationType.Enabled {
+		return nil, ErrTopologyTypeDisabled
+	}
+	if err := s.validateEdgeTypeCompatibility(ctx, edge, relationType); err != nil {
+		return nil, err
+	}
+	edge.ID = existing.ID
+	edge.RelationTypeID = &relationType.ID
+	edge.CreatedAt = existing.CreatedAt
+	edge.DeletedAt = existing.DeletedAt
+	if err := s.repository.UpdateTopologyEdge(ctx, edge); err != nil {
+		return nil, err
+	}
+	if err := s.upsertEdgeObservation(ctx, edge, input); err != nil {
+		return nil, err
+	}
+	if err := s.resolveEdge(ctx, edge, relationType); err != nil {
+		return nil, err
+	}
+	return edge, nil
+}
+
+func (s *Service) DeleteEdge(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return ErrInvalidInput
+	}
+	existing, err := s.repository.FindEdgeByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if existing.SourceType != model.TopologySourceManual {
+		return ErrForbidden
+	}
+	return s.repository.SoftDeleteTopologyEdge(ctx, id, time.Now().UTC())
 }
 
 func (s *Service) upsertEdgeObservation(ctx context.Context, edge *model.TopologyEdge, input EdgeInput) error {
@@ -1534,6 +1673,26 @@ func (s *Service) Graph(ctx context.Context, query Query) (*Graph, error) {
 		return nil, err
 	}
 	return &Graph{Nodes: nodes, Edges: edges}, nil
+}
+
+func (s *Service) ListNodes(ctx context.Context, query Query) ([]model.TopologyNode, error) {
+	return s.repository.ListNodes(ctx, repository.TopologyFilters{
+		Environment: strings.TrimSpace(query.Environment),
+		Cluster:     strings.TrimSpace(query.Cluster),
+		Namespace:   strings.TrimSpace(query.Namespace),
+		Kind:        strings.TrimSpace(query.Kind),
+		Limit:       query.Limit,
+	})
+}
+
+func (s *Service) ListEdges(ctx context.Context, query Query) ([]model.TopologyEdge, error) {
+	return s.repository.ListEdges(ctx, repository.TopologyFilters{
+		Environment: strings.TrimSpace(query.Environment),
+		Cluster:     strings.TrimSpace(query.Cluster),
+		Namespace:   strings.TrimSpace(query.Namespace),
+		Kind:        strings.TrimSpace(query.Kind),
+		Limit:       query.Limit,
+	})
 }
 
 func (s *Service) Upstream(ctx context.Context, query TraversalQuery) (*TraversalResult, error) {
