@@ -93,6 +93,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_API_TIMEOUT_MS: ${VITE_API_TIMEOUT_MS:-180000}
     image: aiops-platform-frontend:local
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-5173}:80"

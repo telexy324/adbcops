@@ -92,6 +92,7 @@ func handleMetricsError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, metricssvc.ErrInvalidInput), errors.Is(err, metricssvc.ErrUnsupportedSource), errors.Is(err, metricssvc.ErrDataSourceDisabled):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")

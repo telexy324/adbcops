@@ -4,7 +4,7 @@ import { environment } from "@/lib/env";
 
 export const apiClient = axios.create({
   baseURL: environment.VITE_API_BASE_URL,
-  timeout: 15_000,
+  timeout: environment.VITE_API_TIMEOUT_MS,
   headers: {
     Accept: "application/json",
   },

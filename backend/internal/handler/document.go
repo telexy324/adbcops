@@ -299,6 +299,7 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, documentsvc.ErrUnsupportedExt):
 		failure(c, http.StatusUnsupportedMediaType, 41501, "unsupported file type")

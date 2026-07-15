@@ -794,6 +794,7 @@ func handleTopologyError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, topologysvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")

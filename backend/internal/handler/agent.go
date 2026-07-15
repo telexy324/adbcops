@@ -82,6 +82,7 @@ func handleAgentError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, agentruntime.ErrInvalidInput), errors.Is(err, agentruntime.ErrContextTooLarge):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")

@@ -377,6 +377,7 @@ func handleWorkflowError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, workflowdsl.ErrInvalidDefinition):
 		failure(c, http.StatusBadRequest, 40003, "invalid workflow definition")

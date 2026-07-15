@@ -235,6 +235,7 @@ func handleDataSourceError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, datasourcesvc.ErrSensitiveConfig):
 		failure(c, http.StatusBadRequest, 40007, "config contains sensitive credential fields")

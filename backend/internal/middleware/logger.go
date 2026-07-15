@@ -13,14 +13,34 @@ func Logger(logger *slog.Logger) gin.HandlerFunc {
 		startedAt := time.Now()
 		c.Next()
 
-		logger.InfoContext(c.Request.Context(), "http request completed",
+		attrs := []any{
 			"request_id", GetRequestID(c),
 			"method", c.Request.Method,
-			"path", c.FullPath(),
+			"path", requestPath(c),
 			"status", c.Writer.Status(),
 			"latency_ms", time.Since(startedAt).Milliseconds(),
 			"client_ip", c.ClientIP(),
 			"error_count", len(c.Errors),
-		)
+		}
+		if len(c.Errors) > 0 {
+			messages := make([]string, 0, len(c.Errors))
+			for _, item := range c.Errors {
+				if item == nil || item.Err == nil {
+					continue
+				}
+				messages = append(messages, item.Err.Error())
+			}
+			attrs = append(attrs, "errors", messages)
+			logger.ErrorContext(c.Request.Context(), "http request failed", attrs...)
+			return
+		}
+		logger.InfoContext(c.Request.Context(), "http request completed", attrs...)
 	}
+}
+
+func requestPath(c *gin.Context) string {
+	if fullPath := c.FullPath(); fullPath != "" {
+		return fullPath
+	}
+	return c.Request.URL.Path
 }

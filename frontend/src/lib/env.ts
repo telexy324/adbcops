@@ -14,8 +14,10 @@ const environmentSchema = z.object({
         ? normalized.slice(0, -"/api".length)
         : normalized;
     }),
+  VITE_API_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
 });
 
 export const environment = environmentSchema.parse({
   VITE_API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
+  VITE_API_TIMEOUT_MS: import.meta.env.VITE_API_TIMEOUT_MS,
 });

@@ -108,6 +108,7 @@ func handleK8sError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, k8ssvc.ErrNamespaceNotAllowed):
 		failure(c, http.StatusForbidden, 40311, "namespace is not allowed")

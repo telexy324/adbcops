@@ -31,6 +31,7 @@ func readiness(check ReadinessChecker) gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
 		if err := check(ctx); err != nil {
+			recordFailureError(c, err, "readiness check failed")
 			failure(c, http.StatusServiceUnavailable, 50301, "service is not ready")
 			return
 		}

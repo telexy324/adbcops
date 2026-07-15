@@ -159,6 +159,7 @@ func handleIncidentError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, incidentsvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")

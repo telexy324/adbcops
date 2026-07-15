@@ -48,6 +48,7 @@ func handleSFTPError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
 	}
+	recordFailureError(c, err, fallback)
 	switch {
 	case errors.Is(err, sshsftpsvc.ErrPathTraversal):
 		failure(c, http.StatusBadRequest, 40009, "path traversal is not allowed")
