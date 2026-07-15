@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
-import { testDataSource, testLLMConfig } from "@/api/config";
+import { testDataSource, testLLMConfig, updateDataSource } from "@/api/config";
+import { createTopologySource, runTopologySourceSync } from "@/api/operations";
 import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
@@ -87,6 +88,26 @@ vi.mock("@/api/workflows", () => ({
 }));
 
 vi.mock("@/api/operations", () => ({
+  createTopologySource: vi.fn().mockResolvedValue({
+    id: 9,
+    name: "prod-k8s-default-topology",
+    sourceType: "kubernetes",
+    dataSourceId: 2,
+    enabled: true,
+    priority: 80,
+    scope: {
+      environment: "prod",
+      cluster: "prod-k8s",
+      namespace: "default",
+      allowedNamespaces: ["default"],
+      limit: 200,
+    },
+    mappingRules: {},
+    staleAfterSeconds: 900,
+    deleteAfterSeconds: 604800,
+    createdAt: "2026-07-12T10:00:00Z",
+    updatedAt: "2026-07-12T10:00:00Z",
+  }),
   createTopologyEdge: vi.fn().mockResolvedValue({
     id: 11,
     edgeKey: "service:payment-api->database:orders:depends_on",
@@ -480,6 +501,21 @@ vi.mock("@/api/config", () => ({
       createdAt: "2026-07-12T10:00:00Z",
       updatedAt: "2026-07-12T10:00:00Z",
     },
+    {
+      id: 2,
+      name: "prod-k8s",
+      sourceType: "kubernetes",
+      environment: "prod",
+      config: {
+        apiServer: "https://10.20.30.40:6443",
+        allowedNamespaces: ["default", "payments"],
+      },
+      credentialConfigured: true,
+      enabled: true,
+      readOnly: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:00:00Z",
+    },
   ]),
   listLLMConfigs: vi.fn().mockResolvedValue([
     {
@@ -531,6 +567,8 @@ vi.mock("@/api/config", () => ({
   testDataSource: vi.fn(),
   testLLMConfig: vi.fn(),
   toAPIErrorMessage: vi.fn(() => "请求失败"),
+  updateDataSource: vi.fn(),
+  updateLLMConfig: vi.fn(),
 }));
 
 function renderWithQueryClient(element: ReactElement) {
@@ -725,6 +763,50 @@ describe("TopologyConfigurationPage", () => {
     expect(screen.getByText("Conflict Center")).toBeInTheDocument();
     expect(await screen.findByText("prod-cmdb · cmdb")).toBeInTheDocument();
   });
+
+  it("creates a K8s topology source and imports the selected namespace", async () => {
+    const user = userEvent.setup();
+    vi.mocked(runTopologySourceSync).mockResolvedValueOnce({
+      id: 10,
+      sourceConfigId: 9,
+      triggerType: "manual",
+      status: "success",
+      discoveredNodes: 12,
+      discoveredEdges: 18,
+      createdNodes: 12,
+      updatedNodes: 0,
+      staleNodes: 0,
+      createdEdges: 18,
+      updatedEdges: 0,
+      staleEdges: 0,
+      conflictCount: 0,
+      warningCount: 0,
+      createdAt: "2026-07-12T10:00:00Z",
+    });
+    renderWithQueryClient(<TopologyConfigurationPage />);
+
+    expect(await screen.findByText("K8s Topology 导入")).toBeInTheDocument();
+    expect(await screen.findByLabelText("K8s 数据源")).toHaveValue("2");
+    expect(screen.getByLabelText("Namespace")).toHaveValue("default");
+    await user.click(
+      screen.getByRole("button", { name: "创建 Source 并导入" }),
+    );
+
+    expect(createTopologySource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceType: "kubernetes",
+        dataSourceId: 2,
+        scope: expect.objectContaining({
+          cluster: "prod-k8s",
+          namespace: "default",
+        }),
+      }),
+    );
+    expect(runTopologySourceSync).toHaveBeenCalledWith({ sourceId: 9 });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "12 个节点、18 条关系，状态 success",
+    );
+  });
 });
 
 describe("SettingsPage", () => {
@@ -752,6 +834,49 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("prod-logs")).toBeInTheDocument();
   });
 
+  it("updates an existing K8s data source and keeps empty credentials omitted", async () => {
+    const user = userEvent.setup();
+    vi.mocked(updateDataSource).mockResolvedValueOnce({
+      id: 2,
+      name: "prod-k8s",
+      sourceType: "kubernetes",
+      environment: "prod",
+      config: {
+        apiServer: "https://10.20.30.40:6443",
+        allowedNamespaces: ["default", "payments"],
+      },
+      credentialConfigured: true,
+      enabled: true,
+      readOnly: true,
+      createdAt: "2026-07-12T10:00:00Z",
+      updatedAt: "2026-07-12T10:01:00Z",
+    });
+    renderWithQueryClient(<SettingsPage />);
+
+    const k8sSourceRow = (await screen.findByText("prod-k8s")).closest(
+      "div.rounded-xl",
+    );
+    expect(k8sSourceRow).not.toBeNull();
+    await user.click(
+      within(k8sSourceRow as HTMLElement).getByRole("button", { name: "编辑" }),
+    );
+    await user.click(screen.getByRole("button", { name: "更新数据源" }));
+
+    expect(updateDataSource).toHaveBeenCalledWith({
+      id: 2,
+      data: expect.objectContaining({
+        sourceType: "kubernetes",
+        credential: undefined,
+        config: expect.objectContaining({
+          apiServer: "https://10.20.30.40:6443",
+        }),
+      }),
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "K8s 数据源 prod-k8s 已更新。",
+    );
+  });
+
   it("notifies model and data source test success or failure", async () => {
     const user = userEvent.setup();
     vi.mocked(testLLMConfig).mockResolvedValueOnce({
@@ -770,7 +895,13 @@ describe("SettingsPage", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "关闭测试通知" }));
-    await user.click(testButtons[testButtons.length - 1]);
+    const logSourceRow = screen
+      .getByText("prod-logs")
+      .closest("div.rounded-xl");
+    expect(logSourceRow).not.toBeNull();
+    await user.click(
+      within(logSourceRow as HTMLElement).getByRole("button", { name: "Test" }),
+    );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "数据源“prod-logs”测试失败：请求失败",
     );

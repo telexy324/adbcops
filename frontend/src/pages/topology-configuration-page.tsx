@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   GitMerge,
   Loader2,
+  Network,
   Play,
   Save,
   Settings2,
@@ -13,7 +14,9 @@ import {
   Sparkles,
 } from "lucide-react";
 
+import { listDataSources, type DataSource } from "@/api/config";
 import {
+  createTopologySource,
   listTopologyConflicts,
   listTopologyNodeTypes,
   listTopologyRelationTypes,
@@ -97,6 +100,14 @@ export function TopologyConfigurationPage() {
   );
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [k8sImportForm, setK8sImportForm] = useState({
+    dataSourceId: "",
+    sourceName: "",
+    environment: "prod",
+    cluster: "",
+    namespace: "default",
+    limit: "200",
+  });
 
   const nodeTypesQuery = useQuery({
     queryKey: ["topology", "node-types"],
@@ -109,6 +120,10 @@ export function TopologyConfigurationPage() {
   const sourcesQuery = useQuery({
     queryKey: ["topology", "sources"],
     queryFn: listTopologySources,
+  });
+  const dataSourcesQuery = useQuery({
+    queryKey: ["settings", "data-sources"],
+    queryFn: listDataSources,
   });
   const syncRunsQuery = useQuery({
     queryKey: ["topology", "sync-runs", selectedSourceId],
@@ -135,6 +150,30 @@ export function TopologyConfigurationPage() {
       );
     }
   }, [selectedSourceId, sourcesQuery.data]);
+
+  const k8sDataSources = useMemo(
+    () =>
+      (dataSourcesQuery.data ?? []).filter(
+        (source) => source.sourceType === "kubernetes" && source.enabled,
+      ),
+    [dataSourcesQuery.data],
+  );
+
+  useEffect(() => {
+    if (k8sImportForm.dataSourceId || k8sDataSources.length === 0) {
+      return;
+    }
+    const source = k8sDataSources[0];
+    const namespace = allowedNamespaces(source)[0] ?? "default";
+    setK8sImportForm((current) => ({
+      ...current,
+      dataSourceId: String(source.id),
+      sourceName: `${source.name}-${namespace}-topology`,
+      environment: source.environment ?? current.environment,
+      cluster: source.name,
+      namespace,
+    }));
+  }, [k8sDataSources, k8sImportForm.dataSourceId]);
 
   const selectedSource = useMemo(
     () => sourcesQuery.data?.find((source) => source.id === selectedSourceId),
@@ -174,6 +213,69 @@ export function TopologyConfigurationPage() {
       });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const importK8sMutation = useMutation({
+    mutationFn: async (input: {
+      dataSourceId: number;
+      sourceName: string;
+      environment: string;
+      cluster: string;
+      namespace: string;
+      limit: number;
+    }) => {
+      const existing = (sourcesQuery.data ?? []).find((source) => {
+        const scope = normalizeObject(source.scope);
+        return (
+          source.sourceType === "kubernetes" &&
+          source.dataSourceId === input.dataSourceId &&
+          scope.namespace === input.namespace &&
+          scope.cluster === input.cluster
+        );
+      });
+      const source =
+        existing ??
+        (await createTopologySource({
+          name: input.sourceName,
+          sourceType: "kubernetes",
+          dataSourceId: input.dataSourceId,
+          enabled: true,
+          priority: 80,
+          scope: {
+            environment: input.environment,
+            cluster: input.cluster,
+            namespace: input.namespace,
+            allowedNamespaces: [input.namespace],
+            limit: input.limit,
+          },
+          mappingRules: {},
+          staleAfterSeconds: 900,
+          deleteAfterSeconds: 604_800,
+        }));
+      const run = await runTopologySourceSync({ sourceId: source.id });
+      return { source, run, created: !existing };
+    },
+    onSuccess: ({ source, run, created }) => {
+      setSelectedSourceId(source.id);
+      setMappingText(
+        JSON.stringify(normalizeObject(source.mappingRules), null, 2),
+      );
+      setPreview(null);
+      setPreviewValidFor(null);
+      setNotice(
+        `K8s Topology ${created ? "Source 已创建并" : "已复用 Source 并"}完成同步：${run.discoveredNodes} 个节点、${run.discoveredEdges} 条关系，状态 ${run.status}。`,
+      );
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["topology", "sources"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["topology", "sync-runs"],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["topology", "graph"] });
+    },
+    onError: (err) => {
+      setError(`K8s Topology 导入失败：${toAPIErrorMessage(err)}`);
+      setNotice(null);
+    },
   });
 
   const relationMutation = useMutation({
@@ -266,6 +368,33 @@ export function TopologyConfigurationPage() {
     });
   }
 
+  function importK8sTopology() {
+    const dataSourceId = Number(k8sImportForm.dataSourceId);
+    const limit = Number(k8sImportForm.limit);
+    if (
+      !dataSourceId ||
+      !k8sImportForm.sourceName.trim() ||
+      !k8sImportForm.cluster.trim() ||
+      !k8sImportForm.namespace.trim() ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 500
+    ) {
+      setError(
+        "请完整填写 K8s 数据源、Source 名称、Cluster、Namespace，并将 Limit 设置为 1-500。",
+      );
+      return;
+    }
+    importK8sMutation.mutate({
+      dataSourceId,
+      sourceName: k8sImportForm.sourceName.trim(),
+      environment: k8sImportForm.environment.trim(),
+      cluster: k8sImportForm.cluster.trim(),
+      namespace: k8sImportForm.namespace.trim(),
+      limit,
+    });
+  }
+
   return (
     <div className="mx-auto max-w-[1900px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
@@ -305,6 +434,13 @@ export function TopologyConfigurationPage() {
 
       <div className="grid gap-6 2xl:grid-cols-[390px_minmax(0,1fr)_390px]">
         <div className="space-y-6">
+          <K8sImportCard
+            dataSources={k8sDataSources}
+            form={k8sImportForm}
+            loading={dataSourcesQuery.isLoading || importK8sMutation.isPending}
+            onChange={setK8sImportForm}
+            onImport={importK8sTopology}
+          />
           <TypeCatalogCard
             nodeTypes={nodeTypesQuery.data ?? []}
             relationTypes={relationTypesQuery.data ?? []}
@@ -399,6 +535,165 @@ export function TopologyConfigurationPage() {
         />
       </div>
     </div>
+  );
+}
+
+function K8sImportCard({
+  dataSources,
+  form,
+  loading,
+  onChange,
+  onImport,
+}: {
+  dataSources: DataSource[];
+  form: {
+    dataSourceId: string;
+    sourceName: string;
+    environment: string;
+    cluster: string;
+    namespace: string;
+    limit: string;
+  };
+  loading: boolean;
+  onChange: (value: typeof form) => void;
+  onImport: () => void;
+}) {
+  const selected = dataSources.find(
+    (source) => source.id === Number(form.dataSourceId),
+  );
+  const namespaces = selected ? allowedNamespaces(selected) : [];
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="grid size-10 place-items-center rounded-xl bg-blue-50 text-blue-700">
+            <Network className="size-5" aria-hidden="true" />
+          </div>
+          <div>
+            <CardTitle>K8s Topology 导入</CardTitle>
+            <CardDescription>
+              从配置中心已有的 K8s 数据源创建或复用 Topology
+              Source，并立即同步。
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {dataSources.length === 0 && !loading ? (
+          <InlineHint text="暂无已启用的 K8s 数据源，请先在配置中心创建并测试连接。" />
+        ) : (
+          <>
+            <Field label="K8s 数据源">
+              <select
+                aria-label="K8s 数据源"
+                value={form.dataSourceId}
+                onChange={(event) => {
+                  const source = dataSources.find(
+                    (item) => item.id === Number(event.target.value),
+                  );
+                  if (!source) return;
+                  const namespace = allowedNamespaces(source)[0] ?? "default";
+                  onChange({
+                    ...form,
+                    dataSourceId: String(source.id),
+                    sourceName: `${source.name}-${namespace}-topology`,
+                    environment: source.environment ?? form.environment,
+                    cluster: source.name,
+                    namespace,
+                  });
+                }}
+                className="h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                {dataSources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    #{source.id} · {source.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Topology Source 名称">
+              <Input
+                aria-label="Topology Source 名称"
+                value={form.sourceName}
+                onChange={(event) =>
+                  onChange({ ...form, sourceName: event.target.value })
+                }
+              />
+            </Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Environment">
+                <Input
+                  aria-label="Environment"
+                  value={form.environment}
+                  onChange={(event) =>
+                    onChange({ ...form, environment: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label="Cluster">
+                <Input
+                  aria-label="Cluster"
+                  value={form.cluster}
+                  onChange={(event) =>
+                    onChange({ ...form, cluster: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label="Namespace">
+                {namespaces.length > 0 ? (
+                  <select
+                    aria-label="Namespace"
+                    value={form.namespace}
+                    onChange={(event) =>
+                      onChange({ ...form, namespace: event.target.value })
+                    }
+                    className="h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    {namespaces.map((namespace) => (
+                      <option key={namespace} value={namespace}>
+                        {namespace}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    aria-label="Namespace"
+                    value={form.namespace}
+                    onChange={(event) =>
+                      onChange({ ...form, namespace: event.target.value })
+                    }
+                  />
+                )}
+              </Field>
+              <Field label="单类资源 Limit">
+                <Input
+                  aria-label="单类资源 Limit"
+                  type="number"
+                  min="1"
+                  max="500"
+                  value={form.limit}
+                  onChange={(event) =>
+                    onChange({ ...form, limit: event.target.value })
+                  }
+                />
+              </Field>
+            </div>
+            <Button className="w-full" onClick={onImport} disabled={loading}>
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              创建 Source 并导入
+            </Button>
+            <p className="text-xs leading-5 text-slate-500">
+              相同数据源、Cluster 和 Namespace 已有 Source
+              时将直接复用，避免重复创建。
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -913,6 +1208,17 @@ function normalizeObject(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function allowedNamespaces(source: DataSource): string[] {
+  const config = normalizeObject(source.config);
+  if (!Array.isArray(config.allowedNamespaces)) {
+    return [];
+  }
+  return config.allowedNamespaces
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function safeJson(value: unknown) {

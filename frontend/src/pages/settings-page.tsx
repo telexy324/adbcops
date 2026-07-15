@@ -245,17 +245,21 @@ export function SettingsPage() {
         ? updateDataSource({ id: input.id, data: input.data })
         : createDataSource(input.data),
     onSuccess: (source) => {
-      setNotice(
-        `${sourceLabel(source.sourceType)} ${source.name} 已${
-          editingDataSourceId ? "更新" : "保存"
-        }。`,
-      );
+      const message = `${sourceLabel(source.sourceType)} ${source.name} 已${
+        editingDataSourceId ? "更新" : "保存"
+      }。`;
+      setNotice(null);
+      setTestNotification({ success: true, message });
       setError(null);
       setEditingDataSourceId(null);
       setSourceForm(sourceDefaults(selectedTemplate));
       queryClient.invalidateQueries({ queryKey: ["settings", "data-sources"] });
     },
-    onError: (err) => setError(toAPIErrorMessage(err)),
+    onError: (err) => {
+      const message = `${editingDataSourceId ? "更新" : "保存"}数据源失败：${toAPIErrorMessage(err)}`;
+      setError(message);
+      setTestNotification({ success: false, message });
+    },
   });
 
   const testLLMMutation = useMutation({
@@ -340,15 +344,24 @@ export function SettingsPage() {
 
   function submitDataSource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!sourceForm.name.trim()) {
+      const message = "数据源名称不能为空。";
+      setError(message);
+      setTestNotification({ success: false, message });
+      return;
+    }
     const config = parseJSON(sourceForm.configJSON, "Config JSON");
     const credential = parseOptionalJSON(
       sourceForm.credentialJSON,
       "Credential JSON",
     );
     if (!config.ok || !credential.ok) {
-      setError(config.error ?? credential.error ?? "JSON 格式不正确。");
+      const message = config.error ?? credential.error ?? "JSON 格式不正确。";
+      setError(message);
+      setTestNotification({ success: false, message });
       return;
     }
+    setError(null);
     sourceMutation.mutate({
       id: editingDataSourceId,
       data: {
@@ -726,7 +739,7 @@ export function SettingsPage() {
               })}
             </div>
 
-            <form className="space-y-4" onSubmit={submitDataSource}>
+            <form className="space-y-4" onSubmit={submitDataSource} noValidate>
               {editingDataSourceId && (
                 <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
                   正在编辑 #{editingDataSourceId}。Credential JSON
@@ -889,7 +902,10 @@ export function SettingsPage() {
                         testing={testLLMMutation.isPending}
                         onEdit={() => editLLMConfig(item)}
                         onTest={() =>
-                          testLLMMutation.mutate({ id: item.id, name: item.name })
+                          testLLMMutation.mutate({
+                            id: item.id,
+                            name: item.name,
+                          })
                         }
                       />
                     ))

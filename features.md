@@ -5199,6 +5199,7 @@ GET /api/health
 - 已有 LLM、Embedding、Rerank 和数据源配置编辑入口；
 - 配置测试入口；
 - Chat / Embedding / Rerank 及所有数据源点击 Test 后，页面必须明确通知测试成功或失败，并显示配置名称和后端结果/错误摘要；
+- 数据源保存或更新必须显示固定可见的成功/失败通知；前端校验失败不得仅依赖浏览器原生提示；
 - 凭据仅提交不回显。
 
 验收：
@@ -5208,6 +5209,7 @@ GET /api/health
 - 数据源凭据不在页面明文回显；
 - 编辑配置时凭据不回显，留空表示不修改已保存凭据；
 - Test 成功、业务返回 `ok=false` 和接口异常三种结果均有页面级可见通知；
+- K8s 数据源更新时 Credential 留空保留原凭据，私网 IP `apiServer` 可正常更新；
 - 配置后可在分析页面使用数据源 ID。
 
 ### Task 2.13：Nacos Tool
@@ -5704,11 +5706,16 @@ GET /api/health
 
 - Cluster/Namespace/Workload/Pod/Node/Service/Endpoint/Ingress/PVC；
 - 自动节点和关系；
+- 拓扑配置中心可选择已启用的 K8s 数据源，填写 Environment、Cluster、Namespace 和资源 Limit，一键创建或复用 Kubernetes Topology Source 并立即导入；
+- Namespace 优先从 K8s 数据源 `allowedNamespaces` 中选择，相同数据源、Cluster、Namespace 的 Source 不重复创建；
+- 导入完成后页面展示同步状态及发现的节点、关系数量，并刷新 Topology Map 与同步记录；
 - 定时同步。
 
 验收：
 
 - Namespace 白名单；
+- 仅展示已启用的 Kubernetes 数据源，未配置时提示先前往配置中心；
+- 管理员无需手工调用 `/api/topology/sync/k8s` 即可完成首次导入；
 - Service selector 到 Pod；
 - Ingress 到 Service；
 - Pod 到 Node；

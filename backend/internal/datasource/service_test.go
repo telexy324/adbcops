@@ -100,6 +100,42 @@ func TestCreateAcceptsKubernetesPrivateIPAddress(t *testing.T) {
 	}
 }
 
+func TestUpdateKubernetesPrivateIPAddressWithoutReplacingCredential(t *testing.T) {
+	store := newFakeRepository()
+	service := NewService(store, &fakeSecrets{}, "v1")
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	created, err := service.Create(context.Background(), admin, SaveInput{
+		Name:       "prod-k8s",
+		SourceType: model.DataSourceTypeKubernetes,
+		Config:     json.RawMessage(`{"apiServer":"https://10.20.30.40:6443","allowedNamespaces":["default"]}`),
+		Credential: json.RawMessage(`{"bearerToken":"secret-token"}`),
+		Enabled:    true,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	originalCredentialID := store.sources[created.ID].CredentialID
+	name := "prod-k8s-updated"
+	sourceType := model.DataSourceTypeKubernetes
+	enabled := true
+	updated, err := service.Update(context.Background(), admin, created.ID, UpdateInput{
+		Name:       &name,
+		SourceType: &sourceType,
+		Config:     json.RawMessage(`{"apiServer":"https://192.168.10.5:6443","allowedNamespaces":["default","payments"]}`),
+		Enabled:    &enabled,
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.Name != name {
+		t.Fatalf("updated name = %q, want %q", updated.Name, name)
+	}
+	if store.sources[created.ID].CredentialID == nil || originalCredentialID == nil || *store.sources[created.ID].CredentialID != *originalCredentialID {
+		t.Fatal("empty credential update replaced the existing credential")
+	}
+}
+
 func TestCreateAcceptsComponentDataSourceTypesAsReadOnly(t *testing.T) {
 	service := NewService(newFakeRepository(), &fakeSecrets{}, "v1")
 	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
