@@ -79,6 +79,12 @@ export type DataSourceTestResult = {
   message: string;
 };
 
+export type LLMConfigTestResult = {
+  ok: boolean;
+  model: string;
+  content: string;
+};
+
 export async function listLLMConfigs() {
   const response =
     await apiClient.get<ApiEnvelope<LLMConfig[]>>("/api/llm-configs");
@@ -119,7 +125,7 @@ export async function updateLLMConfig(input: {
 }
 
 export async function testLLMConfig(id: number, prompt = "Say ok.") {
-  const response = await apiClient.post<ApiEnvelope<unknown>>(
+  const response = await apiClient.post<ApiEnvelope<LLMConfigTestResult>>(
     `/api/llm-configs/${id}/test`,
     { prompt },
   );

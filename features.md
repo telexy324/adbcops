@@ -5104,6 +5104,8 @@ GET /api/health
 - client-go；
 - 认证；
 - allowed namespaces；
+- `apiServer` 支持以 HTTP/HTTPS URL 配置纯 IPv4/IPv6 地址，并允许集群私网 IP；
+- K8s 私网 IP 放行仅作用于 Kubernetes 数据源，loopback、unspecified、link-local 和 multicast 地址仍拒绝；
 - Test；
 - 只读资源 API。
 
@@ -5196,6 +5198,7 @@ GET /api/health
 - Prometheus 数据源配置；
 - 已有 LLM、Embedding、Rerank 和数据源配置编辑入口；
 - 配置测试入口；
+- Chat / Embedding / Rerank 及所有数据源点击 Test 后，页面必须明确通知测试成功或失败，并显示配置名称和后端结果/错误摘要；
 - 凭据仅提交不回显。
 
 验收：
@@ -5204,6 +5207,7 @@ GET /api/health
 - Embedding 和 Rerank API Key 不在页面明文回显；
 - 数据源凭据不在页面明文回显；
 - 编辑配置时凭据不回显，留空表示不修改已保存凭据；
+- Test 成功、业务返回 `ok=false` 和接口异常三种结果均有页面级可见通知；
 - 配置后可在分析页面使用数据源 ID。
 
 ### Task 2.13：Nacos Tool

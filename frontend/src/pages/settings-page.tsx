@@ -153,6 +153,11 @@ const defaultLLMForm = {
 
 type LLMPurpose = "chat" | "embedding" | "rerank";
 
+type TestNotification = {
+  success: boolean;
+  message: string;
+};
+
 const llmPurposeKinds: Array<{
   purpose: LLMPurpose;
   title: string;
@@ -191,6 +196,8 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [testNotification, setTestNotification] =
+    useState<TestNotification | null>(null);
   const [llmForm, setLLMForm] = useState(defaultLLMForm);
   const [editingLLMId, setEditingLLMId] = useState<number | null>(null);
   const [selectedType, setSelectedType] =
@@ -252,21 +259,39 @@ export function SettingsPage() {
   });
 
   const testLLMMutation = useMutation({
-    mutationFn: (id: number) => testLLMConfig(id),
-    onSuccess: () => {
-      setNotice("LLM Test API 调用完成。");
-      setError(null);
+    mutationFn: (input: { id: number; name: string }) =>
+      testLLMConfig(input.id),
+    onSuccess: (result, input) => {
+      setTestNotification({
+        success: result.ok,
+        message: result.ok
+          ? `模型配置“${input.name}”测试成功：${result.model}`
+          : `模型配置“${input.name}”测试失败：${result.content || "服务未返回有效结果"}`,
+      });
     },
-    onError: (err) => setError(toAPIErrorMessage(err)),
+    onError: (err, input) =>
+      setTestNotification({
+        success: false,
+        message: `模型配置“${input.name}”测试失败：${toAPIErrorMessage(err)}`,
+      }),
   });
 
   const testSourceMutation = useMutation({
-    mutationFn: testDataSource,
-    onSuccess: (result) => {
-      setNotice(result.ok ? result.message : "数据源测试未通过。");
-      setError(null);
+    mutationFn: (input: { id: number; name: string }) =>
+      testDataSource(input.id),
+    onSuccess: (result, input) => {
+      setTestNotification({
+        success: result.ok,
+        message: result.ok
+          ? `数据源“${input.name}”测试成功：${result.message}`
+          : `数据源“${input.name}”测试失败：${result.message || "连接未通过"}`,
+      });
     },
-    onError: (err) => setError(toAPIErrorMessage(err)),
+    onError: (err, input) =>
+      setTestNotification({
+        success: false,
+        message: `数据源“${input.name}”测试失败：${toAPIErrorMessage(err)}`,
+      }),
   });
 
   function selectType(type: DataSourceType) {
@@ -436,6 +461,34 @@ export function SettingsPage() {
           )}
         >
           {error ?? notice}
+        </div>
+      )}
+
+      {testNotification && (
+        <div
+          role={testNotification.success ? "status" : "alert"}
+          aria-live="polite"
+          className={cn(
+            "fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-lg",
+            testNotification.success
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-rose-200 bg-rose-50 text-rose-800",
+          )}
+        >
+          {testNotification.success ? (
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+          ) : (
+            <X className="mt-0.5 size-4 shrink-0" />
+          )}
+          <span>{testNotification.message}</span>
+          <button
+            type="button"
+            className="ml-auto rounded p-0.5 hover:bg-black/5"
+            aria-label="关闭测试通知"
+            onClick={() => setTestNotification(null)}
+          >
+            <X className="size-4" />
+          </button>
         </div>
       )}
 
@@ -835,7 +888,9 @@ export function SettingsPage() {
                         item={item}
                         testing={testLLMMutation.isPending}
                         onEdit={() => editLLMConfig(item)}
-                        onTest={() => testLLMMutation.mutate(item.id)}
+                        onTest={() =>
+                          testLLMMutation.mutate({ id: item.id, name: item.name })
+                        }
                       />
                     ))
                   )}
@@ -856,7 +911,9 @@ export function SettingsPage() {
               item={item}
               testing={testSourceMutation.isPending}
               onEdit={() => editDataSource(item)}
-              onTest={() => testSourceMutation.mutate(item.id)}
+              onTest={() =>
+                testSourceMutation.mutate({ id: item.id, name: item.name })
+              }
             />
           ))}
         </ConfigList>

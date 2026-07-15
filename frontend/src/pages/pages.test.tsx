@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
+import { testDataSource, testLLMConfig } from "@/api/config";
 import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
@@ -749,5 +750,29 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("default-embedding")).toBeInTheDocument();
     expect(await screen.findByText("default-rerank")).toBeInTheDocument();
     expect(await screen.findByText("prod-logs")).toBeInTheDocument();
+  });
+
+  it("notifies model and data source test success or failure", async () => {
+    const user = userEvent.setup();
+    vi.mocked(testLLMConfig).mockResolvedValueOnce({
+      ok: true,
+      model: "ops-model",
+      content: "ok",
+    });
+    vi.mocked(testDataSource).mockRejectedValueOnce(new Error("unreachable"));
+    renderWithQueryClient(<SettingsPage />);
+
+    expect(await screen.findByText("default-llm")).toBeInTheDocument();
+    const testButtons = screen.getAllByRole("button", { name: "Test" });
+    await user.click(testButtons[0]);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "模型配置“default-llm”测试成功：ops-model",
+    );
+
+    await user.click(screen.getByRole("button", { name: "关闭测试通知" }));
+    await user.click(testButtons[testButtons.length - 1]);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "数据源“prod-logs”测试失败：请求失败",
+    );
   });
 });

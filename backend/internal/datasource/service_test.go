@@ -77,6 +77,29 @@ func TestCreateRejectsUnsafeEndpointsForSSRF(t *testing.T) {
 	}
 }
 
+func TestCreateAcceptsKubernetesPrivateIPAddress(t *testing.T) {
+	service := NewService(newFakeRepository(), &fakeSecrets{}, "v1")
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	for _, apiServer := range []string{
+		"https://10.20.30.40:6443",
+		"https://192.168.10.5:6443",
+		"https://[fd00::10]:6443",
+	} {
+		t.Run(apiServer, func(t *testing.T) {
+			_, err := service.Create(context.Background(), admin, SaveInput{
+				Name:       "private-ip-k8s",
+				SourceType: model.DataSourceTypeKubernetes,
+				Config:     json.RawMessage(`{"apiServer":"` + apiServer + `","allowedNamespaces":["default"]}`),
+				Enabled:    true,
+				ReadOnly:   true,
+			})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestCreateAcceptsComponentDataSourceTypesAsReadOnly(t *testing.T) {
 	service := NewService(newFakeRepository(), &fakeSecrets{}, "v1")
 	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}

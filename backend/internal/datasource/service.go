@@ -388,7 +388,7 @@ func validateConfigByType(sourceType string, raw []byte) error {
 		}
 	case model.DataSourceTypeKubernetes:
 		if endpoint, ok := config["apiServer"].(string); ok && strings.TrimSpace(endpoint) != "" {
-			return validateEndpoint(endpoint)
+			return validateKubernetesEndpoint(endpoint)
 		}
 	case model.DataSourceTypeSSH:
 		if host, ok := config["host"].(string); ok && strings.TrimSpace(host) == "" {
@@ -410,18 +410,31 @@ func validateConfigByType(sourceType string, raw []byte) error {
 	return nil
 }
 
-func validateEndpoint(endpoint string) error {
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return ErrInvalidInput
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return ErrInvalidInput
+// validateKubernetesEndpoint permits private IP API servers because production
+// clusters are commonly reachable only through an RFC1918 address. The
+// exception is deliberately scoped to Kubernetes data sources; loopback,
+// unspecified, link-local and multicast destinations remain blocked.
+func validateKubernetesEndpoint(endpoint string) error {
+	parsed, err := parseHTTPEndpoint(endpoint)
+	if err != nil {
+		return err
 	}
 	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
-	if host == "" {
-		return ErrInvalidInput
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return ErrUnsafeEndpoint
 	}
+	if ip := net.ParseIP(host); ip != nil && unsafeKubernetesIP(ip) {
+		return ErrUnsafeEndpoint
+	}
+	return nil
+}
+
+func validateEndpoint(endpoint string) error {
+	parsed, err := parseHTTPEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return ErrUnsafeEndpoint
 	}
@@ -431,9 +444,31 @@ func validateEndpoint(endpoint string) error {
 	return nil
 }
 
+func parseHTTPEndpoint(endpoint string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, ErrInvalidInput
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, ErrInvalidInput
+	}
+	if strings.Trim(strings.ToLower(parsed.Hostname()), "[]") == "" {
+		return nil, ErrInvalidInput
+	}
+	return parsed, nil
+}
+
 func unsafeIP(ip net.IP) bool {
 	return ip.IsLoopback() ||
 		ip.IsPrivate() ||
+		ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast()
+}
+
+func unsafeKubernetesIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
 		ip.IsUnspecified() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
