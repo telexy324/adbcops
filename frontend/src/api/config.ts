@@ -100,6 +100,24 @@ export async function createLLMConfig(input: SaveLLMConfigInput) {
   return response.data.data;
 }
 
+export async function updateLLMConfig(input: {
+  id: number;
+  data: SaveLLMConfigInput;
+}) {
+  const payload = { ...input.data };
+  if (!payload.apiKey?.trim()) {
+    delete payload.apiKey;
+  }
+  if (!payload.apiSecret?.trim()) {
+    delete payload.apiSecret;
+  }
+  const response = await apiClient.put<ApiEnvelope<LLMConfig>>(
+    `/api/llm-configs/${input.id}`,
+    payload,
+  );
+  return response.data.data;
+}
+
 export async function testLLMConfig(id: number, prompt = "Say ok.") {
   const response = await apiClient.post<ApiEnvelope<unknown>>(
     `/api/llm-configs/${id}/test`,
@@ -118,6 +136,17 @@ export async function createDataSource(input: SaveDataSourceInput) {
   const response = await apiClient.post<ApiEnvelope<DataSource>>(
     "/api/data-sources",
     input,
+  );
+  return response.data.data;
+}
+
+export async function updateDataSource(input: {
+  id: number;
+  data: SaveDataSourceInput;
+}) {
+  const response = await apiClient.put<ApiEnvelope<DataSource>>(
+    `/api/data-sources/${input.id}`,
+    input.data,
   );
   return response.data.data;
 }

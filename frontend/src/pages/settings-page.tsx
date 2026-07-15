@@ -6,10 +6,12 @@ import {
   KeyRound,
   Loader2,
   Network,
+  Pencil,
   Save,
   ServerCog,
   Settings2,
   TestTube2,
+  X,
 } from "lucide-react";
 
 import {
@@ -20,9 +22,13 @@ import {
   testDataSource,
   testLLMConfig,
   toAPIErrorMessage,
+  updateDataSource,
+  updateLLMConfig,
   type DataSource,
   type DataSourceType,
   type LLMConfig,
+  type SaveDataSourceInput,
+  type SaveLLMConfigInput,
 } from "@/api/config";
 import { Button } from "@/components/ui/button";
 import {
@@ -74,7 +80,8 @@ const dataSourceKinds: Array<{
   {
     type: "nacos",
     title: "Nacos 数据源",
-    description: "只读 Nacos OpenAPI，用于服务实例、配置元数据、配置变更和客户端连接诊断。",
+    description:
+      "只读 Nacos OpenAPI，用于服务实例、配置元数据、配置变更和客户端连接诊断。",
     icon: Network,
     config: {
       baseUrl: "https://nacos.example.com",
@@ -89,7 +96,8 @@ const dataSourceKinds: Array<{
   {
     type: "redis",
     title: "Redis 数据源",
-    description: "只读 Redis standalone / Sentinel / Cluster，用于内存、连接池、主从和集群诊断。",
+    description:
+      "只读 Redis standalone / Sentinel / Cluster，用于内存、连接池、主从和集群诊断。",
     icon: DatabaseZap,
     config: {
       mode: "cluster",
@@ -103,7 +111,8 @@ const dataSourceKinds: Array<{
   {
     type: "tidb",
     title: "TiDB 数据源",
-    description: "只读 TiDB SQL / Status API，用于慢 SQL、Processlist、锁等待、热点 Region 和 EXPLAIN。",
+    description:
+      "只读 TiDB SQL / Status API，用于慢 SQL、Processlist、锁等待、热点 Region 和 EXPLAIN。",
     icon: DatabaseZap,
     config: {
       dsn: "readonly@tcp(tidb.example.com:4000)/information_schema",
@@ -116,7 +125,8 @@ const dataSourceKinds: Array<{
   {
     type: "nginx",
     title: "Nginx 数据源",
-    description: "只读 Nginx 日志、指标、Upstream 状态和配置元数据，用于 499/502/503/504 诊断。",
+    description:
+      "只读 Nginx 日志、指标、Upstream 状态和配置元数据，用于 499/502/503/504 诊断。",
     icon: ServerCog,
     config: {
       baseUrl: "https://nginx-metadata.example.com",
@@ -182,6 +192,7 @@ export function SettingsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [llmForm, setLLMForm] = useState(defaultLLMForm);
+  const [editingLLMId, setEditingLLMId] = useState<number | null>(null);
   const [selectedType, setSelectedType] =
     useState<DataSourceType>("elasticsearch");
   const selectedTemplate = useMemo(
@@ -190,6 +201,9 @@ export function SettingsPage() {
   );
   const [sourceForm, setSourceForm] = useState(() =>
     sourceDefaults(selectedTemplate),
+  );
+  const [editingDataSourceId, setEditingDataSourceId] = useState<number | null>(
+    null,
   );
 
   const llmQuery = useQuery({
@@ -202,10 +216,16 @@ export function SettingsPage() {
   });
 
   const llmMutation = useMutation({
-    mutationFn: createLLMConfig,
+    mutationFn: (input: { id: number | null; data: SaveLLMConfigInput }) =>
+      input.id
+        ? updateLLMConfig({ id: input.id, data: input.data })
+        : createLLMConfig(input.data),
     onSuccess: (config) => {
-      setNotice(`LLM 配置 ${config.name} 已保存。`);
+      setNotice(
+        `LLM 配置 ${config.name} 已${editingLLMId ? "更新" : "保存"}。`,
+      );
       setError(null);
+      setEditingLLMId(null);
       setLLMForm((current) => ({ ...current, apiKey: "", apiSecret: "" }));
       queryClient.invalidateQueries({ queryKey: ["settings", "llm-configs"] });
     },
@@ -213,10 +233,18 @@ export function SettingsPage() {
   });
 
   const sourceMutation = useMutation({
-    mutationFn: createDataSource,
+    mutationFn: (input: { id: number | null; data: SaveDataSourceInput }) =>
+      input.id
+        ? updateDataSource({ id: input.id, data: input.data })
+        : createDataSource(input.data),
     onSuccess: (source) => {
-      setNotice(`${sourceLabel(source.sourceType)} ${source.name} 已保存。`);
+      setNotice(
+        `${sourceLabel(source.sourceType)} ${source.name} 已${
+          editingDataSourceId ? "更新" : "保存"
+        }。`,
+      );
       setError(null);
+      setEditingDataSourceId(null);
       setSourceForm(sourceDefaults(selectedTemplate));
       queryClient.invalidateQueries({ queryKey: ["settings", "data-sources"] });
     },
@@ -244,6 +272,7 @@ export function SettingsPage() {
   function selectType(type: DataSourceType) {
     const template = dataSourceKinds.find((item) => item.type === type)!;
     setSelectedType(type);
+    setEditingDataSourceId(null);
     setSourceForm(sourceDefaults(template));
   }
 
@@ -268,16 +297,19 @@ export function SettingsPage() {
   function submitLLM(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     llmMutation.mutate({
-      name: llmForm.name,
-      provider: llmForm.provider,
-      baseUrl: llmForm.baseUrl,
-      model: llmForm.model,
-      purpose: llmForm.purpose,
-      apiKey: llmForm.apiKey,
-      apiSecret: llmForm.apiSecret,
-      temperature: Number(llmForm.temperature),
-      enabled: llmForm.enabled,
-      isDefault: llmForm.isDefault,
+      id: editingLLMId,
+      data: {
+        name: llmForm.name,
+        provider: llmForm.provider,
+        baseUrl: llmForm.baseUrl,
+        model: llmForm.model,
+        purpose: llmForm.purpose,
+        apiKey: llmForm.apiKey,
+        apiSecret: llmForm.apiSecret,
+        temperature: Number(llmForm.temperature),
+        enabled: llmForm.enabled,
+        isDefault: llmForm.isDefault,
+      },
     });
   }
 
@@ -293,16 +325,70 @@ export function SettingsPage() {
       return;
     }
     sourceMutation.mutate({
-      name: sourceForm.name,
-      sourceType: selectedType,
-      environment: sourceForm.environment,
-      systemName: sourceForm.systemName,
-      componentName: sourceForm.componentName,
-      config: config.value,
-      credential: credential.value,
-      enabled: sourceForm.enabled,
-      readOnly: true,
+      id: editingDataSourceId,
+      data: {
+        name: sourceForm.name,
+        sourceType: selectedType,
+        environment: sourceForm.environment,
+        systemName: sourceForm.systemName,
+        componentName: sourceForm.componentName,
+        config: config.value,
+        credential: credential.value,
+        enabled: sourceForm.enabled,
+        readOnly: true,
+      },
     });
+  }
+
+  function editLLMConfig(item: LLMConfig) {
+    setEditingLLMId(item.id);
+    setLLMForm({
+      name: item.name,
+      provider: item.provider,
+      baseUrl: item.baseUrl,
+      model: item.model,
+      purpose: item.purpose,
+      apiKey: "",
+      apiSecret: "",
+      temperature: String(item.temperature),
+      enabled: item.enabled,
+      isDefault: item.isDefault,
+    });
+    setNotice(`正在编辑 LLM 配置 ${item.name}。`);
+    setError(null);
+  }
+
+  function cancelLLMEdit() {
+    setEditingLLMId(null);
+    setLLMForm(defaultLLMForm);
+    setNotice(null);
+  }
+
+  function editDataSource(item: DataSource) {
+    const type = toKnownDataSourceType(item.sourceType);
+    if (!type) {
+      setError(`暂不支持编辑未知数据源类型：${item.sourceType}`);
+      return;
+    }
+    setSelectedType(type);
+    setEditingDataSourceId(item.id);
+    setSourceForm({
+      name: item.name,
+      environment: item.environment ?? "",
+      systemName: item.systemName ?? "",
+      componentName: item.componentName ?? "",
+      configJSON: JSON.stringify(item.config ?? {}, null, 2),
+      credentialJSON: "",
+      enabled: item.enabled,
+    });
+    setNotice(`正在编辑数据源 ${item.name}。凭据不回显，留空表示不修改。`);
+    setError(null);
+  }
+
+  function cancelDataSourceEdit() {
+    setEditingDataSourceId(null);
+    setSourceForm(sourceDefaults(selectedTemplate));
+    setNotice(null);
   }
 
   const llmConfigs = llmQuery.data ?? [];
@@ -328,7 +414,8 @@ export function SettingsPage() {
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
             管理 Chat LLM、Embedding、Rerank
-            模型，以及日志、Kubernetes、Prometheus 和组件诊断数据源。凭据仅提交到后端加密存储，页面只展示“已配置”状态。
+            模型，以及日志、Kubernetes、Prometheus
+            和组件诊断数据源。凭据仅提交到后端加密存储，页面只展示“已配置”状态。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -386,6 +473,11 @@ export function SettingsPage() {
               ))}
             </div>
             <form className="space-y-4" onSubmit={submitLLM}>
+              {editingLLMId && (
+                <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
+                  正在编辑 #{editingLLMId}。API Key / Secret 留空表示不修改。
+                </div>
+              )}
               <div className="grid gap-3 md:grid-cols-2">
                 <Field label="名称">
                   <Input
@@ -522,14 +614,26 @@ export function SettingsPage() {
                   设为默认模型
                 </label>
               </div>
-              <Button type="submit" disabled={llmMutation.isPending}>
-                {llmMutation.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Save className="size-4" />
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" disabled={llmMutation.isPending}>
+                  {llmMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Save className="size-4" />
+                  )}
+                  {editingLLMId ? "更新 LLM" : "保存 LLM"}
+                </Button>
+                {editingLLMId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={cancelLLMEdit}
+                  >
+                    <X className="size-4" />
+                    取消编辑
+                  </Button>
                 )}
-                保存 LLM
-              </Button>
+              </div>
             </form>
           </CardContent>
         </Card>
@@ -570,6 +674,12 @@ export function SettingsPage() {
             </div>
 
             <form className="space-y-4" onSubmit={submitDataSource}>
+              {editingDataSourceId && (
+                <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
+                  正在编辑 #{editingDataSourceId}。Credential JSON
+                  留空表示不修改已保存凭据。
+                </div>
+              )}
               <div className="grid gap-3 md:grid-cols-2">
                 <Field label="名称">
                   <Input
@@ -663,14 +773,26 @@ export function SettingsPage() {
                   强制只读
                 </span>
               </div>
-              <Button type="submit" disabled={sourceMutation.isPending}>
-                {sourceMutation.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Save className="size-4" />
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" disabled={sourceMutation.isPending}>
+                  {sourceMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Save className="size-4" />
+                  )}
+                  {editingDataSourceId ? "更新数据源" : "保存数据源"}
+                </Button>
+                {editingDataSourceId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={cancelDataSourceEdit}
+                  >
+                    <X className="size-4" />
+                    取消编辑
+                  </Button>
                 )}
-                保存数据源
-              </Button>
+              </div>
             </form>
           </CardContent>
         </Card>
@@ -712,6 +834,7 @@ export function SettingsPage() {
                         key={item.id}
                         item={item}
                         testing={testLLMMutation.isPending}
+                        onEdit={() => editLLMConfig(item)}
                         onTest={() => testLLMMutation.mutate(item.id)}
                       />
                     ))
@@ -732,6 +855,7 @@ export function SettingsPage() {
               key={item.id}
               item={item}
               testing={testSourceMutation.isPending}
+              onEdit={() => editDataSource(item)}
               onTest={() => testSourceMutation.mutate(item.id)}
             />
           ))}
@@ -744,10 +868,12 @@ export function SettingsPage() {
 function LLMConfigRow({
   item,
   testing,
+  onEdit,
   onTest,
 }: {
   item: LLMConfig;
   testing: boolean;
+  onEdit: () => void;
   onTest: () => void;
 }) {
   return (
@@ -767,16 +893,22 @@ function LLMConfigRow({
             </Badge>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onTest}
-          disabled={testing}
-        >
-          <TestTube2 className="size-4" />
-          Test
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onEdit}>
+            <Pencil className="size-4" />
+            编辑
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onTest}
+            disabled={testing}
+          >
+            <TestTube2 className="size-4" />
+            Test
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -785,10 +917,12 @@ function LLMConfigRow({
 function DataSourceRow({
   item,
   testing,
+  onEdit,
   onTest,
 }: {
   item: DataSource;
   testing: boolean;
+  onEdit: () => void;
   onTest: () => void;
 }) {
   return (
@@ -811,16 +945,22 @@ function DataSourceRow({
             </Badge>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onTest}
-          disabled={testing}
-        >
-          <TestTube2 className="size-4" />
-          Test
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onEdit}>
+            <Pencil className="size-4" />
+            编辑
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onTest}
+            disabled={testing}
+          >
+            <TestTube2 className="size-4" />
+            Test
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -921,6 +1061,11 @@ function parseOptionalJSON(value: string, label: string) {
     return { ok: true as const, value: undefined };
   }
   return parseJSON(value, label);
+}
+
+function toKnownDataSourceType(value: string): DataSourceType | null {
+  const match = dataSourceKinds.find((item) => item.type === value);
+  return match?.type ?? null;
 }
 
 function sourceLabel(value: string) {

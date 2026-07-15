@@ -4876,13 +4876,15 @@ GET /api/health
 - OpenAI-compatible client；
 - Embedding API；
 - Rerank API；
-- Test API。
+- Test API；
+- 已有 LLM 配置编辑。
 
 验收：
 
 - 不返回明文 key；
 - 不返回明文 secret；
 - 每种用途默认模型唯一；
+- 已有 LLM 配置可在配置中心编辑；
 - Mock LLM 测试通过。
 
 ### Task 1.5：文档上传
@@ -5028,6 +5030,7 @@ GET /api/health
 验收：
 
 - config 无明文凭据；
+- 已有数据源可在配置中心编辑；
 - user 只能查看脱敏后的启用数据源。
 
 ### Task 2.2：Elasticsearch Tool
@@ -5191,6 +5194,7 @@ GET /api/health
 - 日志数据源配置；
 - K8s 数据源配置；
 - Prometheus 数据源配置；
+- 已有 LLM、Embedding、Rerank 和数据源配置编辑入口；
 - 配置测试入口；
 - 凭据仅提交不回显。
 
@@ -5199,6 +5203,7 @@ GET /api/health
 - LLM API Key 不在页面明文回显；
 - Embedding 和 Rerank API Key 不在页面明文回显；
 - 数据源凭据不在页面明文回显；
+- 编辑配置时凭据不回显，留空表示不修改已保存凭据；
 - 配置后可在分析页面使用数据源 ID。
 
 ### Task 2.13：Nacos Tool
