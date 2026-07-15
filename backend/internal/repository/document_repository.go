@@ -177,6 +177,10 @@ func (r *GORMUserRepository) FindQualityStandardsByIDs(ctx context.Context, ids 
 	return standards, nil
 }
 
+func (r *GORMUserRepository) FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error) {
+	return (&GORMLLMRepository{db: r.db}).FindDefaultEnabledLLMConfigByPurpose(ctx, purpose)
+}
+
 func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error) {
 	var chunks []model.KBChunk
 	if limit <= 0 {

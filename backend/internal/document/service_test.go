@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	llmsvc "aiops-platform/backend/internal/llm"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 	docx "github.com/fumiama/go-docx"
@@ -253,6 +254,50 @@ func TestAutoReviewQualityUsesDefaultAndCustomStandards(t *testing.T) {
 	}
 }
 
+func TestAutoReviewQualityUsesLLMWhenDefaultChatConfigExists(t *testing.T) {
+	store := newFakeRepository()
+	store.llmConfig = &model.LLMConfig{
+		ID:          10,
+		BaseURL:     "https://llm.example",
+		Model:       "quality-model",
+		Purpose:     model.LLMPurposeChat,
+		Temperature: 0.1,
+		Enabled:     true,
+		IsDefault:   true,
+	}
+	client := &fakeLLMClient{
+		content: `{"score":88,"summary":"符合评分标准","findings":["包含回滚方案"],"suggestions":["补充演练记录"],"criteriaScores":[{"name":"回滚方案","score":90,"matched":["回滚"],"missing":["演练"],"standard":"DB 标准"}],"standards":["default","DB 标准"],"source":"llm"}`,
+	}
+	service := newTestServiceWithChunk(t, store, t.TempDir(), 4096, 120, 10).WithQualityLLM(nil, client)
+	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	document, err := service.Upload(context.Background(), owner, newFileHeader(t, "guide.md", "# 支付系统\n\n检查连接池并执行回滚方案。"), UploadMetadata{Title: "Guide"})
+	if err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	if _, err := service.Reprocess(context.Background(), owner, document.ID); err != nil {
+		t.Fatalf("Reprocess() error = %v", err)
+	}
+	standard, err := service.UploadQualityStandard(context.Background(), admin, newFileHeader(t, "standard.md", "- 必须包含连接池\n- 必须包含回滚方案"), "DB 标准")
+	if err != nil {
+		t.Fatalf("UploadQualityStandard() error = %v", err)
+	}
+
+	updated, result, err := service.AutoReviewQuality(context.Background(), admin, document.ID, AutoQualityInput{UseDefault: true, StandardIDs: []int64{standard.ID}})
+	if err != nil {
+		t.Fatalf("AutoReviewQuality() error = %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("llm calls = %d, want 1", client.calls)
+	}
+	if !strings.Contains(client.lastRequest.Messages[1].Content, "DB 标准") || !strings.Contains(client.lastRequest.Messages[1].Content, "default") {
+		t.Fatalf("llm prompt missing standards: %s", client.lastRequest.Messages[1].Content)
+	}
+	if updated.QualityScore != 88 || result.Score != 88 || result.Source != "llm" || updated.Status != model.DocumentStatusReviewing {
+		t.Fatalf("updated=%+v result=%+v", updated, result)
+	}
+}
+
 func TestReviewDecisionRequiresAdminAndPublishableDocument(t *testing.T) {
 	store := newFakeRepository()
 	service := newTestService(t, store, t.TempDir(), 1024)
@@ -416,6 +461,7 @@ type fakeRepository struct {
 	documents      map[int64]*model.KBDocument
 	chunks         map[int64][]model.KBChunk
 	standards      map[int64]*model.KBQualityStandard
+	llmConfig      *model.LLMConfig
 	reviews        []model.KBDocumentReview
 }
 
@@ -532,6 +578,14 @@ func (f *fakeRepository) FindQualityStandardsByIDs(_ context.Context, ids []int6
 	return standards, nil
 }
 
+func (f *fakeRepository) FindDefaultEnabledLLMConfigByPurpose(_ context.Context, purpose string) (*model.LLMConfig, error) {
+	if f.llmConfig == nil || !f.llmConfig.Enabled || !f.llmConfig.IsDefault || f.llmConfig.Purpose != purpose {
+		return nil, repository.ErrNotFound
+	}
+	config := *f.llmConfig
+	return &config, nil
+}
+
 func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int) ([]model.KBChunk, error) {
 	var results []model.KBChunk
 	for documentID, chunks := range f.chunks {
@@ -553,6 +607,18 @@ func (f *fakeRepository) SearchChunks(_ context.Context, query string, limit int
 		}
 	}
 	return results, nil
+}
+
+type fakeLLMClient struct {
+	content     string
+	calls       int
+	lastRequest llmsvc.ChatRequest
+}
+
+func (f *fakeLLMClient) Chat(_ context.Context, request llmsvc.ChatRequest) (*llmsvc.ChatResult, error) {
+	f.calls++
+	f.lastRequest = request
+	return &llmsvc.ChatResult{Content: f.content, Model: request.Model}, nil
 }
 
 func containsString(values []string, expected string) bool {

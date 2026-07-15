@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	llmsvc "aiops-platform/backend/internal/llm"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 )
@@ -50,10 +51,17 @@ type Repository interface {
 	ListQualityStandards(ctx context.Context, enabledOnly bool) ([]model.KBQualityStandard, error)
 	FindQualityStandardsByIDs(ctx context.Context, ids []int64) ([]model.KBQualityStandard, error)
 	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
+	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
+}
+
+type SecretManager interface {
+	Decrypt(value string) (string, error)
 }
 
 type Service struct {
 	documents      Repository
+	secrets        SecretManager
+	llmClient      llmsvc.Client
 	localFileDir   string
 	maxUploadBytes int64
 	chunkSize      int
@@ -91,6 +99,12 @@ func NewService(documents Repository, localFileDir string, maxUploadBytes int64,
 		return nil, fmt.Errorf("invalid chunk settings")
 	}
 	return &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap}, nil
+}
+
+func (s *Service) WithQualityLLM(secrets SecretManager, client llmsvc.Client) *Service {
+	s.secrets = secrets
+	s.llmClient = client
+	return s
 }
 
 func (s *Service) Upload(ctx context.Context, actor *model.AppUser, fileHeader *multipart.FileHeader, metadata UploadMetadata) (*model.KBDocument, error) {
@@ -346,7 +360,10 @@ func (s *Service) AutoReviewQuality(ctx context.Context, actor *model.AppUser, i
 			return nil, QualityResult{}, err
 		}
 	}
-	result := BuildQualityResult(document, content, standards, input.UseDefault)
+	result, err := s.buildAutoQualityResult(ctx, document, content, standards, input)
+	if err != nil {
+		return nil, QualityResult{}, err
+	}
 	normalized, err := json.Marshal(result)
 	if err != nil {
 		return nil, QualityResult{}, fmt.Errorf("normalize quality result: %w", err)
@@ -357,6 +374,91 @@ func (s *Service) AutoReviewQuality(ctx context.Context, actor *model.AppUser, i
 		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
 	}
 	return updated, result, nil
+}
+
+func (s *Service) buildAutoQualityResult(ctx context.Context, document *model.KBDocument, content string, standards []model.KBQualityStandard, input AutoQualityInput) (QualityResult, error) {
+	result, llmReady, err := s.buildLLMQualityResult(ctx, document, content, standards, input.UseDefault)
+	if err == nil && llmReady {
+		return result, nil
+	}
+	fallback := BuildQualityResult(document, content, standards, input.UseDefault)
+	if llmReady && err != nil {
+		fallback.Source = "rule-based-fallback"
+		fallback.Suggestions = append(fallback.Suggestions, "LLM 评分接口暂不可用，已按本地规则生成临时评分，请稍后重新发起自动评分。")
+	}
+	return fallback, nil
+}
+
+func (s *Service) buildLLMQualityResult(ctx context.Context, document *model.KBDocument, content string, standards []model.KBQualityStandard, useDefault bool) (QualityResult, bool, error) {
+	if s.llmClient == nil {
+		return QualityResult{}, false, nil
+	}
+	config, err := s.documents.FindDefaultEnabledLLMConfigByPurpose(ctx, model.LLMPurposeChat)
+	if errors.Is(err, repository.ErrNotFound) {
+		return QualityResult{}, false, nil
+	}
+	if err != nil {
+		return QualityResult{}, false, fmt.Errorf("load default chat llm config: %w", err)
+	}
+	credential, err := s.decryptModelCredential(config)
+	if err != nil {
+		return QualityResult{}, true, err
+	}
+	response, err := s.llmClient.Chat(ctx, llmsvc.ChatRequest{
+		BaseURL:     config.BaseURL,
+		APIKey:      credential.APIKey,
+		APISecret:   credential.APISecret,
+		Model:       config.Model,
+		Temperature: config.Temperature,
+		Messages: []llmsvc.ChatMessage{
+			{Role: "system", Content: QualityPrompt},
+			{Role: "user", Content: BuildQualityLLMPrompt(document, content, standards, useDefault)},
+		},
+	})
+	if err != nil {
+		return QualityResult{}, true, fmt.Errorf("call quality llm: %w", err)
+	}
+	if response == nil || strings.TrimSpace(response.Content) == "" {
+		return QualityResult{}, true, fmt.Errorf("quality llm returned empty content")
+	}
+	result, _, err := ParseQualityResult(json.RawMessage(extractJSONContent(response.Content)))
+	if err != nil {
+		return QualityResult{}, true, err
+	}
+	if result.Source == "" {
+		result.Source = "llm"
+	}
+	if len(result.Standards) == 0 {
+		result.Standards = selectedStandardNames(standards, useDefault)
+	}
+	return result, true, nil
+}
+
+type modelCredential struct {
+	APIKey    string
+	APISecret string
+}
+
+func (s *Service) decryptModelCredential(config *model.LLMConfig) (modelCredential, error) {
+	if config == nil || s.secrets == nil {
+		return modelCredential{}, nil
+	}
+	credential := modelCredential{}
+	if config.APIKeyRef != nil && *config.APIKeyRef != "" {
+		decrypted, err := s.secrets.Decrypt(*config.APIKeyRef)
+		if err != nil {
+			return modelCredential{}, fmt.Errorf("decrypt api key: %w", err)
+		}
+		credential.APIKey = decrypted
+	}
+	if config.APISecretRef != nil && *config.APISecretRef != "" {
+		decrypted, err := s.secrets.Decrypt(*config.APISecretRef)
+		if err != nil {
+			return modelCredential{}, fmt.Errorf("decrypt api secret: %w", err)
+		}
+		credential.APISecret = decrypted
+	}
+	return credential, nil
 }
 
 func (s *Service) documentQualityContent(ctx context.Context, document *model.KBDocument) (string, error) {

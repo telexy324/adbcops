@@ -4928,6 +4928,10 @@ GET /api/health
 - 自定义评分标准上传，支持 `.txt`、`.md`、`.xlsx`、`.docx/word`；
 - 自定义标准解析与保存；
 - 可按默认标准、自定义标准、默认 + 自定义标准生成评分；
+- 自动评分优先调用默认启用的 `chat` LLM 配置；
+- LLM Prompt 必须包含所选默认评分标准、自定义评分标准和待评分手册正文；
+- LLM 必须按 JSON Schema 返回 score、summary、findings、suggestions、criteria_scores、standards、source；
+- 未配置 LLM 或 LLM 调用失败时可降级为本地规则评分，并在 source 标记 `rule-based` 或 `rule-based-fallback`；
 - score；
 - 分项评分 criteria_scores；
 - quality_result；
@@ -4939,6 +4943,7 @@ GET /api/health
 - 可上传自定义评分标准；
 - 自动评分可使用默认标准；
 - 自动评分可同时使用默认标准和自定义标准；
+- 已配置默认 chat LLM 时，自动评分必须调用 LLM 接口完成评分；
 - score < 70 不可发布。
 
 ### Task 1.8：检索增强

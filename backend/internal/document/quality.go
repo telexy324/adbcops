@@ -11,7 +11,10 @@ import (
 	"aiops-platform/backend/internal/model"
 )
 
-const QualityPrompt = `Review the operations knowledge document. Return strict JSON with score, summary, findings, and suggestions. Score must be 0-100.`
+const (
+	QualityPrompt         = `You are an operations knowledge quality reviewer. Score the document only against the supplied scoring standards. Return strict JSON only, with no markdown fences or extra text.`
+	maxQualityPromptRunes = 20000
+)
 
 var ErrInvalidQualityJSON = errors.New("invalid quality result JSON")
 
@@ -149,6 +152,76 @@ func BuildQualityResult(document *model.KBDocument, content string, customStanda
 		Standards:      standards,
 		Source:         "rule-based",
 	}
+}
+
+func BuildQualityLLMPrompt(document *model.KBDocument, content string, customStandards []model.KBQualityStandard, useDefault bool) string {
+	var builder strings.Builder
+	builder.WriteString("请根据评分标准对知识手册进行质量评分。必须返回严格 JSON：\n")
+	builder.WriteString(`{"score":0,"summary":"string","findings":["string"],"suggestions":["string"],"criteriaScores":[{"name":"string","score":0,"matched":["string"],"missing":["string"],"standard":"string"}],"standards":["string"],"source":"llm"}`)
+	builder.WriteString("\n\n评分要求：\n")
+	builder.WriteString("- score 必须是 0 到 100 的整数；70 分及以上表示可进入发布审核，低于 70 分表示不达标。\n")
+	builder.WriteString("- criteriaScores 必须覆盖所选默认标准和自定义标准中的关键条目。\n")
+	builder.WriteString("- findings 写已经满足的证据，suggestions 写需要补充或修正的内容。\n")
+	builder.WriteString("- source 固定返回 llm。\n\n")
+	builder.WriteString("文档元数据：\n")
+	if document != nil {
+		builder.WriteString(fmt.Sprintf("- 标题：%s\n", document.Title))
+		builder.WriteString(fmt.Sprintf("- 文件名：%s\n", document.FileName))
+		builder.WriteString(fmt.Sprintf("- 系统：%s\n", optional(document.SystemName)))
+		builder.WriteString(fmt.Sprintf("- 组件：%s\n", optional(document.ComponentName)))
+		builder.WriteString(fmt.Sprintf("- 环境：%s\n", optional(document.Environment)))
+		builder.WriteString(fmt.Sprintf("- 类型：%s\n", optional(document.DocType)))
+		builder.WriteString(fmt.Sprintf("- 版本：%s\n", document.Version))
+	}
+	builder.WriteString("\n评分标准：\n")
+	if useDefault || len(customStandards) == 0 {
+		builder.WriteString("【default】\n")
+		for _, criterion := range DefaultQualityCriteria() {
+			builder.WriteString(fmt.Sprintf("- %s：需关注 %s\n", criterion.Name, strings.Join(criterion.Keywords, "、")))
+		}
+	}
+	for _, standard := range customStandards {
+		builder.WriteString(fmt.Sprintf("【%s】\n%s\n", standard.Title, trimPromptText(standard.Content, 6000)))
+	}
+	builder.WriteString("\n待评分手册正文：\n")
+	builder.WriteString(trimPromptText(content, maxQualityPromptRunes))
+	return builder.String()
+}
+
+func selectedStandardNames(customStandards []model.KBQualityStandard, useDefault bool) []string {
+	standards := make([]string, 0, len(customStandards)+1)
+	if useDefault || len(customStandards) == 0 {
+		standards = append(standards, "default")
+	}
+	for _, standard := range customStandards {
+		standards = append(standards, standard.Title)
+	}
+	return standards
+}
+
+func extractJSONContent(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```json")
+		trimmed = strings.TrimPrefix(trimmed, "```JSON")
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimSpace(trimmed)
+	}
+	if start := strings.Index(trimmed, "{"); start >= 0 {
+		if end := strings.LastIndex(trimmed, "}"); end > start {
+			return trimmed[start : end+1]
+		}
+	}
+	return trimmed
+}
+
+func trimPromptText(value string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if maxRunes <= 0 || len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "\n[内容已截断]"
 }
 
 func criteriaFromStandard(standard model.KBQualityStandard) []QualityCriterion {

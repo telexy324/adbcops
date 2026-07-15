@@ -155,6 +155,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
 	}
+	documentService.WithQualityLLM(credentialManager, llmClient)
 	bootstrapContext, cancelBootstrap := context.WithTimeout(context.Background(), databaseTimeout)
 	err = authService.BootstrapAdmin(
 		bootstrapContext,
