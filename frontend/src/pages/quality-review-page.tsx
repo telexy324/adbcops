@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
   getQualityEvaluation,
+  getParsedStructure,
   listQualityOverrideAudits,
   listQualityRuleResults,
   overrideQualityRule,
@@ -12,7 +13,9 @@ import {
   rerunQualityEvaluation,
   toAPIErrorMessage,
   type QualityRuleResult,
+  type DocumentBlock,
 } from "@/api/knowledge";
+import { getCurrentUser } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -44,6 +47,8 @@ export function QualityReviewPage() {
   const [status, setStatus] = useState("present");
   const [comment, setComment] = useState("");
   const [message, setMessage] = useState("");
+  const [selectedBlockID, setSelectedBlockID] = useState<string>();
+  const isAdmin = getCurrentUser()?.role === "admin";
 
   const evaluationQuery = useQuery({
     queryKey: ["quality-evaluation", evaluationId],
@@ -58,7 +63,16 @@ export function QualityReviewPage() {
   const auditsQuery = useQuery({
     queryKey: ["quality-override-audits", evaluationId],
     queryFn: () => listQualityOverrideAudits(evaluationId),
-    enabled: evaluationId > 0,
+    enabled: evaluationId > 0 && isAdmin,
+  });
+  const parsedQuery = useQuery({
+    queryKey: [
+      "quality-evidence-source",
+      evaluationQuery.data?.documentVersionId,
+    ],
+    queryFn: () => getParsedStructure(evaluationQuery.data!.documentVersionId),
+    enabled: Boolean(evaluationQuery.data?.documentVersionId),
+    retry: false,
   });
 
   const refresh = async () => {
@@ -132,6 +146,15 @@ export function QualityReviewPage() {
 
   const evaluation = evaluationQuery.data;
   const immutable = evaluation.reviewStatus !== "draft";
+  const sourceBlocks = flattenBlocks(parsedQuery.data?.blocks ?? []);
+  const locateEvidence = (blockID: string) => {
+    setSelectedBlockID(blockID);
+    window.setTimeout(() => {
+      document
+        .getElementById(`source-block-${blockID}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -150,21 +173,23 @@ export function QualityReviewPage() {
             Profile v{evaluation.qualityProfileVersion} · {evaluation.source}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => rerunMutation.mutate()}
-            disabled={rerunMutation.isPending}
-          >
-            <RefreshCw className="size-4" /> 重新评分
-          </Button>
-          <Button
-            onClick={() => publishMutation.mutate()}
-            disabled={immutable || publishMutation.isPending}
-          >
-            <CheckCircle2 className="size-4" /> 发布结果
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => rerunMutation.mutate()}
+              disabled={rerunMutation.isPending}
+            >
+              <RefreshCw className="size-4" /> 重新评分
+            </Button>
+            <Button
+              onClick={() => publishMutation.mutate()}
+              disabled={immutable || publishMutation.isPending}
+            >
+              <CheckCircle2 className="size-4" /> 发布结果
+            </Button>
+          </div>
+        )}
       </div>
 
       {message && (
@@ -220,7 +245,7 @@ export function QualityReviewPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={immutable}
+                    disabled={immutable || !isAdmin}
                     onClick={() => {
                       setEditing(result);
                       setScore(String(result.score ?? 0));
@@ -242,6 +267,19 @@ export function QualityReviewPage() {
                     className="mt-3 border-l-2 pl-3 text-sm text-slate-600"
                   >
                     {evidence.quote || evidence.reason || "已记录证据定位"}
+                    <span className="mt-1 block text-xs text-slate-400">
+                      {evidence.sectionPath?.join(" / ") || "未标注章节"}
+                      {evidence.page ? ` · 第 ${evidence.page} 页` : ""}
+                    </span>
+                    {evidence.blockId && (
+                      <button
+                        type="button"
+                        className="mt-2 text-xs font-medium text-cyan-700 hover:underline"
+                        onClick={() => locateEvidence(evidence.blockId!)}
+                      >
+                        定位原文 · {evidence.blockId}
+                      </button>
+                    )}
                   </blockquote>
                 ))}
               </div>
@@ -250,7 +288,39 @@ export function QualityReviewPage() {
         </Card>
       ))}
 
-      {editing && (
+      <Card>
+        <CardHeader>
+          <CardTitle>Evidence 原文定位</CardTitle>
+          <CardDescription>
+            证据通过 Block ID、章节路径和页码映射到解析后的文档结构。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="max-h-96 space-y-2 overflow-auto">
+          {sourceBlocks.length === 0 ? (
+            <p className="text-sm text-slate-500">暂无可定位的 Parsed AST。</p>
+          ) : (
+            sourceBlocks.map((block) => (
+              <button
+                type="button"
+                key={block.id}
+                id={`source-block-${block.id}`}
+                onClick={() => setSelectedBlockID(block.id)}
+                className={`w-full rounded-lg border p-3 text-left text-sm ${selectedBlockID === block.id ? "border-cyan-400 bg-cyan-50 ring-2 ring-cyan-100" : "border-slate-200"}`}
+              >
+                <span className="text-xs font-semibold text-slate-500">
+                  {block.id} · {block.type}
+                  {block.page ? ` · 第 ${block.page} 页` : ""}
+                </span>
+                <span className="mt-1 block whitespace-pre-wrap text-slate-700">
+                  {block.text}
+                </span>
+              </button>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {isAdmin && editing && (
         <Card>
           <CardHeader>
             <CardTitle>人工覆盖：{editing.ruleKey}</CardTitle>
@@ -302,35 +372,45 @@ export function QualityReviewPage() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>人工覆盖审计</CardTitle>
-          <CardDescription>
-            保留修改前后值、原因、操作人和时间。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {(auditsQuery.data ?? []).length === 0 ? (
-            <p className="text-sm text-slate-500">暂无人工覆盖记录。</p>
-          ) : (
-            auditsQuery.data?.map((audit) => (
-              <div key={audit.id} className="rounded-lg border p-3 text-sm">
-                <p>
-                  Rule #{audit.ruleResultId}：{audit.previousScore ?? "—"} →{" "}
-                  {audit.overriddenScore ?? "—"}，{audit.previousStatus ?? "—"}{" "}
-                  → {audit.overriddenStatus ?? "—"}
-                </p>
-                <p className="mt-1 text-slate-500">
-                  {audit.comment} · 用户 #{audit.createdBy} ·{" "}
-                  {new Date(audit.createdAt).toLocaleString()}
-                </p>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle>人工覆盖审计</CardTitle>
+            <CardDescription>
+              保留修改前后值、原因、操作人和时间。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(auditsQuery.data ?? []).length === 0 ? (
+              <p className="text-sm text-slate-500">暂无人工覆盖记录。</p>
+            ) : (
+              auditsQuery.data?.map((audit) => (
+                <div key={audit.id} className="rounded-lg border p-3 text-sm">
+                  <p>
+                    Rule #{audit.ruleResultId}：{audit.previousScore ?? "—"} →{" "}
+                    {audit.overriddenScore ?? "—"}，
+                    {audit.previousStatus ?? "—"} →{" "}
+                    {audit.overriddenStatus ?? "—"}
+                  </p>
+                  <p className="mt-1 text-slate-500">
+                    {audit.comment} · 用户 #{audit.createdBy} ·{" "}
+                    {new Date(audit.createdAt).toLocaleString()}
+                  </p>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
+}
+
+function flattenBlocks(blocks: DocumentBlock[]): DocumentBlock[] {
+  return blocks.flatMap((block) => [
+    block,
+    ...flattenBlocks(block.children ?? []),
+  ]);
 }
 
 function Metric({

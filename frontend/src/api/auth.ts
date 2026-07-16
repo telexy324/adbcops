@@ -1,4 +1,4 @@
-import { apiClient, setAccessToken } from "@/api/client";
+import { apiClient, setAccessToken, setCurrentUser } from "@/api/client";
 
 type ApiEnvelope<T> = {
   code: number;
@@ -24,5 +24,6 @@ export async function login(input: { username: string; password: string }) {
     input,
   );
   setAccessToken(response.data.data.accessToken);
+  setCurrentUser(response.data.data.user);
   return response.data.data;
 }

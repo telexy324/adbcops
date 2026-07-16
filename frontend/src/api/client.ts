@@ -11,6 +11,14 @@ export const apiClient = axios.create({
 });
 
 const tokenStorageKey = "adbcops.accessToken";
+const userStorageKey = "adbcops.currentUser";
+
+export type SessionUser = {
+  id: number;
+  username: string;
+  displayName?: string;
+  role: string;
+};
 
 export function getAccessToken() {
   return window.localStorage.getItem(tokenStorageKey);
@@ -22,6 +30,20 @@ export function setAccessToken(token: string) {
 
 export function clearAccessToken() {
   window.localStorage.removeItem(tokenStorageKey);
+  window.localStorage.removeItem(userStorageKey);
+}
+
+export function setCurrentUser(user: SessionUser) {
+  window.localStorage.setItem(userStorageKey, JSON.stringify(user));
+}
+
+export function getCurrentUser(): SessionUser | null {
+  try {
+    const value = window.localStorage.getItem(userStorageKey);
+    return value ? (JSON.parse(value) as SessionUser) : null;
+  } catch {
+    return null;
+  }
 }
 
 apiClient.interceptors.request.use((config) => {

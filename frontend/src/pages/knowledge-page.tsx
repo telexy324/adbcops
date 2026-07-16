@@ -37,6 +37,7 @@ import {
   type RetrievalEvaluationRun,
 } from "@/api/knowledge";
 import { Button } from "@/components/ui/button";
+import { KnowledgeAdminWorkbench } from "@/components/knowledge/knowledge-admin-workbench";
 import {
   Card,
   CardContent,
@@ -47,6 +48,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { getCurrentUser } from "@/api/client";
 
 const defaultQualityJSON = JSON.stringify(
   {
@@ -102,6 +104,7 @@ export function KnowledgePage() {
   const [retrievalRuns, setRetrievalRuns] = useState<RetrievalEvaluationRun[]>(
     [],
   );
+  const isAdmin = getCurrentUser()?.role === "admin";
 
   const documentsQuery = useQuery({
     queryKey: ["knowledge", "documents"],
@@ -112,6 +115,7 @@ export function KnowledgePage() {
   const standardsQuery = useQuery({
     queryKey: ["knowledge", "quality-standards"],
     queryFn: listQualityStandards,
+    enabled: isAdmin,
   });
   const qualityStandards = standardsQuery.data ?? [];
   const selectedDocument = useMemo(
@@ -122,7 +126,7 @@ export function KnowledgePage() {
   const chunksQuery = useQuery({
     queryKey: ["knowledge", "chunks", selectedID],
     queryFn: () => getDocumentChunks(selectedID!),
-    enabled: selectedID !== null,
+    enabled: selectedID !== null && isAdmin,
   });
 
   const uploadMutation = useMutation({
@@ -318,9 +322,9 @@ export function KnowledgePage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusPill label="上传" active />
-          <StatusPill label="切片" active />
-          <StatusPill label="质检" active />
-          <StatusPill label="审核" active />
+          {isAdmin && <StatusPill label="切片" active />}
+          {isAdmin && <StatusPill label="质检" active />}
+          {isAdmin && <StatusPill label="审核" active />}
           <StatusPill label="Chat" active />
         </div>
       </section>
@@ -339,177 +343,185 @@ export function KnowledgePage() {
         </div>
       )}
 
-      <Card className="border-cyan-200 bg-cyan-50/40 shadow-none">
-        <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center">
-          <div className="min-w-0 flex-1">
-            <p className="font-medium text-slate-900">
-              Quality Evaluation Review
-            </p>
-            <p className="text-sm text-slate-500">
-              查看分项证据、Hard Gate、人工覆盖审计，并发布或重新评分。
-            </p>
-          </div>
-          <Input
-            className="sm:w-48"
-            type="number"
-            min="1"
-            value={evaluationID}
-            onChange={(event) => setEvaluationID(event.target.value)}
-            placeholder="Evaluation ID"
-            aria-label="Quality Evaluation ID"
-          />
-          <Button
-            type="button"
-            disabled={
-              !Number.isInteger(Number(evaluationID)) ||
-              Number(evaluationID) <= 0
-            }
-            onClick={() =>
-              navigate(`/knowledge/evaluations/${evaluationID}/review`)
-            }
-          >
-            打开 Review <ArrowRight className="size-4" />
-          </Button>
-        </CardContent>
-      </Card>
+      {isAdmin && <KnowledgeAdminWorkbench document={selectedDocument} />}
 
-      <Card className="border-violet-200 bg-violet-50/40 shadow-none">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FlaskConical className="size-5 text-violet-600" />
-            Retrieval Evaluation Center
-          </CardTitle>
-          <CardDescription>
-            在发布前运行 Smoke Test，或比较 lexical、默认配置与指定的 Embedding
-            / Rerank / Chunk Strategy。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-5">
-            <Input
-              type="number"
-              min="1"
-              placeholder="Version ID"
-              value={retrievalVersionID}
-              onChange={(event) => setRetrievalVersionID(event.target.value)}
-            />
-            <Input
-              type="number"
-              min="1"
-              placeholder="Embedding Config"
-              value={retrievalEmbeddingID}
-              onChange={(event) => setRetrievalEmbeddingID(event.target.value)}
-            />
-            <Input
-              type="number"
-              min="1"
-              placeholder="Rerank Config"
-              value={retrievalRerankID}
-              onChange={(event) => setRetrievalRerankID(event.target.value)}
-            />
-            <Input
-              type="number"
-              min="1"
-              placeholder="Strategy ID"
-              value={retrievalStrategyID}
-              onChange={(event) => setRetrievalStrategyID(event.target.value)}
-            />
-            <Input
-              placeholder="Embedding Revision"
-              value={retrievalRevision}
-              onChange={(event) => setRetrievalRevision(event.target.value)}
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              disabled={
-                !Number.isInteger(retrievalVersion) ||
-                retrievalVersion <= 0 ||
-                smokeMutation.isPending
-              }
-              onClick={() =>
-                smokeMutation.mutate({
-                  documentVersionId: retrievalVersion,
-                  ...retrievalConfig,
-                })
-              }
-            >
-              {smokeMutation.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <ShieldCheck className="size-4" />
-              )}
-              运行 Smoke Test
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={
-                !Number.isInteger(retrievalVersion) ||
-                retrievalVersion <= 0 ||
-                labMutation.isPending
-              }
-              onClick={() =>
-                labMutation.mutate({
-                  documentVersionId: retrievalVersion,
-                  variants: [
-                    {
-                      name: "lexical-only",
-                      disableEmbedding: true,
-                      disableRerank: true,
-                      limit: 5,
-                    },
-                    { name: "default-production", limit: 5 },
-                    { name: "configured-variant", ...retrievalConfig },
-                  ],
-                })
-              }
-            >
-              {labMutation.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <FlaskConical className="size-4" />
-              )}
-              对比三组配置
-            </Button>
-          </div>
-          {retrievalRuns.length > 0 && (
-            <div className="grid gap-3 lg:grid-cols-3">
-              {retrievalRuns.map((run) => (
-                <div
-                  key={run.id}
-                  className="rounded-lg border border-violet-200 bg-white p-3 text-xs text-slate-600"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-slate-800">{run.name}</p>
-                    <span
-                      className={
-                        run.passed ? "text-emerald-600" : "text-rose-600"
-                      }
-                    >
-                      {run.passed ? "PASS" : "FAIL"}
-                    </span>
-                  </div>
-                  <p className="mt-2">
-                    Recall@K {percent(run.metrics.recallAtK)} · MRR{" "}
-                    {percent(run.metrics.mrr)}
-                  </p>
-                  <p>
-                    nDCG {percent(run.metrics.ndcgAtK)} · Citation{" "}
-                    {percent(run.metrics.citationAccuracy)}
-                  </p>
-                  <p className="mt-1 text-slate-400">
-                    Embedding {run.embeddingModel ?? "off/default"} · Rerank{" "}
-                    {run.rerankModel ?? "off/default"} · Strategy{" "}
-                    {run.chunkStrategyId ?? "default"}
-                  </p>
-                </div>
-              ))}
+      {isAdmin && (
+        <Card className="border-cyan-200 bg-cyan-50/40 shadow-none">
+          <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-slate-900">
+                Quality Evaluation Review
+              </p>
+              <p className="text-sm text-slate-500">
+                查看分项证据、Hard Gate、人工覆盖审计，并发布或重新评分。
+              </p>
             </div>
-          )}
-        </CardContent>
-      </Card>
+            <Input
+              className="sm:w-48"
+              type="number"
+              min="1"
+              value={evaluationID}
+              onChange={(event) => setEvaluationID(event.target.value)}
+              placeholder="Evaluation ID"
+              aria-label="Quality Evaluation ID"
+            />
+            <Button
+              type="button"
+              disabled={
+                !Number.isInteger(Number(evaluationID)) ||
+                Number(evaluationID) <= 0
+              }
+              onClick={() =>
+                navigate(`/knowledge/evaluations/${evaluationID}/review`)
+              }
+            >
+              打开 Review <ArrowRight className="size-4" />
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card className="border-violet-200 bg-violet-50/40 shadow-none">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FlaskConical className="size-5 text-violet-600" />
+              Retrieval Evaluation Center
+            </CardTitle>
+            <CardDescription>
+              在发布前运行 Smoke Test，或比较 lexical、默认配置与指定的
+              Embedding / Rerank / Chunk Strategy。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-5">
+              <Input
+                type="number"
+                min="1"
+                placeholder="Version ID"
+                value={retrievalVersionID}
+                onChange={(event) => setRetrievalVersionID(event.target.value)}
+              />
+              <Input
+                type="number"
+                min="1"
+                placeholder="Embedding Config"
+                value={retrievalEmbeddingID}
+                onChange={(event) =>
+                  setRetrievalEmbeddingID(event.target.value)
+                }
+              />
+              <Input
+                type="number"
+                min="1"
+                placeholder="Rerank Config"
+                value={retrievalRerankID}
+                onChange={(event) => setRetrievalRerankID(event.target.value)}
+              />
+              <Input
+                type="number"
+                min="1"
+                placeholder="Strategy ID"
+                value={retrievalStrategyID}
+                onChange={(event) => setRetrievalStrategyID(event.target.value)}
+              />
+              <Input
+                placeholder="Embedding Revision"
+                value={retrievalRevision}
+                onChange={(event) => setRetrievalRevision(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                disabled={
+                  !Number.isInteger(retrievalVersion) ||
+                  retrievalVersion <= 0 ||
+                  smokeMutation.isPending
+                }
+                onClick={() =>
+                  smokeMutation.mutate({
+                    documentVersionId: retrievalVersion,
+                    ...retrievalConfig,
+                  })
+                }
+              >
+                {smokeMutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="size-4" />
+                )}
+                运行 Smoke Test
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  !Number.isInteger(retrievalVersion) ||
+                  retrievalVersion <= 0 ||
+                  labMutation.isPending
+                }
+                onClick={() =>
+                  labMutation.mutate({
+                    documentVersionId: retrievalVersion,
+                    variants: [
+                      {
+                        name: "lexical-only",
+                        disableEmbedding: true,
+                        disableRerank: true,
+                        limit: 5,
+                      },
+                      { name: "default-production", limit: 5 },
+                      { name: "configured-variant", ...retrievalConfig },
+                    ],
+                  })
+                }
+              >
+                {labMutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <FlaskConical className="size-4" />
+                )}
+                对比三组配置
+              </Button>
+            </div>
+            {retrievalRuns.length > 0 && (
+              <div className="grid gap-3 lg:grid-cols-3">
+                {retrievalRuns.map((run) => (
+                  <div
+                    key={run.id}
+                    className="rounded-lg border border-violet-200 bg-white p-3 text-xs text-slate-600"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-slate-800">{run.name}</p>
+                      <span
+                        className={
+                          run.passed ? "text-emerald-600" : "text-rose-600"
+                        }
+                      >
+                        {run.passed ? "PASS" : "FAIL"}
+                      </span>
+                    </div>
+                    <p className="mt-2">
+                      Recall@K {percent(run.metrics.recallAtK)} · MRR{" "}
+                      {percent(run.metrics.mrr)}
+                    </p>
+                    <p>
+                      nDCG {percent(run.metrics.ndcgAtK)} · Citation{" "}
+                      {percent(run.metrics.citationAccuracy)}
+                    </p>
+                    <p className="mt-1 text-slate-400">
+                      Embedding {run.embeddingModel ?? "off/default"} · Rerank{" "}
+                      {run.rerankModel ?? "off/default"} · Strategy{" "}
+                      {run.chunkStrategyId ?? "default"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <section className="grid gap-6 xl:grid-cols-[0.9fr_1.15fr_1fr]">
         <Card className="border-slate-200/80 shadow-none">
@@ -612,43 +624,47 @@ export function KnowledgePage() {
               </Button>
             </form>
 
-            <form
-              className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
-              onSubmit={submitStandard}
-            >
-              <div>
-                <p className="text-sm font-semibold text-slate-700">评分标准</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  支持 txt、md、docx、xlsx，上传后可参与自动评分。
-                </p>
-              </div>
-              <Field label="标准标题">
-                <Input
-                  value={standardTitle}
-                  placeholder="数据库知识库评分标准"
-                  onChange={(event) => setStandardTitle(event.target.value)}
-                />
-              </Field>
-              <Field label="标准文件">
-                <Input
-                  type="file"
-                  accept=".md,.txt,.docx,.xlsx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  onChange={(event) =>
-                    setStandardFile(event.target.files?.[0] ?? null)
-                  }
-                />
-              </Field>
-              <Button
-                className="w-full"
-                variant="outline"
-                disabled={uploadStandardMutation.isPending}
+            {isAdmin && (
+              <form
+                className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
+                onSubmit={submitStandard}
               >
-                {uploadStandardMutation.isPending && (
-                  <Loader2 className="size-4 animate-spin" />
-                )}
-                上传评分标准
-              </Button>
-            </form>
+                <div>
+                  <p className="text-sm font-semibold text-slate-700">
+                    评分标准
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    支持 txt、md、docx、xlsx，上传后可参与自动评分。
+                  </p>
+                </div>
+                <Field label="标准标题">
+                  <Input
+                    value={standardTitle}
+                    placeholder="数据库知识库评分标准"
+                    onChange={(event) => setStandardTitle(event.target.value)}
+                  />
+                </Field>
+                <Field label="标准文件">
+                  <Input
+                    type="file"
+                    accept=".md,.txt,.docx,.xlsx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={(event) =>
+                      setStandardFile(event.target.files?.[0] ?? null)
+                    }
+                  />
+                </Field>
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  disabled={uploadStandardMutation.isPending}
+                >
+                  {uploadStandardMutation.isPending && (
+                    <Loader2 className="size-4 animate-spin" />
+                  )}
+                  上传评分标准
+                </Button>
+              </form>
+            )}
 
             <div className="space-y-2">
               {documentsQuery.isLoading && (
@@ -695,10 +711,12 @@ export function KnowledgePage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <ShieldCheck className="size-5 text-emerald-600" />
-              详情 / 质检 / 审核
+              {isAdmin ? "详情 / 质检 / 审核" : "文档详情"}
             </CardTitle>
             <CardDescription>
-              先解析切片，再提交质检 JSON，通过后发布。
+              {isAdmin
+                ? "先解析切片，再提交质检 JSON，通过后发布。"
+                : "查看已上传文档的版本与发布状态。"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -731,183 +749,194 @@ export function KnowledgePage() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      reprocessMutation.mutate(selectedDocument.id)
-                    }
-                    disabled={reprocessMutation.isPending}
-                  >
-                    <RefreshCw
-                      className={cn(
-                        "size-4",
-                        reprocessMutation.isPending && "animate-spin",
-                      )}
-                    />
-                    解析切片
-                  </Button>
-                  <ReviewButton
-                    icon={<CheckCircle2 className="size-4" />}
-                    label="发布"
-                    action={() =>
-                      actionMutation.mutate({
-                        id: selectedDocument.id,
-                        action: "publish",
-                        reviewComment: comment,
-                      })
-                    }
-                    disabled={actionMutation.isPending}
-                  />
-                  <ReviewButton
-                    icon={<XCircle className="size-4" />}
-                    label="驳回"
-                    action={() =>
-                      actionMutation.mutate({
-                        id: selectedDocument.id,
-                        action: "reject",
-                        reviewComment: comment,
-                      })
-                    }
-                    disabled={actionMutation.isPending}
-                  />
-                  <ReviewButton
-                    icon={<Archive className="size-4" />}
-                    label="归档"
-                    action={() =>
-                      actionMutation.mutate({
-                        id: selectedDocument.id,
-                        action: "archive",
-                        reviewComment: comment,
-                      })
-                    }
-                    disabled={actionMutation.isPending}
-                  />
-                </div>
-
-                <Field label="审核备注">
-                  <Input
-                    value={comment}
-                    onChange={(event) => setComment(event.target.value)}
-                  />
-                </Field>
-
-                <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-700">
-                      按评分标准自动评分
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      可同时使用默认标准和自定义标准，结果会写入下方质检 JSON。
-                    </p>
-                  </div>
-                  <label className="flex items-center gap-2 text-sm text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={useDefaultQuality}
-                      onChange={(event) =>
-                        setUseDefaultQuality(event.target.checked)
+                {isAdmin && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() =>
+                        reprocessMutation.mutate(selectedDocument.id)
                       }
+                      disabled={reprocessMutation.isPending}
+                    >
+                      <RefreshCw
+                        className={cn(
+                          "size-4",
+                          reprocessMutation.isPending && "animate-spin",
+                        )}
+                      />
+                      解析切片
+                    </Button>
+                    <ReviewButton
+                      icon={<CheckCircle2 className="size-4" />}
+                      label="发布"
+                      action={() =>
+                        actionMutation.mutate({
+                          id: selectedDocument.id,
+                          action: "publish",
+                          reviewComment: comment,
+                        })
+                      }
+                      disabled={actionMutation.isPending}
                     />
-                    使用默认评分标准
-                  </label>
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-slate-500">
-                      自定义标准
-                    </p>
-                    {qualityStandards.length === 0 && (
-                      <p className="text-xs text-slate-400">
-                        暂无自定义评分标准，可在左侧上传。
-                      </p>
-                    )}
-                    {qualityStandards.map((standard) => (
-                      <label
-                        key={standard.id}
-                        className="flex items-start gap-2 rounded-lg bg-white p-2 text-xs text-slate-600"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedStandardIDs.includes(standard.id)}
-                          onChange={(event) =>
-                            setSelectedStandardIDs((current) =>
-                              event.target.checked
-                                ? [...current, standard.id]
-                                : current.filter((id) => id !== standard.id),
-                            )
-                          }
-                        />
-                        <span>
-                          <span className="font-semibold text-slate-700">
-                            {standard.title}
-                          </span>
-                          <span className="ml-2 text-slate-400">
-                            {standard.fileName}
-                          </span>
-                        </span>
-                      </label>
-                    ))}
+                    <ReviewButton
+                      icon={<XCircle className="size-4" />}
+                      label="驳回"
+                      action={() =>
+                        actionMutation.mutate({
+                          id: selectedDocument.id,
+                          action: "reject",
+                          reviewComment: comment,
+                        })
+                      }
+                      disabled={actionMutation.isPending}
+                    />
+                    <ReviewButton
+                      icon={<Archive className="size-4" />}
+                      label="归档"
+                      action={() =>
+                        actionMutation.mutate({
+                          id: selectedDocument.id,
+                          action: "archive",
+                          reviewComment: comment,
+                        })
+                      }
+                      disabled={actionMutation.isPending}
+                    />
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={autoQualityMutation.isPending}
-                    onClick={runAutoQuality}
-                  >
-                    {autoQualityMutation.isPending && (
-                      <Loader2 className="size-4 animate-spin" />
-                    )}
-                    自动评分
-                  </Button>
-                </div>
+                )}
 
-                <form className="space-y-3" onSubmit={submitQuality}>
-                  <Field label="质检 JSON">
-                    <textarea
-                      value={qualityJSON}
-                      onChange={(event) => setQualityJSON(event.target.value)}
-                      className="min-h-44 w-full rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                {isAdmin && (
+                  <Field label="审核备注">
+                    <Input
+                      value={comment}
+                      onChange={(event) => setComment(event.target.value)}
                     />
                   </Field>
-                  <Button disabled={qualityMutation.isPending}>
-                    {qualityMutation.isPending && (
-                      <Loader2 className="size-4 animate-spin" />
-                    )}
-                    提交质检
-                  </Button>
-                </form>
+                )}
 
-                <div className="rounded-xl border border-slate-200">
-                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                    <p className="text-sm font-semibold text-slate-700">
-                      Chunk 预览
-                    </p>
-                    <span className="text-xs text-slate-400">
-                      {chunksQuery.data?.chunkCount ?? 0} chunks
-                    </span>
-                  </div>
-                  <div className="max-h-72 space-y-2 overflow-y-auto p-3">
-                    {(chunksQuery.data?.chunks ?? [])
-                      .slice(0, 5)
-                      .map((chunk) => (
-                        <div
-                          key={chunk.id}
-                          className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"
-                        >
-                          <p className="mb-1 font-semibold text-slate-700">
-                            #{chunk.chunkIndex} {chunk.sourceSection ?? ""}
-                          </p>
-                          {chunk.content}
-                        </div>
-                      ))}
-                    {selectedID &&
-                      !chunksQuery.isLoading &&
-                      !chunksQuery.data?.chunkCount && (
-                        <p className="p-3 text-sm text-slate-400">
-                          暂无 chunk，点击“解析切片”生成。
+                {isAdmin && (
+                  <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-700">
+                        按评分标准自动评分
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        可同时使用默认标准和自定义标准，结果会写入下方质检
+                        JSON。
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={useDefaultQuality}
+                        onChange={(event) =>
+                          setUseDefaultQuality(event.target.checked)
+                        }
+                      />
+                      使用默认评分标准
+                    </label>
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-slate-500">
+                        自定义标准
+                      </p>
+                      {qualityStandards.length === 0 && (
+                        <p className="text-xs text-slate-400">
+                          暂无自定义评分标准，可在左侧上传。
                         </p>
                       )}
+                      {qualityStandards.map((standard) => (
+                        <label
+                          key={standard.id}
+                          className="flex items-start gap-2 rounded-lg bg-white p-2 text-xs text-slate-600"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedStandardIDs.includes(standard.id)}
+                            onChange={(event) =>
+                              setSelectedStandardIDs((current) =>
+                                event.target.checked
+                                  ? [...current, standard.id]
+                                  : current.filter((id) => id !== standard.id),
+                              )
+                            }
+                          />
+                          <span>
+                            <span className="font-semibold text-slate-700">
+                              {standard.title}
+                            </span>
+                            <span className="ml-2 text-slate-400">
+                              {standard.fileName}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={autoQualityMutation.isPending}
+                      onClick={runAutoQuality}
+                    >
+                      {autoQualityMutation.isPending && (
+                        <Loader2 className="size-4 animate-spin" />
+                      )}
+                      自动评分
+                    </Button>
                   </div>
-                </div>
+                )}
+
+                {isAdmin && (
+                  <form className="space-y-3" onSubmit={submitQuality}>
+                    <Field label="质检 JSON">
+                      <textarea
+                        value={qualityJSON}
+                        onChange={(event) => setQualityJSON(event.target.value)}
+                        className="min-h-44 w-full rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                    </Field>
+                    <Button disabled={qualityMutation.isPending}>
+                      {qualityMutation.isPending && (
+                        <Loader2 className="size-4 animate-spin" />
+                      )}
+                      提交质检
+                    </Button>
+                  </form>
+                )}
+
+                {isAdmin && (
+                  <div className="rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                      <p className="text-sm font-semibold text-slate-700">
+                        Chunk 预览
+                      </p>
+                      <span className="text-xs text-slate-400">
+                        {chunksQuery.data?.chunkCount ?? 0} chunks
+                      </span>
+                    </div>
+                    <div className="max-h-72 space-y-2 overflow-y-auto p-3">
+                      {(chunksQuery.data?.chunks ?? [])
+                        .slice(0, 5)
+                        .map((chunk) => (
+                          <div
+                            key={chunk.id}
+                            className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"
+                          >
+                            <p className="mb-1 font-semibold text-slate-700">
+                              #{chunk.chunkIndex} {chunk.sourceSection ?? ""}
+                            </p>
+                            {chunk.content}
+                          </div>
+                        ))}
+                      {selectedID &&
+                        !chunksQuery.isLoading &&
+                        !chunksQuery.data?.chunkCount && (
+                          <p className="p-3 text-sm text-slate-400">
+                            暂无 chunk，点击“解析切片”生成。
+                          </p>
+                        )}
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </CardContent>

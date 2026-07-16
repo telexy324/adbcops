@@ -25,6 +25,156 @@ export type KnowledgeDocument = {
   createdBy?: number;
   createdAt: string;
   updatedAt: string;
+  currentPublishedVersionId?: number;
+};
+
+export type DocumentVersion = {
+  id: number;
+  documentId: number;
+  version: string;
+  revisionNo: number;
+  fileName: string;
+  fileType: string;
+  fileHash: string;
+  parserName?: string;
+  parserVersion?: string;
+  language?: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+  parseQuality?: ParseQuality;
+  documentSchema?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string;
+  supersededAt?: string;
+  deprecatedAt?: string;
+};
+
+export type ParseQuality = {
+  parseSuccess: boolean;
+  textCoverage: number;
+  headingDetectionRate: number;
+  tableDetectionCount: number;
+  unknownBlockRatio: number;
+  garbledTextRatio: number;
+  emptyPageRatio: number;
+  orderConfidence: number;
+  metadataCompleteness: number;
+  blockCount: number;
+  level: string;
+};
+
+export type DocumentBlock = {
+  id: string;
+  type: string;
+  level: number;
+  text: string;
+  page?: number;
+  order: number;
+  sectionPath?: string[];
+  attributes?: Record<string, unknown>;
+  children?: DocumentBlock[];
+};
+
+export type ParsedStructure = {
+  version: DocumentVersion;
+  parseQuality: ParseQuality;
+  documentSchema: Record<string, unknown>;
+  warnings: Array<{ code: string; message: string }>;
+  blocks: DocumentBlock[];
+};
+
+export type ChunkStrategy = {
+  id: number;
+  name: string;
+  version: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+};
+
+export type VersionChunk = KnowledgeChunk & {
+  documentVersionId: number;
+  strategyId: number;
+  chunkType: string;
+  sectionPath?: string[];
+  sourceBlockIds: number[];
+  contentHash: string;
+  parentChunkId?: number;
+};
+
+export type EmbeddingIndex = {
+  id: number;
+  documentVersionId: number;
+  strategyId: number;
+  embeddingConfigId: number;
+  modelName: string;
+  modelRevision: string;
+  dimension: number;
+  status: string;
+  chunkCount: number;
+  embeddedCount: number;
+  errorMessage?: string;
+  completedAt?: string;
+};
+
+export type PublicationGate = {
+  documentId: number;
+  documentVersionId: number;
+  canPublish: boolean;
+  checks: Array<{
+    name: "parse" | "quality" | "embedding" | "retrieval" | "review";
+    passed: boolean;
+    message: string;
+    resourceId?: number;
+  }>;
+  evaluatedAt: string;
+};
+
+export type StructuredQualityRule = {
+  ruleKey: string;
+  name: string;
+  ruleType: string;
+  severity: string;
+  maxScore: number;
+  deduction?: number;
+  required: boolean;
+  hardGate: boolean;
+  description?: string;
+  evidenceRequirement?: Record<string, unknown>;
+  detectorConfig?: Record<string, unknown>;
+  order: number;
+};
+
+export type StructuredQualityCriterion = {
+  criterionKey: string;
+  name: string;
+  weight: number;
+  maxScore: number;
+  scoringMethod: string;
+  order: number;
+  rules: StructuredQualityRule[];
+};
+
+export type StructuredQualityProfile = {
+  id?: number;
+  standardId?: number;
+  profileKey: string;
+  name: string;
+  applicableDocTypes: string[];
+  totalScore: number;
+  passScore: number;
+  warningScore: number;
+  status?: string;
+  criteria: StructuredQualityCriterion[];
+};
+
+export type StructuredQualityStandard = {
+  id?: number;
+  name: string;
+  description?: string;
+  version: string;
+  status?: string;
+  profiles: StructuredQualityProfile[];
 };
 
 export type KnowledgeChunk = {
@@ -357,6 +507,161 @@ export async function uploadDocument(input: UploadDocumentInput) {
   const response = await apiClient.post<ApiEnvelope<KnowledgeDocument>>(
     "/api/documents/upload",
     form,
+  );
+  return response.data.data;
+}
+
+export async function listDocumentVersions(documentId: number) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: DocumentVersion[]; count: number }>
+  >(`/api/documents/${documentId}/versions`);
+  return response.data.data.items;
+}
+
+export async function uploadDocumentVersion(input: {
+  documentId: number;
+  version: string;
+  file: File;
+}) {
+  const form = new FormData();
+  form.append("file", input.file);
+  form.append("version", input.version);
+  const response = await apiClient.post<ApiEnvelope<DocumentVersion>>(
+    `/api/documents/${input.documentId}/versions/upload`,
+    form,
+  );
+  return response.data.data;
+}
+
+export async function parseDocumentVersion(versionId: number) {
+  const response = await apiClient.post<ApiEnvelope<ParsedStructure>>(
+    `/api/knowledge/document-versions/${versionId}/parse`,
+  );
+  return response.data.data;
+}
+
+export async function getParsedStructure(versionId: number) {
+  const response = await apiClient.get<ApiEnvelope<ParsedStructure>>(
+    `/api/knowledge/document-versions/${versionId}/blocks`,
+  );
+  return response.data.data;
+}
+
+export async function listChunkStrategies() {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: ChunkStrategy[]; count: number }>
+  >("/api/knowledge/chunk-strategies");
+  return response.data.data.items;
+}
+
+export async function chunkDocumentVersion(input: {
+  versionId: number;
+  strategyId: number;
+}) {
+  const response = await apiClient.post<
+    ApiEnvelope<{ chunks: VersionChunk[]; chunkCount: number }>
+  >(`/api/knowledge/document-versions/${input.versionId}/chunk`, {
+    strategyId: input.strategyId,
+  });
+  return response.data.data;
+}
+
+export async function listVersionChunks(
+  versionId: number,
+  strategyId?: number,
+) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ chunks: VersionChunk[]; chunkCount: number }>
+  >(`/api/knowledge/document-versions/${versionId}/chunks`, {
+    params: { strategyId },
+  });
+  return response.data.data;
+}
+
+export async function getEmbeddingStatus(
+  versionId: number,
+  strategyId: number,
+) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ ready: boolean; indexes: EmbeddingIndex[] }>
+  >("/api/knowledge/indexes/status", {
+    params: { documentVersionId: versionId, strategyId },
+  });
+  return response.data.data;
+}
+
+export async function createEmbeddingIndex(input: {
+  documentVersionId: number;
+  strategyId: number;
+  embeddingConfigId: number;
+  dimension: number;
+  modelRevision?: string;
+}) {
+  const response = await apiClient.post<ApiEnvelope<EmbeddingIndex>>(
+    "/api/knowledge/index-jobs",
+    input,
+  );
+  return response.data.data;
+}
+
+export async function buildEmbeddingIndex(id: number) {
+  const response = await apiClient.post<ApiEnvelope<EmbeddingIndex>>(
+    `/api/knowledge/index-jobs/${id}/build`,
+    { batchSize: 50 },
+  );
+  return response.data.data;
+}
+
+export async function getPublicationGate(versionId: number) {
+  const response = await apiClient.get<ApiEnvelope<PublicationGate>>(
+    `/api/knowledge/document-versions/${versionId}/publication-gate`,
+  );
+  return response.data.data;
+}
+
+export async function publishDocumentVersion(
+  versionId: number,
+  comment: string,
+) {
+  const response = await apiClient.post<
+    ApiEnvelope<{ document: KnowledgeDocument; gate: PublicationGate }>
+  >(`/api/knowledge/document-versions/${versionId}/publish`, { comment });
+  return response.data.data;
+}
+
+export async function listStructuredQualityStandards() {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: StructuredQualityStandard[]; count: number }>
+  >("/api/knowledge/quality-standards");
+  return response.data.data.items;
+}
+
+export async function createStructuredQualityStandard(
+  input: StructuredQualityStandard,
+) {
+  const response = await apiClient.post<ApiEnvelope<StructuredQualityStandard>>(
+    "/api/knowledge/quality-standards",
+    input,
+  );
+  return response.data.data;
+}
+
+export async function publishStructuredQualityStandard(id: number) {
+  const response = await apiClient.post<ApiEnvelope<StructuredQualityStandard>>(
+    `/api/knowledge/quality-standards/${id}/publish`,
+  );
+  return response.data.data;
+}
+
+export async function createQualityEvaluation(input: {
+  documentVersionId: number;
+  qualityProfileId: number;
+  mode: "deterministic" | "hybrid" | "llm";
+  force?: boolean;
+}) {
+  const response = await apiClient.post<ApiEnvelope<QualityEvaluation>>(
+    "/api/knowledge/evaluations",
+    input,
   );
   return response.data.data;
 }

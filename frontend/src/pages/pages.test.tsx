@@ -24,6 +24,19 @@ vi.mock("@/api/knowledge", () => ({
   autoReviewQuality: vi.fn(),
   askKnowledge: vi.fn(),
   getDocumentChunks: vi.fn(),
+  getEmbeddingStatus: vi.fn(),
+  getParsedStructure: vi.fn(),
+  getPublicationGate: vi.fn(),
+  buildEmbeddingIndex: vi.fn(),
+  chunkDocumentVersion: vi.fn(),
+  createEmbeddingIndex: vi.fn(),
+  createStructuredQualityStandard: vi.fn(),
+  listChunkStrategies: vi.fn().mockResolvedValue([]),
+  listDocumentVersions: vi.fn().mockResolvedValue([]),
+  listStructuredQualityStandards: vi.fn().mockResolvedValue([]),
+  listVersionChunks: vi.fn(),
+  parseDocumentVersion: vi.fn(),
+  publishDocumentVersion: vi.fn(),
   listQualityStandards: vi.fn().mockResolvedValue([]),
   listDocuments: vi.fn().mockResolvedValue([]),
   reprocessDocument: vi.fn(),
@@ -33,6 +46,7 @@ vi.mock("@/api/knowledge", () => ({
   reviewQuality: vi.fn(),
   toAPIErrorMessage: vi.fn(() => "请求失败"),
   uploadDocument: vi.fn(),
+  uploadDocumentVersion: vi.fn(),
   uploadQualityStandard: vi.fn(),
 }));
 
@@ -631,13 +645,40 @@ describe("KnowledgePage", () => {
       screen.getByRole("heading", { name: "知识中心" }),
     ).toBeInTheDocument();
     expect(screen.getByText("上传文档")).toBeInTheDocument();
-    expect(screen.getByText("详情 / 质检 / 审核")).toBeInTheDocument();
+    expect(screen.getByText("文档详情")).toBeInTheDocument();
     expect(screen.getByText("发送问题")).toBeInTheDocument();
     expect(
       screen.getByText("只有 published 文档会进入正式问答召回。", {
         exact: false,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("shows management diagnostics only to administrators", async () => {
+    window.localStorage.setItem(
+      "adbcops.currentUser",
+      JSON.stringify({ id: 1, username: "admin", role: "admin" }),
+    );
+    renderWithQueryClient(<KnowledgePage />);
+
+    expect(await screen.findByText("管理工作台")).toBeInTheDocument();
+    expect(screen.getByText("文档流水线")).toBeInTheDocument();
+    expect(screen.getByText("Retrieval Evaluation Center")).toBeInTheDocument();
+    window.localStorage.removeItem("adbcops.currentUser");
+  });
+
+  it("does not expose the management workbench to a regular user", () => {
+    window.localStorage.setItem(
+      "adbcops.currentUser",
+      JSON.stringify({ id: 7, username: "operator", role: "user" }),
+    );
+    renderWithQueryClient(<KnowledgePage />);
+
+    expect(screen.queryByText("管理工作台")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Retrieval Evaluation Center"),
+    ).not.toBeInTheDocument();
+    window.localStorage.removeItem("adbcops.currentUser");
   });
 });
 
