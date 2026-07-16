@@ -142,8 +142,11 @@ export type QualityOverrideAudit = {
 };
 
 export type Citation = {
+  citationId: string;
   documentId: number;
+  documentVersionId: number;
   chunkId: number;
+  chunkIds: number[];
   chunkIndex: number;
   sourceTitle?: string;
   sourceSection?: string;
@@ -189,6 +192,48 @@ export type RetrievalTrace = {
       rawScore: number;
     }>;
   }>;
+  rerank: {
+    model?: string;
+    inputCount: number;
+    topN: number;
+    degraded: boolean;
+    error?: string;
+    results: Array<{
+      chunkId: number;
+      rank: number;
+      score: number;
+      relevanceLabel: "high" | "medium" | "low";
+    }>;
+  };
+  contextBuilder: {
+    inputCount: number;
+    deduplicatedCount: number;
+    documentLimitedCount: number;
+    mergedCount: number;
+    parentExpandedCount: number;
+    tokenBudget: number;
+    tokensUsed: number;
+    selectedCount: number;
+    degraded: boolean;
+    error?: string;
+    blocks: Array<{
+      citationId: string;
+      documentId: number;
+      documentVersionId: number;
+      chunkIds: number[];
+      retrievalTrace: Array<{
+        chunkId: number;
+        rrfScore: number;
+        channelRanks: Array<{
+          channel: string;
+          rank: number;
+          rawScore: number;
+        }>;
+        rerankRank: number;
+        rerankScore: number;
+      }>;
+    }>;
+  };
 };
 
 export type AskResponse = {

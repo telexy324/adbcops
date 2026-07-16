@@ -158,6 +158,81 @@ func TestAskAppliesMetadataFilterBeforeChannels(t *testing.T) {
 	}
 }
 
+func TestAskRerankFailureFallsBackWithoutBlocking(t *testing.T) {
+	store := newFakeRepository()
+	store.llmConfigs[model.LLMPurposeRerank] = &model.LLMConfig{ID: 3, Purpose: model.LLMPurposeRerank, Model: "rerank-model", Enabled: true, IsDefault: true}
+	documentID := store.addDocument(model.DocumentStatusPublished)
+	store.addChunk(documentID, "数据库连接池耗尽时先查看活跃连接。")
+	service := NewService(store, nil, &rerankFailureClient{})
+	result, err := service.Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "连接池怎么排查？"})
+	if err != nil || result.RecallCount != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if !result.Retrieval.Rerank.Degraded || result.Retrieval.Rerank.Error == "" {
+		t.Fatalf("rerank trace = %+v", result.Retrieval.Rerank)
+	}
+}
+
+func TestContextBuilderLimitsSingleDocumentShare(t *testing.T) {
+	chunks := []model.KBChunk{}
+	for index := 0; index < 6; index++ {
+		chunks = append(chunks, model.KBChunk{ID: int64(index + 1), DocumentID: 1})
+	}
+	chunks = append(chunks, model.KBChunk{ID: 7, DocumentID: 2}, model.KBChunk{ID: 8, DocumentID: 2})
+	limited := limitDocumentShare(chunks, 6)
+	counts := map[int64]int{}
+	for _, chunk := range limited {
+		counts[chunk.DocumentID]++
+	}
+	if counts[1] != 3 || counts[2] != 2 {
+		t.Fatalf("document counts = %+v", counts)
+	}
+}
+
+func TestContextBuilderPreservesTableHeaderAndRiskContext(t *testing.T) {
+	table := model.KBChunk{ID: 1, DocumentID: 1, DocumentVersionID: 10, StrategyID: 2, ChunkIndex: 1, ChunkType: "table", Content: "Header: name | action\nRow 1: api | restart"}
+	blocks, _ := NewService(newFakeRepository(), nil, nil).buildContext(context.Background(), []model.KBChunk{table}, nil, nil, 1, 25)
+	if len(blocks) != 1 || !strings.HasPrefix(blocks[0].Content, "Header: name | action") {
+		t.Fatalf("table context = %+v", blocks)
+	}
+	before, after := "变更已审批，确认影响范围。", "执行后验证服务并按预案回滚。"
+	command := model.KBChunk{Content: "kubectl delete pod payment-0", ContextBefore: &before, ContextAfter: &after}
+	protected := protectRiskContext(command)
+	for _, expected := range []string{"Risk Context", before, after, command.Content} {
+		if !strings.Contains(protected, expected) {
+			t.Fatalf("risk context missing %q: %s", expected, protected)
+		}
+	}
+}
+
+func TestContextCitationPointsToVersionAndMergedChunks(t *testing.T) {
+	sibling := "steps"
+	chunks := []model.KBChunk{
+		{ID: 11, DocumentID: 1, DocumentVersionID: 9, StrategyID: 2, ChunkIndex: 3, SiblingGroup: &sibling, Content: "步骤一：检查连接数。"},
+		{ID: 12, DocumentID: 1, DocumentVersionID: 9, StrategyID: 2, ChunkIndex: 4, SiblingGroup: &sibling, Content: "步骤二：检查慢查询。"},
+	}
+	evidence := map[int64]ContextEvidenceTrace{11: {ChunkID: 11, RRFScore: .2, RerankRank: 1}, 12: {ChunkID: 12, RRFScore: .1, RerankRank: 2}}
+	blocks, trace := NewService(newFakeRepository(), nil, nil).buildContext(context.Background(), chunks, nil, evidence, 6, 1000)
+	citations := buildContextCitations(blocks)
+	if len(citations) != 1 || citations[0].DocumentVersionID != 9 || len(citations[0].ChunkIDs) != 2 {
+		t.Fatalf("citations = %+v", citations)
+	}
+	if len(trace.Blocks) != 1 || len(trace.Blocks[0].RetrievalTrace) != 2 {
+		t.Fatalf("context trace = %+v", trace)
+	}
+}
+
+func TestContextBuilderExpandsParentTitle(t *testing.T) {
+	parentID := int64(20)
+	section := "数据库 / 应急操作"
+	child := model.KBChunk{ID: 21, DocumentID: 1, DocumentVersionID: 9, StrategyID: 2, ParentChunkID: &parentID, Content: "检查当前连接数。"}
+	parent := model.KBChunk{ID: parentID, DocumentID: 1, DocumentVersionID: 9, SourceSection: &section, Content: "完整章节内容"}
+	content, expanded := buildGroupContent([]model.KBChunk{child}, map[int64]model.KBChunk{parentID: parent})
+	if !expanded || !strings.Contains(content, "Parent: "+section) {
+		t.Fatalf("content=%q expanded=%v", content, expanded)
+	}
+}
+
 type fakeRepository struct {
 	nextConversationID int64
 	nextMessageID      int64
@@ -228,6 +303,33 @@ func (f *fakeRepository) SearchChunksDense(_ context.Context, _ []float64, _ int
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 	if len(results) > limit {
 		results = results[:limit]
+	}
+	return results, nil
+}
+
+func (f *fakeRepository) FindKnowledgeDocumentsByIDs(_ context.Context, ids []int64) ([]model.KBDocument, error) {
+	results := make([]model.KBDocument, 0, len(ids))
+	for _, id := range ids {
+		if f.documents[id] != model.DocumentStatusPublished {
+			continue
+		}
+		results = append(results, model.KBDocument{ID: id, Title: "Runbook", Status: model.DocumentStatusPublished})
+	}
+	return results, nil
+}
+
+func (f *fakeRepository) FindKnowledgeChunksByIDs(_ context.Context, ids []int64) ([]model.KBChunk, error) {
+	wanted := map[int64]struct{}{}
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+	results := []model.KBChunk{}
+	for _, chunks := range f.chunks {
+		for _, chunk := range chunks {
+			if _, ok := wanted[chunk.ID]; ok {
+				results = append(results, chunk)
+			}
+		}
 	}
 	return results, nil
 }
@@ -413,6 +515,16 @@ func (f *fakeRepository) CreateQARecord(_ context.Context, record *model.QARecor
 type semanticFakeClient struct {
 	embedCalls  int
 	rerankCalls int
+}
+
+type rerankFailureClient struct{}
+
+func (f *rerankFailureClient) Chat(_ context.Context, req llmsvc.ChatRequest) (*llmsvc.ChatResult, error) {
+	return &llmsvc.ChatResult{Content: "answer", Model: req.Model}, nil
+}
+
+func (f *rerankFailureClient) Rerank(_ context.Context, _ llmsvc.RerankRequest) (*llmsvc.RerankResult, error) {
+	return nil, errors.New("rerank unavailable")
 }
 
 func (f *semanticFakeClient) Chat(_ context.Context, req llmsvc.ChatRequest) (*llmsvc.ChatResult, error) {

@@ -58,6 +58,8 @@ type RetrievalTrace struct {
 	RRFK          int                                 `json:"rrfK"`
 	Channels      []ChannelTrace                      `json:"channels"`
 	Candidates    []RetrievalCandidateTrace           `json:"candidates"`
+	Rerank        RerankTrace                         `json:"rerank"`
+	Context       ContextBuildTrace                   `json:"contextBuilder"`
 }
 
 type rankedCandidate struct {

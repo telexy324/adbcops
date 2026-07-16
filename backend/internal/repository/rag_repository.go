@@ -36,6 +36,8 @@ type RAGRepository interface {
 	SearchChunksTitleSection(ctx context.Context, query string, filter KnowledgeRetrievalFilter, limit int) ([]RankedKnowledgeChunk, error)
 	SearchChunksPossibleQuestions(ctx context.Context, query string, filter KnowledgeRetrievalFilter, limit int) ([]RankedKnowledgeChunk, error)
 	SearchChunksDense(ctx context.Context, vector []float64, configID int64, modelName string, filter KnowledgeRetrievalFilter, limit int) ([]RankedKnowledgeChunk, error)
+	FindKnowledgeDocumentsByIDs(ctx context.Context, ids []int64) ([]model.KBDocument, error)
+	FindKnowledgeChunksByIDs(ctx context.Context, ids []int64) ([]model.KBChunk, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -173,6 +175,33 @@ func (r *GORMRAGRepository) SearchChunksDense(ctx context.Context, vector []floa
 		return nil, fmt.Errorf("dense search kb chunks: %w", err)
 	}
 	return rowsToRankedKnowledgeChunks(rows), nil
+}
+
+func (r *GORMRAGRepository) FindKnowledgeDocumentsByIDs(ctx context.Context, ids []int64) ([]model.KBDocument, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var documents []model.KBDocument
+	if err := r.db.WithContext(ctx).
+		Where("id IN ? AND status = ?", ids, model.DocumentStatusPublished).
+		Find(&documents).Error; err != nil {
+		return nil, fmt.Errorf("find retrieval documents: %w", err)
+	}
+	return documents, nil
+}
+
+func (r *GORMRAGRepository) FindKnowledgeChunksByIDs(ctx context.Context, ids []int64) ([]model.KBChunk, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var chunks []model.KBChunk
+	if err := r.db.WithContext(ctx).Table("kb_chunk").
+		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
+		Where("kb_chunk.id IN ? AND kb_document.status = ?", ids, model.DocumentStatusPublished).
+		Order("kb_chunk.id ASC").Find(&chunks).Error; err != nil {
+		return nil, fmt.Errorf("find retrieval chunks: %w", err)
+	}
+	return chunks, nil
 }
 
 type GORMRAGRepository struct {

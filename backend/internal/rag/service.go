@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -36,6 +35,8 @@ type Repository interface {
 	SearchChunksTitleSection(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
 	SearchChunksPossibleQuestions(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
 	SearchChunksDense(ctx context.Context, vector []float64, configID int64, modelName string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
+	FindKnowledgeDocumentsByIDs(ctx context.Context, ids []int64) ([]model.KBDocument, error)
+	FindKnowledgeChunksByIDs(ctx context.Context, ids []int64) ([]model.KBChunk, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -64,12 +65,15 @@ type AskInput struct {
 }
 
 type Citation struct {
-	DocumentID    int64   `json:"documentId"`
-	ChunkID       int64   `json:"chunkId"`
-	ChunkIndex    int     `json:"chunkIndex"`
-	SourceTitle   *string `json:"sourceTitle,omitempty"`
-	SourceSection *string `json:"sourceSection,omitempty"`
-	Snippet       string  `json:"snippet"`
+	CitationID        string  `json:"citationId"`
+	DocumentID        int64   `json:"documentId"`
+	DocumentVersionID int64   `json:"documentVersionId"`
+	ChunkID           int64   `json:"chunkId"`
+	ChunkIDs          []int64 `json:"chunkIds"`
+	ChunkIndex        int     `json:"chunkIndex"`
+	SourceTitle       *string `json:"sourceTitle,omitempty"`
+	SourceSection     *string `json:"sourceSection,omitempty"`
+	Snippet           string  `json:"snippet"`
 }
 
 type AskResult struct {
@@ -111,13 +115,20 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
 	rewritten := understood.NormalizedQuery
 	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady)
-	if rerankReady {
-		chunks = s.modelRerank(ctx, question, chunks, limit, rerankConfig, rerankCredential)
-	} else if len(chunks) > limit {
-		chunks = chunks[:limit]
+	documents, documentErr := s.loadRetrievalDocuments(ctx, chunks)
+	if documentErr != nil {
+		documents = map[int64]model.KBDocument{}
 	}
-	citations := buildCitations(chunks)
-	answer, err := s.answer(ctx, question, rewritten, chunks, citations, llmConfig, llmCredential, llmReady)
+	chunks, rerankTrace := s.rerankCandidates(ctx, question, chunks, documents, rerankConfig, rerankCredential, rerankReady)
+	if documentErr != nil {
+		rerankTrace.Degraded = true
+		rerankTrace.Error = documentErr.Error()
+	}
+	contextBlocks, contextTrace := s.buildContext(ctx, chunks, documents, buildContextEvidence(retrievalTrace, rerankTrace), limit, defaultContextBudget)
+	retrievalTrace.Rerank = rerankTrace
+	retrievalTrace.Context = contextTrace
+	citations := buildContextCitations(contextBlocks)
+	answer, err := s.answer(ctx, question, rewritten, contextBlocks, citations, llmConfig, llmCredential, llmReady)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +152,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	}
 	assistantMetadata, _ := json.Marshal(map[string]any{
 		"source":         "rag",
-		"recallCount":    len(chunks),
+		"recallCount":    len(contextBlocks),
 		"embeddingModel": modelName(embeddingConfig, embeddingReady),
 		"rerankModel":    modelName(rerankConfig, rerankReady),
 		"retrievalTrace": json.RawMessage(retrievalJSON),
@@ -169,7 +180,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		RewrittenQuery: rewritten,
 		Answer:         answer,
 		Citations:      citationJSON,
-		RecallCount:    len(chunks),
+		RecallCount:    len(contextBlocks),
 		LLMConfigID:    llmConfigID,
 		RetrievalTrace: retrievalJSON,
 	}
@@ -185,7 +196,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		Rewritten:    rewritten,
 		Answer:       answer,
 		Citations:    citations,
-		RecallCount:  len(chunks),
+		RecallCount:  len(contextBlocks),
 		Retrieval:    retrievalTrace,
 	}, nil
 }
@@ -288,60 +299,12 @@ func (s *Service) decryptModelCredential(config *model.LLMConfig) (modelCredenti
 	return credential, nil
 }
 
-func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, credential modelCredential) []model.KBChunk {
-	client, ok := s.client.(llmsvc.RerankClient)
-	if !ok || config == nil || len(chunks) == 0 {
-		return lexicalRerankChunks(query, query, chunks, limit)
-	}
-	documents := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		documents = append(documents, chunk.Content)
-	}
-	result, err := client.Rerank(ctx, llmsvc.RerankRequest{
-		BaseURL:   config.BaseURL,
-		APIKey:    credential.APIKey,
-		APISecret: credential.APISecret,
-		Model:     config.Model,
-		Query:     query,
-		Documents: documents,
-		TopN:      limit,
-	})
-	if err != nil || len(result.Results) == 0 {
-		return lexicalRerankChunks(query, query, chunks, limit)
-	}
-	ranked := make([]model.KBChunk, 0, len(result.Results))
-	seen := map[int]struct{}{}
-	for _, item := range result.Results {
-		if item.Index < 0 || item.Index >= len(chunks) {
-			continue
-		}
-		if _, ok := seen[item.Index]; ok {
-			continue
-		}
-		seen[item.Index] = struct{}{}
-		ranked = append(ranked, chunks[item.Index])
-		if len(ranked) >= limit {
-			return ranked
-		}
-	}
-	for index, chunk := range chunks {
-		if _, ok := seen[index]; ok {
-			continue
-		}
-		ranked = append(ranked, chunk)
-		if len(ranked) >= limit {
-			return ranked
-		}
-	}
-	return ranked
-}
-
-func (s *Service) answer(ctx context.Context, question, rewritten string, chunks []model.KBChunk, citations []Citation, config *model.LLMConfig, credential modelCredential, ready bool) (string, error) {
-	if len(chunks) == 0 {
+func (s *Service) answer(ctx context.Context, question, rewritten string, blocks []ContextBlock, citations []Citation, config *model.LLMConfig, credential modelCredential, ready bool) (string, error) {
+	if len(blocks) == 0 {
 		return noEvidenceAnswer, nil
 	}
 	if !ready || config == nil {
-		return localAnswer(chunks), nil
+		return localAnswer(blocks), nil
 	}
 	result, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
@@ -352,8 +315,8 @@ func (s *Service) answer(ctx context.Context, question, rewritten string, chunks
 		Model:       config.Model,
 		Temperature: config.Temperature,
 		Messages: []llmsvc.ChatMessage{
-			{Role: model.MessageRoleSystem, Content: "Answer strictly from the provided published knowledge chunks. If the chunks do not support the answer, say there is no evidence. Cite chunk numbers like [1]."},
-			{Role: model.MessageRoleUser, Content: buildAnswerPrompt(question, rewritten, chunks)},
+			{Role: model.MessageRoleSystem, Content: "Answer strictly from the provided published knowledge context. If the context does not support the answer, say there is no evidence. Cite claims with the exact citation ID shown in brackets."},
+			{Role: model.MessageRoleUser, Content: buildAnswerPrompt(question, rewritten, blocks)},
 		},
 	})
 	if err != nil {
@@ -390,49 +353,11 @@ func ruleBasedRewrite(question string) string {
 	return strings.Join(strings.Fields(replacer.Replace(question)), " ")
 }
 
-func lexicalRerankChunks(question, rewritten string, chunks []model.KBChunk, limit int) []model.KBChunk {
-	terms := tokenize(question + " " + rewritten)
-	sort.SliceStable(chunks, func(i, j int) bool {
-		return chunkScore(chunks[i], terms) > chunkScore(chunks[j], terms)
-	})
-	if len(chunks) > limit {
-		return chunks[:limit]
-	}
-	return chunks
-}
-
-func dedupeChunks(chunks []model.KBChunk) []model.KBChunk {
-	seen := map[int64]struct{}{}
-	result := make([]model.KBChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		if _, ok := seen[chunk.ID]; ok {
-			continue
-		}
-		seen[chunk.ID] = struct{}{}
-		result = append(result, chunk)
-	}
-	return result
-}
-
 func modelName(config *model.LLMConfig, ready bool) string {
 	if !ready || config == nil {
 		return ""
 	}
 	return config.Model
-}
-
-func chunkScore(chunk model.KBChunk, terms []string) int {
-	text := strings.ToLower(chunk.Content)
-	if chunk.SearchText != nil {
-		text += "\n" + strings.ToLower(*chunk.SearchText)
-	}
-	score := 0
-	for _, term := range terms {
-		if strings.Contains(text, term) {
-			score += len([]rune(term)) + 1
-		}
-	}
-	return score
 }
 
 func tokenize(value string) []string {
@@ -449,16 +374,22 @@ func tokenize(value string) []string {
 	return terms
 }
 
-func buildCitations(chunks []model.KBChunk) []Citation {
-	citations := make([]Citation, 0, len(chunks))
-	for _, chunk := range chunks {
+func buildContextCitations(blocks []ContextBlock) []Citation {
+	citations := make([]Citation, 0, len(blocks))
+	for _, block := range blocks {
+		if len(block.ChunkIDs) == 0 {
+			continue
+		}
 		citations = append(citations, Citation{
-			DocumentID:    chunk.DocumentID,
-			ChunkID:       chunk.ID,
-			ChunkIndex:    chunk.ChunkIndex,
-			SourceTitle:   chunk.SourceTitle,
-			SourceSection: chunk.SourceSection,
-			Snippet:       snippet(chunk.Content),
+			CitationID:        block.CitationID,
+			DocumentID:        block.DocumentID,
+			DocumentVersionID: block.DocumentVersionID,
+			ChunkID:           block.ChunkIDs[0],
+			ChunkIDs:          append([]int64(nil), block.ChunkIDs...),
+			ChunkIndex:        block.ChunkIndex,
+			SourceTitle:       block.Title,
+			SourceSection:     block.Section,
+			Snippet:           snippet(block.Content),
 		})
 	}
 	return citations
@@ -473,24 +404,34 @@ func snippet(content string) string {
 	return string(runes[:160]) + "..."
 }
 
-func localAnswer(chunks []model.KBChunk) string {
+func localAnswer(blocks []ContextBlock) string {
 	lines := []string{"根据已发布知识库资料："}
-	for index, chunk := range chunks {
-		lines = append(lines, fmt.Sprintf("- [%d] %s", index+1, snippet(chunk.Content)))
+	for _, block := range blocks {
+		lines = append(lines, fmt.Sprintf("- [%s] %s", block.CitationID, snippet(block.Content)))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func buildAnswerPrompt(question, rewritten string, chunks []model.KBChunk) string {
+func buildAnswerPrompt(question, rewritten string, blocks []ContextBlock) string {
 	var builder strings.Builder
 	builder.WriteString("Question: ")
 	builder.WriteString(question)
 	builder.WriteString("\nRewritten query: ")
 	builder.WriteString(rewritten)
-	builder.WriteString("\nPublished knowledge chunks:\n")
-	for index, chunk := range chunks {
-		builder.WriteString(fmt.Sprintf("[%d] document_id=%d chunk_id=%d chunk_index=%d\n", index+1, chunk.DocumentID, chunk.ID, chunk.ChunkIndex))
-		builder.WriteString(chunk.Content)
+	builder.WriteString("\nPublished knowledge context:\n")
+	for _, block := range blocks {
+		builder.WriteString(fmt.Sprintf("[%s] document_id=%d document_version_id=%d chunk_ids=%v", block.CitationID, block.DocumentID, block.DocumentVersionID, block.ChunkIDs))
+		if block.Title != nil {
+			builder.WriteString(" title=" + *block.Title)
+		}
+		if block.Section != nil {
+			builder.WriteString(" section=" + *block.Section)
+		}
+		if block.Applicability != "" {
+			builder.WriteString(" applicability=" + block.Applicability)
+		}
+		builder.WriteString("\n")
+		builder.WriteString(block.Content)
 		builder.WriteString("\n")
 	}
 	return builder.String()

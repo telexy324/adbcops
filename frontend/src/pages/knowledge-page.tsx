@@ -789,8 +789,8 @@ export function KnowledgePage() {
                           className="rounded-lg bg-white p-3 text-xs text-slate-600 ring-1 ring-slate-200"
                         >
                           <p className="font-semibold text-slate-700">
-                            doc #{citation.documentId} · chunk #
-                            {citation.chunkIndex}
+                            [{citation.citationId}] · doc #{citation.documentId} ·
+                            version #{citation.documentVersionId} · chunks {citation.chunkIds.join(", ")}
                           </p>
                           <p className="mt-1 leading-5">{citation.snippet}</p>
                         </div>
