@@ -155,6 +155,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
 	}
+	parserRegistry, err := documentsvc.NewDefaultParserRegistry(documentsvc.ParseLimits{
+		Timeout:   cfg.KnowledgeParse.Timeout,
+		MaxBlocks: cfg.KnowledgeParse.MaxBlocks,
+		MaxPages:  cfg.KnowledgeParse.MaxPages,
+		MaxBytes:  cfg.FileStorage.MaxUploadBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize document parser registry: %w", err)
+	}
+	documentService.WithParserRegistry(parserRegistry)
 	documentService.WithQualityLLM(credentialManager, llmClient)
 	bootstrapContext, cancelBootstrap := context.WithTimeout(context.Background(), databaseTimeout)
 	err = authService.BootstrapAdmin(

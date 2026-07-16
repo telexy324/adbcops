@@ -3,6 +3,7 @@ package config
 import (
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -33,6 +34,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RAG.ChunkSize != defaultRAGChunkSize || cfg.RAG.ChunkOverlap != defaultRAGChunkOverlap {
 		t.Fatalf("RAG = %+v", cfg.RAG)
 	}
+	if cfg.KnowledgeParse.MaxPages != defaultParseMaxPages || cfg.KnowledgeParse.MaxBlocks != defaultParseMaxBlocks || cfg.KnowledgeParse.Timeout != time.Duration(defaultParseTimeout)*time.Second {
+		t.Fatalf("KnowledgeParse = %+v", cfg.KnowledgeParse)
+	}
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
@@ -49,6 +53,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("MAX_UPLOAD_BYTES", "1024")
 	t.Setenv("RAG_CHUNK_SIZE", "120")
 	t.Setenv("RAG_CHUNK_OVERLAP", "20")
+	t.Setenv("KNOWLEDGE_PARSE_MAX_PAGES", "200")
+	t.Setenv("KNOWLEDGE_PARSE_MAX_BLOCKS", "9000")
+	t.Setenv("KNOWLEDGE_PARSE_TIMEOUT_SECONDS", "30")
 	setAuthEnv(t)
 	setCredentialEnv(t)
 
@@ -75,6 +82,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.RAG.ChunkSize != 120 || cfg.RAG.ChunkOverlap != 20 {
 		t.Fatalf("RAG = %+v", cfg.RAG)
+	}
+	if cfg.KnowledgeParse.MaxPages != 200 || cfg.KnowledgeParse.MaxBlocks != 9000 || cfg.KnowledgeParse.Timeout != 30*time.Second {
+		t.Fatalf("KnowledgeParse = %+v", cfg.KnowledgeParse)
 	}
 }
 

@@ -301,12 +301,20 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 	}
 	recordFailureError(c, err, fallback)
 	switch {
+	case errors.Is(err, documentsvc.ErrLegacyDocUnsupported):
+		failure(c, http.StatusUnsupportedMediaType, 41502, "legacy .doc is unsupported; convert the file to .docx")
 	case errors.Is(err, documentsvc.ErrUnsupportedExt):
 		failure(c, http.StatusUnsupportedMediaType, 41501, "unsupported file type")
 	case errors.Is(err, documentsvc.ErrFileTooLarge):
 		failure(c, http.StatusRequestEntityTooLarge, 41301, "file too large")
 	case errors.Is(err, documentsvc.ErrPathTraversal):
 		failure(c, http.StatusBadRequest, 40004, "file path is not allowed")
+	case errors.Is(err, documentsvc.ErrFileTypeMismatch):
+		failure(c, http.StatusBadRequest, 40007, "file content does not match its extension")
+	case errors.Is(err, documentsvc.ErrParseTimeout):
+		failure(c, http.StatusRequestTimeout, 40801, "document parsing timed out")
+	case errors.Is(err, documentsvc.ErrBlockLimitExceeded), errors.Is(err, documentsvc.ErrPageLimitExceeded):
+		failure(c, http.StatusUnprocessableEntity, 42201, err.Error())
 	case errors.Is(err, documentsvc.ErrInvalidFile), errors.Is(err, documentsvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, documentsvc.ErrInvalidQualityJSON):

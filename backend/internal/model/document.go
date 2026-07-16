@@ -14,6 +14,7 @@ const (
 	DocumentFileTypeText     = "txt"
 	DocumentFileTypeDocx     = "docx"
 	DocumentFileTypeXlsx     = "xlsx"
+	DocumentFileTypePDF      = "pdf"
 )
 
 type KBDocument struct {

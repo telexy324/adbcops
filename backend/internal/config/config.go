@@ -24,6 +24,9 @@ const (
 	defaultMaxUploadBytes  = 52428800
 	defaultRAGChunkSize    = 800
 	defaultRAGChunkOverlap = 100
+	defaultParseMaxPages   = 1000
+	defaultParseMaxBlocks  = 50000
+	defaultParseTimeout    = 120
 )
 
 var allowedSSLMode = map[string]struct{}{
@@ -71,6 +74,12 @@ type RAGConfig struct {
 	ChunkOverlap int
 }
 
+type KnowledgeParseConfig struct {
+	MaxPages  int
+	MaxBlocks int
+	Timeout   time.Duration
+}
+
 // DSN returns a PostgreSQL URL. The returned value contains the database
 // password and must only be passed directly to database drivers.
 func (c DatabaseConfig) DSN() string {
@@ -88,14 +97,15 @@ func (c DatabaseConfig) DSN() string {
 
 // Config contains the process-level settings needed by the HTTP server.
 type Config struct {
-	Environment string
-	Port        int
-	Timezone    string
-	Database    DatabaseConfig
-	Auth        AuthConfig
-	Credential  CredentialConfig
-	FileStorage FileStorageConfig
-	RAG         RAGConfig
+	Environment    string
+	Port           int
+	Timezone       string
+	Database       DatabaseConfig
+	Auth           AuthConfig
+	Credential     CredentialConfig
+	FileStorage    FileStorageConfig
+	RAG            RAGConfig
+	KnowledgeParse KnowledgeParseConfig
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -129,17 +139,50 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	knowledgeParse, err := loadKnowledgeParseConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		Environment: valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
-		Port:        port,
-		Timezone:    timezone,
-		Database:    database,
-		Auth:        auth,
-		Credential:  credential,
-		FileStorage: fileStorage,
-		RAG:         rag,
+		Environment:    valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
+		Port:           port,
+		Timezone:       timezone,
+		Database:       database,
+		Auth:           auth,
+		Credential:     credential,
+		FileStorage:    fileStorage,
+		RAG:            rag,
+		KnowledgeParse: knowledgeParse,
 	}, nil
+}
+
+func loadKnowledgeParseConfig() (KnowledgeParseConfig, error) {
+	maxPages, err := loadPositiveInt("KNOWLEDGE_PARSE_MAX_PAGES", defaultParseMaxPages, 100000)
+	if err != nil {
+		return KnowledgeParseConfig{}, err
+	}
+	maxBlocks, err := loadPositiveInt("KNOWLEDGE_PARSE_MAX_BLOCKS", defaultParseMaxBlocks, 1000000)
+	if err != nil {
+		return KnowledgeParseConfig{}, err
+	}
+	timeoutSeconds, err := loadPositiveInt("KNOWLEDGE_PARSE_TIMEOUT_SECONDS", defaultParseTimeout, 3600)
+	if err != nil {
+		return KnowledgeParseConfig{}, err
+	}
+	return KnowledgeParseConfig{MaxPages: maxPages, MaxBlocks: maxBlocks, Timeout: time.Duration(timeoutSeconds) * time.Second}, nil
+}
+
+func loadPositiveInt(name string, fallback, maximum int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 1 || parsed > maximum {
+		return 0, fmt.Errorf("invalid %s %q: must be from 1 to %d", name, raw, maximum)
+	}
+	return parsed, nil
 }
 
 func loadAuthConfig() (AuthConfig, error) {

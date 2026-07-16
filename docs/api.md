@@ -1,6 +1,6 @@
 # API
 
-API 契约基线见 [`features.md`](../features.md)。
+API 契约基线见 [`features.md`](../features-v1.2.md)。
 
 ## Auth
 

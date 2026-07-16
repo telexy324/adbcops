@@ -1,6 +1,6 @@
 # Database
 
-数据模型基线见 [`features.md`](../features.md)。
+数据模型基线见 [`features.md`](../features-v1.2.md)。
 
 当前已落地迁移：
 

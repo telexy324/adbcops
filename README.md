@@ -1,7 +1,7 @@
 # AI Native AIOps Platform
 
 AI 原生智能运维分析平台。项目需求、架构和研发任务以
-[`features.md`](./features.md) 为唯一主设计文档。
+[`features.md`](features-v1.2.md) 为唯一主设计文档。
 
 ## 当前阶段
 

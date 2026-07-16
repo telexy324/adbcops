@@ -162,7 +162,7 @@ func TestReprocessXlsxExtractsWorksheetText(t *testing.T) {
 
 func TestUploadRejectsUnsupportedFileType(t *testing.T) {
 	service := newTestService(t, newFakeRepository(), t.TempDir(), 1024)
-	_, err := service.Upload(context.Background(), &model.AppUser{ID: 1}, newFileHeader(t, "bad.pdf", "pdf"), UploadMetadata{})
+	_, err := service.Upload(context.Background(), &model.AppUser{ID: 1}, newFileHeader(t, "bad.exe", "binary"), UploadMetadata{})
 	if err != ErrUnsupportedExt {
 		t.Fatalf("Upload() error = %v, want ErrUnsupportedExt", err)
 	}

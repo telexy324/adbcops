@@ -66,6 +66,7 @@ type Service struct {
 	maxUploadBytes int64
 	chunkSize      int
 	chunkOverlap   int
+	parserRegistry *ParserRegistry
 }
 
 type UploadMetadata struct {
@@ -98,12 +99,23 @@ func NewService(documents Repository, localFileDir string, maxUploadBytes int64,
 	if chunkSize <= 0 || chunkOverlap < 0 || chunkOverlap >= chunkSize {
 		return nil, fmt.Errorf("invalid chunk settings")
 	}
-	return &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap}, nil
+	parserRegistry, err := NewDefaultParserRegistry(DefaultParseLimits())
+	if err != nil {
+		return nil, fmt.Errorf("initialize parser registry: %w", err)
+	}
+	return &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap, parserRegistry: parserRegistry}, nil
 }
 
 func (s *Service) WithQualityLLM(secrets SecretManager, client llmsvc.Client) *Service {
 	s.secrets = secrets
 	s.llmClient = client
+	return s
+}
+
+func (s *Service) WithParserRegistry(registry *ParserRegistry) *Service {
+	if registry != nil {
+		s.parserRegistry = registry
+	}
 	return s
 }
 
@@ -224,7 +236,7 @@ func (s *Service) Reprocess(ctx context.Context, actor *model.AppUser, id int64)
 	if err != nil {
 		return nil, err
 	}
-	content, err := ExtractText(document)
+	content, err := s.extractText(ctx, document.FilePath, document.FileName, document.FileType, document.ID, document.Title)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +294,7 @@ func (s *Service) UploadQualityStandard(ctx context.Context, actor *model.AppUse
 	if err := saveMultipartFile(fileHeader, storedPath, s.maxUploadBytes); err != nil {
 		return nil, err
 	}
-	content, err := ExtractTextFromFile(storedPath, fileType)
+	content, err := s.extractText(ctx, storedPath, originalName, fileType, 0, normalizedTitle)
 	if err != nil {
 		_ = os.Remove(storedPath)
 		return nil, err
@@ -481,7 +493,24 @@ func (s *Service) documentQualityContent(ctx context.Context, document *model.KB
 		}
 		return builder.String(), nil
 	}
-	return ExtractText(document)
+	return s.extractText(ctx, document.FilePath, document.FileName, document.FileType, document.ID, document.Title)
+}
+
+func (s *Service) extractText(ctx context.Context, path, fileName, fileType string, documentID int64, title string) (string, error) {
+	if s.parserRegistry == nil {
+		return ExtractTextFromFile(path, fileType)
+	}
+	ast, err := s.parserRegistry.Parse(ctx, ParseRequest{Path: path, FileName: fileName, FileType: fileType, DocumentID: documentID, Title: title})
+	if err != nil {
+		return "", err
+	}
+	var lines []string
+	appendBlockText(&lines, ast.Blocks)
+	text := strings.TrimSpace(strings.Join(lines, "\n"))
+	if text == "" {
+		return "", ErrInvalidFile
+	}
+	return text, nil
 }
 
 func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id int64, input ReviewDecision) (*model.KBDocument, error) {
@@ -566,6 +595,10 @@ func detectFileType(name string) (string, string, error) {
 		return model.DocumentFileTypeDocx, ext, nil
 	case ".xlsx":
 		return model.DocumentFileTypeXlsx, ext, nil
+	case ".pdf":
+		return model.DocumentFileTypePDF, ext, nil
+	case ".doc":
+		return "", "", ErrLegacyDocUnsupported
 	default:
 		return "", "", ErrUnsupportedExt
 	}

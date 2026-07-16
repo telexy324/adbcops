@@ -16,6 +16,7 @@ require (
 	k8s.io/api v0.31.4
 	k8s.io/apimachinery v0.31.4
 	k8s.io/client-go v0.31.4
+	rsc.io/pdf v0.1.1
 )
 
 require (

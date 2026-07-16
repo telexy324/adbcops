@@ -1,6 +1,6 @@
 # Security
 
-安全基线见 [`features.md`](../features.md)。平台默认只读，凭据不得以明文提交。
+安全基线见 [`features.md`](../features-v1.2.md)。平台默认只读，凭据不得以明文提交。
 
 ## 认证基线
 
