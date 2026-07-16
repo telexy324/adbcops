@@ -8,33 +8,34 @@ import (
 )
 
 type RouterDependencies struct {
-	AuditHandler           *AuditHandler
-	AuditRecorder          appmiddleware.AuditRecorder
-	AuthHandler            *AuthHandler
-	UserHandler            *UserHandler
-	ConversationHandler    *ConversationHandler
-	LLMHandler             *LLMHandler
-	DocumentHandler        *DocumentHandler
-	QualityStandardHandler *QualityStandardHandler
-	RAGHandler             *RAGHandler
-	DataSourceHandler      *DataSourceHandler
-	AnalysisHandler        *AnalysisHandler
-	EventHandler           *EventHandler
-	EvidenceHandler        *EvidenceHandler
-	TopologyHandler        *TopologyHandler
-	TimelineHandler        *TimelineHandler
-	CorrelationHandler     *CorrelationHandler
-	IncidentHandler        *IncidentHandler
-	ToolHandler            *ToolHandler
-	SkillHandler           *SkillHandler
-	AgentHandler           *AgentHandler
-	WorkflowHandler        *WorkflowHandler
-	SFTPHandler            *SFTPHandler
-	K8sHandler             *K8sHandler
-	MetricsHandler         *MetricsHandler
-	ReadinessCheck         ReadinessChecker
-	Authenticate           gin.HandlerFunc
-	RequireAdmin           gin.HandlerFunc
+	AuditHandler             *AuditHandler
+	AuditRecorder            appmiddleware.AuditRecorder
+	AuthHandler              *AuthHandler
+	UserHandler              *UserHandler
+	ConversationHandler      *ConversationHandler
+	LLMHandler               *LLMHandler
+	DocumentHandler          *DocumentHandler
+	QualityStandardHandler   *QualityStandardHandler
+	QualityEvaluationHandler *QualityEvaluationHandler
+	RAGHandler               *RAGHandler
+	DataSourceHandler        *DataSourceHandler
+	AnalysisHandler          *AnalysisHandler
+	EventHandler             *EventHandler
+	EvidenceHandler          *EvidenceHandler
+	TopologyHandler          *TopologyHandler
+	TimelineHandler          *TimelineHandler
+	CorrelationHandler       *CorrelationHandler
+	IncidentHandler          *IncidentHandler
+	ToolHandler              *ToolHandler
+	SkillHandler             *SkillHandler
+	AgentHandler             *AgentHandler
+	WorkflowHandler          *WorkflowHandler
+	SFTPHandler              *SFTPHandler
+	K8sHandler               *K8sHandler
+	MetricsHandler           *MetricsHandler
+	ReadinessCheck           ReadinessChecker
+	Authenticate             gin.HandlerFunc
+	RequireAdmin             gin.HandlerFunc
 }
 
 // NewRouter creates the HTTP router and installs the common middleware stack.
@@ -238,6 +239,13 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		qualityRoutes.POST("/quality-profiles", dependencies.RequireAdmin, dependencies.QualityStandardHandler.CreateProfile)
 		qualityRoutes.PUT("/quality-profiles/:id", dependencies.RequireAdmin, dependencies.QualityStandardHandler.UpdateProfile)
 		qualityRoutes.POST("/quality-profiles/:id/clone", dependencies.RequireAdmin, dependencies.QualityStandardHandler.CloneProfile)
+	}
+	if dependencies.QualityEvaluationHandler != nil && dependencies.Authenticate != nil {
+		evaluationRoutes := router.Group("/api/knowledge/evaluations")
+		evaluationRoutes.Use(dependencies.Authenticate)
+		evaluationRoutes.POST("", dependencies.QualityEvaluationHandler.Create)
+		evaluationRoutes.GET("/:id", dependencies.QualityEvaluationHandler.Get)
+		evaluationRoutes.GET("/:id/rule-results", dependencies.QualityEvaluationHandler.RuleResults)
 	}
 	if dependencies.DataSourceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		dataSourceRoutes := router.Group("/api/data-sources")

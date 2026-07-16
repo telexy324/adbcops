@@ -17,6 +17,7 @@
 - `000035_knowledge_document_versions`
 - `000036_quality_standard_model`
 - `000037_quality_standard_import`
+- `000038_deterministic_quality_evaluation`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
@@ -49,6 +50,7 @@
 - `000035`：创建 Knowledge Center 2.0 文档版本与 AST Block 表，并为升级前文档回填可识别的 legacy version。
 - `000036`：将旧版上传型标准表保留为 `kb_quality_standard_legacy`，创建版本化的 Standard、Profile、Criterion、Rule 表并写入内置默认标准。
 - `000037`：创建评分标准导入审计表，保留原始 Word/Excel 文件哈希、解析器版本、Warning、Validation Error、Preview 和生成的 Draft 关联。
+- `000038`：创建质量评估及 Rule Result 表，保存确定性评分、Hard Gate、Block Evidence、扣分原因和建议。
 
 ## Quality Standard 2.0
 
@@ -59,3 +61,10 @@
 - 服务层要求每个 Profile 的 Criterion 权重合计为 `1.0000`、最大分合计等于 `total_score`，并要求 rule key 在同一 Profile 内唯一。
 - `published` 标准不可更新结构；修改时必须创建新的 `(name, version)` 草稿。
 - `kb_quality_standard_import` 记录 `uploaded → validation_failed/awaiting_confirmation` 导入结果；`stored_file_path` 仅供服务端读取，不通过 API 返回。
+
+## Deterministic Quality Evaluation
+
+- `kb_quality_evaluation` 绑定不可变的 `document_version_id`、Published Profile 及 Profile 所属 Standard 版本。
+- `kb_quality_rule_result` 每条结果保存 finding status、分数、置信度和 JSON Block Evidence；同一次评估内 `(criterion_key, rule_key)` 唯一。
+- 明文凭据的 Evidence 只保存脱敏占位符，不写入检测到的原始 Secret。
+- `source=deterministic` 不会为 semantic/LLM Rule 生成评分；此类结果标记为 `manual_confirmation_required`。
