@@ -13,8 +13,13 @@ import (
 
 type DocumentRepository interface {
 	CreateDocument(ctx context.Context, document *model.KBDocument) error
+	CreateDocumentWithVersion(ctx context.Context, document *model.KBDocument, version *model.KBDocumentVersion) error
 	ListDocuments(ctx context.Context, userID *int64) ([]model.KBDocument, error)
 	FindDocumentByID(ctx context.Context, id int64) (*model.KBDocument, error)
+	FindDocumentVersionByID(ctx context.Context, id int64) (*model.KBDocumentVersion, error)
+	FindLatestDocumentVersion(ctx context.Context, documentID int64) (*model.KBDocumentVersion, error)
+	RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error)
+	ListDocumentVersionBlocks(ctx context.Context, versionID int64) ([]model.KBDocumentBlock, error)
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
@@ -35,6 +40,22 @@ func (r *GORMUserRepository) CreateDocument(ctx context.Context, document *model
 	return nil
 }
 
+func (r *GORMUserRepository) CreateDocumentWithVersion(ctx context.Context, document *model.KBDocument, version *model.KBDocumentVersion) error {
+	if document == nil || version == nil {
+		return fmt.Errorf("create kb document with version: invalid input")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(document).Error; err != nil {
+			return fmt.Errorf("create kb document: %w", err)
+		}
+		version.DocumentID = document.ID
+		if err := tx.Create(version).Error; err != nil {
+			return fmt.Errorf("create kb document version: %w", err)
+		}
+		return nil
+	})
+}
+
 func (r *GORMUserRepository) ListDocuments(ctx context.Context, userID *int64) ([]model.KBDocument, error) {
 	var documents []model.KBDocument
 	query := r.db.WithContext(ctx).Order("created_at DESC, id DESC")
@@ -53,6 +74,101 @@ func (r *GORMUserRepository) FindDocumentByID(ctx context.Context, id int64) (*m
 		return nil, mapRepositoryError(err)
 	}
 	return &document, nil
+}
+
+func (r *GORMUserRepository) FindDocumentVersionByID(ctx context.Context, id int64) (*model.KBDocumentVersion, error) {
+	var version model.KBDocumentVersion
+	if err := r.db.WithContext(ctx).First(&version, id).Error; err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	return &version, nil
+}
+
+func (r *GORMUserRepository) FindLatestDocumentVersion(ctx context.Context, documentID int64) (*model.KBDocumentVersion, error) {
+	var version model.KBDocumentVersion
+	if err := r.db.WithContext(ctx).
+		Where("document_id = ?", documentID).
+		Order("created_at DESC, id DESC").
+		First(&version).Error; err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	return &version, nil
+}
+
+func (r *GORMUserRepository) RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error) {
+	var saved model.KBDocumentVersion
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var base model.KBDocumentVersion
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&base, versionID).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		target := base
+		if len(base.ParseQuality) > 0 {
+			var maximum int
+			if err := tx.Model(&model.KBDocumentVersion{}).
+				Where("document_id = ? AND version = ?", base.DocumentID, base.Version).
+				Select("COALESCE(MAX(revision_no), 0)").Scan(&maximum).Error; err != nil {
+				return fmt.Errorf("find latest document parse revision: %w", err)
+			}
+			target.ID = 0
+			target.RevisionNo = maximum + 1
+			target.ParserName = nil
+			target.ParserVersion = nil
+			target.Language = nil
+			target.Metadata = nil
+			target.DocumentSchema = nil
+			target.ParseQuality = nil
+			target.ContentSummary = nil
+			target.Status = model.DocumentVersionStatusProcessing
+			target.CreatedAt = time.Time{}
+			target.UpdatedAt = time.Time{}
+			if err := tx.Create(&target).Error; err != nil {
+				return fmt.Errorf("create document parse revision: %w", err)
+			}
+		}
+		updates := map[string]any{
+			"parser_name": parserName, "parser_version": parserVersion, "language": language,
+			"metadata": metadata, "parse_quality": parseQuality, "status": status, "updated_at": time.Now().UTC(),
+		}
+		if err := tx.Model(&model.KBDocumentVersion{}).Where("id = ?", target.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update document parse result: %w", err)
+		}
+		blockIDs := make(map[string]int64, len(blocks))
+		for index := range blocks {
+			blocks[index].ID = 0
+			blocks[index].DocumentVersionID = target.ID
+			if blocks[index].ParentBlockKey != nil {
+				parentID, ok := blockIDs[*blocks[index].ParentBlockKey]
+				if !ok {
+					return fmt.Errorf("create document block %s: parent %s not found", blocks[index].BlockKey, *blocks[index].ParentBlockKey)
+				}
+				blocks[index].ParentBlockID = &parentID
+			}
+			if err := tx.Create(&blocks[index]).Error; err != nil {
+				return fmt.Errorf("create document block %s: %w", blocks[index].BlockKey, err)
+			}
+			blockIDs[blocks[index].BlockKey] = blocks[index].ID
+		}
+		if err := tx.First(&saved, target.ID).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &saved, nil
+}
+
+func (r *GORMUserRepository) ListDocumentVersionBlocks(ctx context.Context, versionID int64) ([]model.KBDocumentBlock, error) {
+	var blocks []model.KBDocumentBlock
+	if err := r.db.WithContext(ctx).
+		Where("document_version_id = ?", versionID).
+		Order("order_no ASC, id ASC").
+		Find(&blocks).Error; err != nil {
+		return nil, fmt.Errorf("list document version blocks: %w", err)
+	}
+	return blocks, nil
 }
 
 func (r *GORMUserRepository) ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error {

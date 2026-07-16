@@ -3,6 +3,7 @@ package document
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,12 +38,18 @@ var (
 	ErrUnsupportedExt      = errors.New("unsupported file type")
 	ErrInvalidReviewAction = errors.New("invalid review action")
 	ErrCannotPublish       = errors.New("document cannot be published")
+	ErrParseQualityFailed  = errors.New("document parsing failed or parse quality is insufficient")
 )
 
 type Repository interface {
 	CreateDocument(ctx context.Context, document *model.KBDocument) error
+	CreateDocumentWithVersion(ctx context.Context, document *model.KBDocument, version *model.KBDocumentVersion) error
 	ListDocuments(ctx context.Context, userID *int64) ([]model.KBDocument, error)
 	FindDocumentByID(ctx context.Context, id int64) (*model.KBDocument, error)
+	FindDocumentVersionByID(ctx context.Context, id int64) (*model.KBDocumentVersion, error)
+	FindLatestDocumentVersion(ctx context.Context, documentID int64) (*model.KBDocumentVersion, error)
+	RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error)
+	ListDocumentVersionBlocks(ctx context.Context, versionID int64) ([]model.KBDocumentBlock, error)
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
@@ -181,6 +188,11 @@ func (s *Service) Upload(ctx context.Context, actor *model.AppUser, fileHeader *
 	if err := saveMultipartFile(fileHeader, storedPath, s.maxUploadBytes); err != nil {
 		return nil, err
 	}
+	fileHash, err := sha256File(storedPath)
+	if err != nil {
+		_ = os.Remove(storedPath)
+		return nil, err
+	}
 
 	createdBy := actor.ID
 	document := &model.KBDocument{
@@ -198,7 +210,17 @@ func (s *Service) Upload(ctx context.Context, actor *model.AppUser, fileHeader *
 		QualityScore:  0,
 		CreatedBy:     &createdBy,
 	}
-	if err := s.documents.CreateDocument(ctx, document); err != nil {
+	documentVersion := &model.KBDocumentVersion{
+		Version:    version,
+		RevisionNo: 1,
+		FileName:   originalName,
+		FilePath:   storedPath,
+		FileType:   fileType,
+		FileHash:   fileHash,
+		Status:     model.DocumentVersionStatusDraft,
+		CreatedBy:  &createdBy,
+	}
+	if err := s.documents.CreateDocumentWithVersion(ctx, document, documentVersion); err != nil {
 		_ = os.Remove(storedPath)
 		return nil, fmt.Errorf("create document record: %w", err)
 	}
@@ -236,10 +258,20 @@ func (s *Service) Reprocess(ctx context.Context, actor *model.AppUser, id int64)
 	if err != nil {
 		return nil, err
 	}
-	content, err := s.extractText(ctx, document.FilePath, document.FileName, document.FileType, document.ID, document.Title)
+	version, err := s.documents.FindLatestDocumentVersion(ctx, document.ID)
 	if err != nil {
 		return nil, err
 	}
+	parsed, err := s.ParseDocumentVersion(ctx, actor, version.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !parsed.ParseQuality.ParseSuccess {
+		return nil, ErrParseQualityFailed
+	}
+	var lines []string
+	appendBlockText(&lines, parsed.Blocks)
+	content := strings.TrimSpace(strings.Join(lines, "\n"))
 	chunks := BuildChunks(document, content, s.chunkSize, s.chunkOverlap)
 	if len(chunks) == 0 {
 		return nil, ErrInvalidFile
@@ -338,6 +370,9 @@ func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id in
 	if err != nil {
 		return nil, QualityResult{}, err
 	}
+	if err := s.ensureParseSuccessful(ctx, document.ID); err != nil {
+		return nil, QualityResult{}, err
+	}
 	result, normalized, err := ParseQualityResult(rawResult)
 	if err != nil {
 		return nil, QualityResult{}, err
@@ -359,6 +394,9 @@ func (s *Service) AutoReviewQuality(ctx context.Context, actor *model.AppUser, i
 	}
 	document, err := s.documents.FindDocumentByID(ctx, id)
 	if err != nil {
+		return nil, QualityResult{}, err
+	}
+	if err := s.ensureParseSuccessful(ctx, document.ID); err != nil {
 		return nil, QualityResult{}, err
 	}
 	content, err := s.documentQualityContent(ctx, document)
@@ -511,6 +549,19 @@ func (s *Service) extractText(ctx context.Context, path, fileName, fileType stri
 		return "", ErrInvalidFile
 	}
 	return text, nil
+}
+
+func sha256File(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open document for hashing: %w", err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("hash document: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id int64, input ReviewDecision) (*model.KBDocument, error) {

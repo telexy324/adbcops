@@ -205,6 +205,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		}
 		documentRoutes.GET("", dependencies.DocumentHandler.List)
 		documentRoutes.GET("/:id", dependencies.DocumentHandler.Get)
+		documentRoutes.GET("/:id/versions/latest", dependencies.DocumentHandler.LatestVersion)
 		documentRoutes.GET("/:id/chunks", dependencies.DocumentHandler.Chunks)
 		if dependencies.RequireAdmin != nil {
 			documentRoutes.POST("/:id/review", dependencies.RequireAdmin, dependencies.DocumentHandler.Review)
@@ -214,6 +215,9 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		knowledgeRoutes := router.Group("/api/knowledge")
 		knowledgeRoutes.Use(dependencies.Authenticate)
 		knowledgeRoutes.POST("/search", dependencies.DocumentHandler.Search)
+		knowledgeRoutes.GET("/document-versions/:versionId", dependencies.DocumentHandler.GetVersion)
+		knowledgeRoutes.POST("/document-versions/:versionId/parse", dependencies.DocumentHandler.ParseVersion)
+		knowledgeRoutes.GET("/document-versions/:versionId/blocks", dependencies.DocumentHandler.ParsedStructure)
 		if dependencies.RAGHandler != nil {
 			knowledgeRoutes.POST("/ask", dependencies.RAGHandler.Ask)
 		}

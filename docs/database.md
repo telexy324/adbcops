@@ -14,10 +14,13 @@
 - `000008_create_qa_records`
 - `000009_create_data_sources`
 - `000010_create_analysis_tasks`
+- `000035_knowledge_document_versions`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
 `kb_document_review` 保存管理员审核动作、流转前后状态和审核备注。
+`kb_document_version` 保存原文件哈希、Parser 版本、解析状态和独立 parse quality；`revision_no` 使重新解析不会覆盖历史结果。
+`kb_document_block` 保存统一 AST，使用 `parent_block_id`、`order_no`、`page_no` 和 `section_path` 保留结构与顺序。
 `qa_record` 保存 RAG 问答审计记录、改写 query、引用和召回数量。
 `credential_secret` 保存加密后的数据源凭据；`data_source.config` 只保存非敏感配置。
 `analysis_task` 保存分析请求、状态、摘要、结构化结果与错误信息。
@@ -41,3 +44,4 @@
 - `000008`：创建 RAG 问答记录表。
 - `000009`：创建统一数据源与加密凭据表。
 - `000010`：创建分析任务表。
+- `000035`：创建 Knowledge Center 2.0 文档版本与 AST Block 表，并为升级前文档回填可识别的 legacy version。

@@ -229,15 +229,19 @@ Content-Type: application/json
 
 ## Knowledge Document
 
-文档接口要求登录。当前上传阶段仅接收 `.md` 与 `.txt`，最大文件大小由 `MAX_UPLOAD_BYTES` 控制，默认 50MB。上传记录会保存 `createdBy`。
+文档接口要求登录。当前接收 `.md`、`.txt`、`.docx`、`.xlsx` 与 text PDF；扫描 PDF 会记录 `ocr_required`，`.doc` 会返回转换为 `.docx` 的明确提示。最大文件大小由 `MAX_UPLOAD_BYTES` 控制，默认 50MB。上传会原子创建文档主记录和初始 Document Version，并保存 `createdBy` 与文件 SHA-256。
 
 ```http
 POST /api/documents/upload
 GET  /api/documents
 GET  /api/documents/{id}
+GET  /api/documents/{id}/versions/latest
 GET  /api/documents/{id}/chunks
 POST /api/documents/{id}/review
 POST /api/documents/{id}/reprocess
+GET  /api/knowledge/document-versions/{versionId}
+POST /api/knowledge/document-versions/{versionId}/parse
+GET  /api/knowledge/document-versions/{versionId}/blocks
 ```
 
 ### 上传文档
@@ -258,14 +262,25 @@ tags=["payment","runbook"]
 
 服务端只使用原始文件名作为元数据，实际存储文件名由服务端随机生成；非法扩展名、路径穿越文件名和超限文件会被拒绝。响应不返回服务器本地 `file_path`。
 
-### 解析与切片
+### 结构化解析
+
+```http
+GET  /api/documents/{id}/versions/latest
+GET  /api/knowledge/document-versions/{versionId}
+POST /api/knowledge/document-versions/{versionId}/parse
+GET  /api/knowledge/document-versions/{versionId}/blocks
+```
+
+解析响应包含 `version`、独立的 `parseQuality`、`warnings` 和树形 `blocks`。Block 保留稳定的 key/order、父子关系、页码、section path、attributes 和内容哈希。首次解析写入 revision 1；再次解析已尝试过的版本会生成递增 revision，历史 AST 不会被覆盖。解析失败的版本状态为 `failed`，且正式评分接口返回 `42202`。
+
+### 兼容切片接口
 
 ```http
 POST /api/documents/{id}/reprocess
 GET  /api/documents/{id}/chunks
 ```
 
-`reprocess` 会读取已上传原文，按 Markdown 标题、空行段落和固定长度规则生成 `kb_chunk`。默认 `RAG_CHUNK_SIZE=800`、`RAG_CHUNK_OVERLAP=100`，返回的 `chunkIndex` 从 0 开始连续递增，空白 chunk 会被丢弃。
+`reprocess` 先创建并持久化新的 parse revision，再为旧版检索链路生成兼容 `kb_chunk`。默认 `RAG_CHUNK_SIZE=800`、`RAG_CHUNK_OVERLAP=100`，返回的 `chunkIndex` 从 0 开始连续递增，空白 chunk 会被丢弃。
 每个 chunk 会生成 `summary`、`keywords`、`possibleQuestions` 和 `searchText`，供检索召回使用。
 
 ### 文档质检与审核发布

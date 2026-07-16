@@ -63,6 +63,32 @@ type chunkResponse struct {
 	CreatedAt     string  `json:"createdAt"`
 }
 
+type documentVersionResponse struct {
+	ID            int64           `json:"id"`
+	DocumentID    int64           `json:"documentId"`
+	Version       string          `json:"version"`
+	RevisionNo    int             `json:"revisionNo"`
+	FileName      string          `json:"fileName"`
+	FileType      string          `json:"fileType"`
+	FileHash      string          `json:"fileHash"`
+	ParserName    *string         `json:"parserName,omitempty"`
+	ParserVersion *string         `json:"parserVersion,omitempty"`
+	Language      *string         `json:"language,omitempty"`
+	Status        string          `json:"status"`
+	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	ParseQuality  json.RawMessage `json:"parseQuality,omitempty"`
+	CreatedBy     *int64          `json:"createdBy,omitempty"`
+	CreatedAt     string          `json:"createdAt"`
+	UpdatedAt     string          `json:"updatedAt"`
+}
+
+type parsedStructureResponse struct {
+	Version      documentVersionResponse     `json:"version"`
+	ParseQuality documentsvc.ParseQuality    `json:"parseQuality"`
+	Warnings     []documentsvc.ParseWarning  `json:"warnings"`
+	Blocks       []documentsvc.DocumentBlock `json:"blocks"`
+}
+
 type reviewDocumentRequest struct {
 	Result      json.RawMessage `json:"result"`
 	Action      string          `json:"action"`
@@ -179,11 +205,85 @@ func (h *DocumentHandler) Reprocess(c *gin.Context) {
 	if handleDocumentError(c, err, "reprocess document failed") {
 		return
 	}
+	latestVersion, err := h.service.GetLatestDocumentVersion(c.Request.Context(), actor, documentID)
+	if handleDocumentError(c, err, "get parsed document version failed") {
+		return
+	}
 	success(c, gin.H{
-		"documentId": documentID,
-		"chunkCount": len(chunks),
-		"chunks":     toChunkResponses(chunks),
+		"documentId":      documentID,
+		"documentVersion": toDocumentVersionResponse(latestVersion),
+		"chunkCount":      len(chunks),
+		"chunks":          toChunkResponses(chunks),
 	})
+}
+
+func (h *DocumentHandler) LatestVersion(c *gin.Context) {
+	actor, documentID, ok := currentUserAndDocumentID(c)
+	if !ok {
+		return
+	}
+	version, err := h.service.GetLatestDocumentVersion(c.Request.Context(), actor, documentID)
+	if handleDocumentError(c, err, "get latest document version failed") {
+		return
+	}
+	success(c, toDocumentVersionResponse(version))
+}
+
+func (h *DocumentHandler) GetVersion(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	version, err := h.service.GetDocumentVersion(c.Request.Context(), actor, versionID)
+	if handleDocumentError(c, err, "get document version failed") {
+		return
+	}
+	success(c, toDocumentVersionResponse(version))
+}
+
+func (h *DocumentHandler) ParseVersion(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	structure, err := h.service.ParseDocumentVersion(c.Request.Context(), actor, versionID)
+	if handleDocumentError(c, err, "parse document version failed") {
+		return
+	}
+	success(c, toParsedStructureResponse(structure))
+}
+
+func (h *DocumentHandler) ParsedStructure(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	structure, err := h.service.GetParsedStructure(c.Request.Context(), actor, versionID)
+	if handleDocumentError(c, err, "get parsed document structure failed") {
+		return
+	}
+	success(c, toParsedStructureResponse(structure))
+}
+
+func parseVersionID(c *gin.Context) (int64, bool) {
+	versionID, err := strconv.ParseInt(c.Param("versionId"), 10, 64)
+	if err != nil || versionID <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return 0, false
+	}
+	return versionID, true
 }
 
 func (h *DocumentHandler) Chunks(c *gin.Context) {
@@ -315,6 +415,8 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusRequestTimeout, 40801, "document parsing timed out")
 	case errors.Is(err, documentsvc.ErrBlockLimitExceeded), errors.Is(err, documentsvc.ErrPageLimitExceeded):
 		failure(c, http.StatusUnprocessableEntity, 42201, err.Error())
+	case errors.Is(err, documentsvc.ErrParseQualityFailed):
+		failure(c, http.StatusUnprocessableEntity, 42202, err.Error())
 	case errors.Is(err, documentsvc.ErrInvalidFile), errors.Is(err, documentsvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
 	case errors.Is(err, documentsvc.ErrInvalidQualityJSON):
@@ -333,6 +435,29 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusInternalServerError, 50040, fallback)
 	}
 	return true
+}
+
+func toDocumentVersionResponse(version *model.KBDocumentVersion) documentVersionResponse {
+	if version == nil {
+		return documentVersionResponse{}
+	}
+	return documentVersionResponse{
+		ID: version.ID, DocumentID: version.DocumentID, Version: version.Version, RevisionNo: version.RevisionNo,
+		FileName: version.FileName, FileType: version.FileType, FileHash: version.FileHash,
+		ParserName: version.ParserName, ParserVersion: version.ParserVersion, Language: version.Language,
+		Status: version.Status, Metadata: json.RawMessage(version.Metadata), ParseQuality: json.RawMessage(version.ParseQuality),
+		CreatedBy: version.CreatedBy, CreatedAt: version.CreatedAt.Format(time.RFC3339), UpdatedAt: version.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func toParsedStructureResponse(structure *documentsvc.ParsedStructure) parsedStructureResponse {
+	if structure == nil {
+		return parsedStructureResponse{}
+	}
+	return parsedStructureResponse{
+		Version: toDocumentVersionResponse(&structure.Version), ParseQuality: structure.ParseQuality,
+		Warnings: structure.Warnings, Blocks: structure.Blocks,
+	}
 }
 
 func toDocumentResponse(document *model.KBDocument) documentResponse {

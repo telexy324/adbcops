@@ -17,6 +17,13 @@ const (
 	DocumentFileTypePDF      = "pdf"
 )
 
+const (
+	DocumentVersionStatusDraft      = "draft"
+	DocumentVersionStatusProcessing = "processing"
+	DocumentVersionStatusReviewing  = "reviewing"
+	DocumentVersionStatusFailed     = "failed"
+)
+
 type KBDocument struct {
 	ID            int64      `gorm:"column:id;primaryKey" json:"id"`
 	Title         string     `gorm:"column:title;size:255;not null" json:"title"`
@@ -53,6 +60,54 @@ const (
 func (KBDocument) TableName() string {
 	return "kb_document"
 }
+
+type KBDocumentVersion struct {
+	ID             int64      `gorm:"column:id;primaryKey" json:"id"`
+	DocumentID     int64      `gorm:"column:document_id;not null" json:"documentId"`
+	Version        string     `gorm:"column:version;size:50;not null" json:"version"`
+	RevisionNo     int        `gorm:"column:revision_no;not null" json:"revisionNo"`
+	FileName       string     `gorm:"column:file_name;size:255;not null" json:"fileName"`
+	FilePath       string     `gorm:"column:file_path;not null" json:"-"`
+	FileType       string     `gorm:"column:file_type;size:50;not null" json:"fileType"`
+	FileHash       string     `gorm:"column:file_hash;size:128;not null" json:"fileHash"`
+	ParserName     *string    `gorm:"column:parser_name;size:100" json:"parserName,omitempty"`
+	ParserVersion  *string    `gorm:"column:parser_version;size:50" json:"parserVersion,omitempty"`
+	Language       *string    `gorm:"column:language;size:30" json:"language,omitempty"`
+	Status         string     `gorm:"column:status;size:30;not null" json:"status"`
+	Metadata       []byte     `gorm:"column:metadata;type:jsonb" json:"metadata,omitempty"`
+	DocumentSchema []byte     `gorm:"column:document_schema;type:jsonb" json:"documentSchema,omitempty"`
+	ParseQuality   []byte     `gorm:"column:parse_quality;type:jsonb" json:"parseQuality,omitempty"`
+	ContentSummary *string    `gorm:"column:content_summary" json:"contentSummary,omitempty"`
+	ValidFrom      *time.Time `gorm:"column:valid_from" json:"validFrom,omitempty"`
+	ValidUntil     *time.Time `gorm:"column:valid_until" json:"validUntil,omitempty"`
+	ReviewDueAt    *time.Time `gorm:"column:review_due_at" json:"reviewDueAt,omitempty"`
+	CreatedBy      *int64     `gorm:"column:created_by" json:"createdBy,omitempty"`
+	ReviewedBy     *int64     `gorm:"column:reviewed_by" json:"reviewedBy,omitempty"`
+	CreatedAt      time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ReviewedAt     *time.Time `gorm:"column:reviewed_at" json:"reviewedAt,omitempty"`
+}
+
+func (KBDocumentVersion) TableName() string { return "kb_document_version" }
+
+type KBDocumentBlock struct {
+	ID                int64     `gorm:"column:id;primaryKey" json:"id"`
+	DocumentVersionID int64     `gorm:"column:document_version_id;not null" json:"documentVersionId"`
+	BlockKey          string    `gorm:"column:block_key;size:100;not null" json:"blockKey"`
+	ParentBlockID     *int64    `gorm:"column:parent_block_id" json:"parentBlockId,omitempty"`
+	BlockType         string    `gorm:"column:block_type;size:50;not null" json:"blockType"`
+	Level             int       `gorm:"column:level" json:"level"`
+	OrderNo           int       `gorm:"column:order_no;not null" json:"orderNo"`
+	PageNo            *int      `gorm:"column:page_no" json:"pageNo,omitempty"`
+	SectionPath       []byte    `gorm:"column:section_path;type:jsonb" json:"sectionPath,omitempty"`
+	TextContent       string    `gorm:"column:text_content" json:"textContent"`
+	Attributes        []byte    `gorm:"column:attributes;type:jsonb" json:"attributes,omitempty"`
+	ContentHash       *string   `gorm:"column:content_hash;size:128" json:"contentHash,omitempty"`
+	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	ParentBlockKey    *string   `gorm:"-" json:"-"`
+}
+
+func (KBDocumentBlock) TableName() string { return "kb_document_block" }
 
 type KBQualityStandard struct {
 	ID        int64     `gorm:"column:id;primaryKey" json:"id"`

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	llmsvc "aiops-platform/backend/internal/llm"
 	"aiops-platform/backend/internal/model"
@@ -203,6 +204,9 @@ func TestReviewQualitySetsStatusByScore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
+	if _, err := service.Reprocess(context.Background(), owner, document.ID); err != nil {
+		t.Fatalf("Reprocess() error = %v", err)
+	}
 
 	if _, _, err := service.ReviewQuality(context.Background(), owner, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`)); !errors.Is(err, ErrAdminRequired) {
 		t.Fatalf("ReviewQuality(non-admin) error = %v, want ErrAdminRequired", err)
@@ -306,6 +310,9 @@ func TestReviewDecisionRequiresAdminAndPublishableDocument(t *testing.T) {
 	document, err := service.Upload(context.Background(), owner, newFileHeader(t, "guide.md", "# hello"), UploadMetadata{Title: "Guide"})
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
+	}
+	if _, err := service.Reprocess(context.Background(), owner, document.ID); err != nil {
+		t.Fatalf("Reprocess() error = %v", err)
 	}
 	if _, err := service.ReviewDecision(context.Background(), owner, document.ID, ReviewDecision{Action: model.DocumentReviewActionPublish}); !errors.Is(err, ErrAdminRequired) {
 		t.Fatalf("ReviewDecision(non-admin) error = %v, want ErrAdminRequired", err)
@@ -456,9 +463,13 @@ func minimalXlsx(t *testing.T, rows [][]string) []byte {
 
 type fakeRepository struct {
 	nextID         int64
+	nextVersionID  int64
+	nextBlockID    int64
 	nextChunkID    int64
 	nextStandardID int64
 	documents      map[int64]*model.KBDocument
+	versions       map[int64]*model.KBDocumentVersion
+	versionBlocks  map[int64][]model.KBDocumentBlock
 	chunks         map[int64][]model.KBChunk
 	standards      map[int64]*model.KBQualityStandard
 	llmConfig      *model.LLMConfig
@@ -468,9 +479,13 @@ type fakeRepository struct {
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
 		nextID:         1,
+		nextVersionID:  1,
+		nextBlockID:    1,
 		nextChunkID:    1,
 		nextStandardID: 1,
 		documents:      make(map[int64]*model.KBDocument),
+		versions:       make(map[int64]*model.KBDocumentVersion),
+		versionBlocks:  make(map[int64][]model.KBDocumentBlock),
 		chunks:         make(map[int64][]model.KBChunk),
 		standards:      make(map[int64]*model.KBQualityStandard),
 	}
@@ -480,6 +495,22 @@ func (f *fakeRepository) CreateDocument(_ context.Context, document *model.KBDoc
 	document.ID = f.nextID
 	f.nextID++
 	f.documents[document.ID] = document
+	return nil
+}
+
+func (f *fakeRepository) CreateDocumentWithVersion(ctx context.Context, document *model.KBDocument, version *model.KBDocumentVersion) error {
+	if err := f.CreateDocument(ctx, document); err != nil {
+		return err
+	}
+	version.ID = f.nextVersionID
+	f.nextVersionID++
+	version.DocumentID = document.ID
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = time.Now().UTC()
+		version.UpdatedAt = version.CreatedAt
+	}
+	copyVersion := *version
+	f.versions[version.ID] = &copyVersion
 	return nil
 }
 
@@ -499,6 +530,90 @@ func (f *fakeRepository) FindDocumentByID(_ context.Context, id int64) (*model.K
 		return nil, repository.ErrNotFound
 	}
 	return document, nil
+}
+
+func (f *fakeRepository) FindDocumentVersionByID(_ context.Context, id int64) (*model.KBDocumentVersion, error) {
+	version, ok := f.versions[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	copyVersion := *version
+	return &copyVersion, nil
+}
+
+func (f *fakeRepository) FindLatestDocumentVersion(_ context.Context, documentID int64) (*model.KBDocumentVersion, error) {
+	var latest *model.KBDocumentVersion
+	for _, version := range f.versions {
+		if version.DocumentID != documentID {
+			continue
+		}
+		if latest == nil || version.ID > latest.ID {
+			latest = version
+		}
+	}
+	if latest == nil {
+		return nil, repository.ErrNotFound
+	}
+	copyVersion := *latest
+	return &copyVersion, nil
+}
+
+func (f *fakeRepository) RecordDocumentVersionParse(_ context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error) {
+	base, ok := f.versions[versionID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	target := base
+	if len(base.ParseQuality) > 0 {
+		copyVersion := *base
+		copyVersion.ID = f.nextVersionID
+		f.nextVersionID++
+		maximumRevision := 0
+		for _, candidate := range f.versions {
+			if candidate.DocumentID == base.DocumentID && candidate.Version == base.Version && candidate.RevisionNo > maximumRevision {
+				maximumRevision = candidate.RevisionNo
+			}
+		}
+		copyVersion.RevisionNo = maximumRevision + 1
+		copyVersion.ParseQuality = nil
+		copyVersion.CreatedAt = time.Now().UTC()
+		target = &copyVersion
+		f.versions[target.ID] = target
+	}
+	target.ParserName = optionalTestString(parserName)
+	target.ParserVersion = optionalTestString(parserVersion)
+	target.Language = optionalTestString(language)
+	target.Metadata = append([]byte(nil), metadata...)
+	target.ParseQuality = append([]byte(nil), parseQuality...)
+	target.Status = status
+	target.UpdatedAt = time.Now().UTC()
+	blockIDs := map[string]int64{}
+	storedBlocks := make([]model.KBDocumentBlock, len(blocks))
+	for index := range blocks {
+		blocks[index].ID = f.nextBlockID
+		f.nextBlockID++
+		blocks[index].DocumentVersionID = target.ID
+		if blocks[index].ParentBlockKey != nil {
+			parentID := blockIDs[*blocks[index].ParentBlockKey]
+			blocks[index].ParentBlockID = &parentID
+		}
+		blockIDs[blocks[index].BlockKey] = blocks[index].ID
+		storedBlocks[index] = blocks[index]
+	}
+	f.versionBlocks[target.ID] = storedBlocks
+	copyVersion := *target
+	return &copyVersion, nil
+}
+
+func (f *fakeRepository) ListDocumentVersionBlocks(_ context.Context, versionID int64) ([]model.KBDocumentBlock, error) {
+	return append([]model.KBDocumentBlock(nil), f.versionBlocks[versionID]...), nil
+}
+
+func optionalTestString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func (f *fakeRepository) ReplaceDocumentChunks(_ context.Context, documentID int64, chunks []model.KBChunk) error {
