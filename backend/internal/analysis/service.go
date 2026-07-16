@@ -277,6 +277,13 @@ func (s *Service) generateLLMSummary(ctx context.Context, input RunInput, prepro
 		}
 	}
 	apiSecret := ""
+	appKey := ""
+	if config.AppKeyRef != nil && *config.AppKeyRef != "" && s.secrets != nil {
+		appKey, err = s.secrets.Decrypt(*config.AppKeyRef)
+		if err != nil {
+			return "", false
+		}
+	}
 	if config.APISecretRef != nil && *config.APISecretRef != "" && s.secrets != nil {
 		apiSecret, err = s.secrets.Decrypt(*config.APISecretRef)
 		if err != nil {
@@ -286,7 +293,9 @@ func (s *Service) generateLLMSummary(ctx context.Context, input RunInput, prepro
 	prompt := buildReportPrompt(input, preprocessed, citations)
 	response, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
+		Provider:    config.Provider,
 		APIKey:      apiKey,
+		AppKey:      appKey,
 		APISecret:   apiSecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,

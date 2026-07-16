@@ -1,0 +1,2 @@
+ALTER TABLE llm_config
+ADD COLUMN IF NOT EXISTS app_key_ref TEXT;

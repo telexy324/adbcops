@@ -20,6 +20,7 @@ type LLMConfig struct {
 	Model        string    `gorm:"column:model;size:120;not null" json:"model"`
 	Purpose      string    `gorm:"column:purpose;size:30;not null" json:"purpose"`
 	APIKeyRef    *string   `gorm:"column:api_key_ref" json:"-"`
+	AppKeyRef    *string   `gorm:"column:app_key_ref" json:"-"`
 	APISecretRef *string   `gorm:"column:api_secret_ref" json:"-"`
 	Temperature  float64   `gorm:"column:temperature;not null" json:"temperature"`
 	Enabled      bool      `gorm:"column:enabled;not null" json:"enabled"`

@@ -56,6 +56,7 @@ type Service struct {
 
 type modelCredential struct {
 	APIKey    string
+	AppKey    string
 	APISecret string
 }
 
@@ -306,6 +307,13 @@ func (s *Service) decryptModelCredential(config *model.LLMConfig) (modelCredenti
 		}
 		credential.APISecret = decrypted
 	}
+	if config.AppKeyRef != nil && *config.AppKeyRef != "" && s.secrets != nil {
+		decrypted, err := s.secrets.Decrypt(*config.AppKeyRef)
+		if err != nil {
+			return modelCredential{}, fmt.Errorf("decrypt app key: %w", err)
+		}
+		credential.AppKey = decrypted
+	}
 	return credential, nil
 }
 
@@ -460,7 +468,9 @@ func (s *Service) rewriteQuery(ctx context.Context, question string, config *mod
 	}
 	result, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
+		Provider:    config.Provider,
 		APIKey:      credential.APIKey,
+		AppKey:      credential.AppKey,
 		APISecret:   credential.APISecret,
 		Model:       config.Model,
 		Temperature: 0,
@@ -488,7 +498,9 @@ func (s *Service) answer(ctx context.Context, question, rewritten string, chunks
 	}
 	result, err := s.client.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
+		Provider:    config.Provider,
 		APIKey:      credential.APIKey,
+		AppKey:      credential.AppKey,
 		APISecret:   credential.APISecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,

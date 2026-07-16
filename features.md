@@ -2996,6 +2996,7 @@ CREATE TABLE llm_config (
     base_url TEXT NOT NULL,
     model VARCHAR(120) NOT NULL,
     api_key_ref TEXT,
+    app_key_ref TEXT,
     api_secret_ref TEXT,
     temperature NUMERIC(4,3) DEFAULT 0.2,
     enabled BOOLEAN NOT NULL DEFAULT true,
@@ -4871,9 +4872,13 @@ GET /api/health
 - llm_config；
 - 模型用途 purpose：chat / embedding / rerank；
 - API Key 加密；
+- Qwen 网关 App Key 加密；
 - API Secret 可选且加密；
 - 每种用途独立默认模型；
 - OpenAI-compatible client；
+- Qwen3 Chat Completions 网关兼容：Bearer Token、`app_key`、`app_secret`、`stream=false`、`enable_thinking=false`；
+- Base URL 支持服务根路径、`/v1` 路径和完整模型接口路径，避免重复拼接 `/v1`；
+- LLM HTTP 调用默认超时 180 秒，支持 Qwen3 等长耗时模型返回完整结果；
 - Embedding API；
 - Rerank API；
 - Test API；
@@ -4882,6 +4887,7 @@ GET /api/health
 验收：
 
 - 不返回明文 key；
+- 不返回明文 app key；
 - 不返回明文 secret；
 - 每种用途默认模型唯一；
 - 已有 LLM 配置可在配置中心编辑；
@@ -5201,10 +5207,12 @@ GET /api/health
 - Chat / Embedding / Rerank 及所有数据源点击 Test 后，页面必须明确通知测试成功或失败，并显示配置名称和后端结果/错误摘要；
 - 数据源保存或更新必须显示固定可见的成功/失败通知；前端校验失败不得仅依赖浏览器原生提示；
 - 凭据仅提交不回显。
+- Qwen 配置支持分别填写 Bearer Token、App Key 和 App Secret，留空编辑时保留已有值。
 
 验收：
 
 - LLM API Key 不在页面明文回显；
+- Qwen App Key / App Secret 不在页面明文回显；
 - Embedding 和 Rerank API Key 不在页面明文回显；
 - 数据源凭据不在页面明文回显；
 - 编辑配置时凭据不回显，留空表示不修改已保存凭据；

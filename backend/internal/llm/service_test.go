@@ -21,6 +21,7 @@ func TestCreateEncryptsAPIKeyAndDefaultIsUnique(t *testing.T) {
 		BaseURL:     "https://llm.example",
 		Model:       "model-a",
 		APIKey:      ptr("secret-key-a"),
+		AppKey:      ptr("secret-app-key-a"),
 		APISecret:   ptr("secret-secret-a"),
 		Temperature: 0.2,
 		Enabled:     true,
@@ -55,6 +56,9 @@ func TestCreateEncryptsAPIKeyAndDefaultIsUnique(t *testing.T) {
 	if first.APISecretRef == nil || strings.Contains(*first.APISecretRef, "secret-secret-a") {
 		t.Fatalf("api secret ref leaked plaintext: %v", first.APISecretRef)
 	}
+	if first.AppKeyRef == nil || strings.Contains(*first.AppKeyRef, "secret-app-key-a") {
+		t.Fatalf("app key ref leaked plaintext: %v", first.AppKeyRef)
+	}
 }
 
 func TestServiceTestUsesDecryptedCredentials(t *testing.T) {
@@ -68,6 +72,7 @@ func TestServiceTestUsesDecryptedCredentials(t *testing.T) {
 		BaseURL:     "https://llm.example",
 		Model:       "mock-model",
 		APIKey:      ptr("secret-key"),
+		AppKey:      ptr("app-key"),
 		APISecret:   ptr("secret-secret"),
 		Temperature: 0.2,
 		Enabled:     true,
@@ -83,7 +88,7 @@ func TestServiceTestUsesDecryptedCredentials(t *testing.T) {
 	if !result.OK || result.Content != "ok" {
 		t.Fatalf("result = %+v", result)
 	}
-	if client.last.APIKey != "secret-key" || client.last.APISecret != "secret-secret" || client.last.Messages[0].Content != "ping" {
+	if client.last.APIKey != "secret-key" || client.last.AppKey != "app-key" || client.last.APISecret != "secret-secret" || client.last.Messages[0].Content != "ping" {
 		t.Fatalf("client request = %+v", client.last)
 	}
 }
@@ -200,6 +205,9 @@ func (f *fakeRepository) UpdateLLMConfig(_ context.Context, id int64, updates re
 	}
 	if updates.APIKeyRefSet {
 		config.APIKeyRef = updates.APIKeyRef
+	}
+	if updates.AppKeyRefSet {
+		config.AppKeyRef = updates.AppKeyRef
 	}
 	if updates.APISecretRefSet {
 		config.APISecretRef = updates.APISecretRef

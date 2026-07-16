@@ -27,6 +27,8 @@ type LLMConfigUpdates struct {
 	Purpose         *string
 	APIKeyRef       *string
 	APIKeyRefSet    bool
+	AppKeyRef       *string
+	AppKeyRefSet    bool
 	APISecretRef    *string
 	APISecretRefSet bool
 	Temperature     *float64
@@ -118,6 +120,9 @@ func (r *GORMLLMRepository) UpdateLLMConfig(ctx context.Context, id int64, updat
 		}
 		if updates.APIKeyRefSet {
 			values["api_key_ref"] = updates.APIKeyRef
+		}
+		if updates.AppKeyRefSet {
+			values["app_key_ref"] = updates.AppKeyRef
 		}
 		if updates.APISecretRefSet {
 			values["api_secret_ref"] = updates.APISecretRef

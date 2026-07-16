@@ -28,6 +28,7 @@ type saveLLMConfigRequest struct {
 	Model       string   `json:"model" binding:"required"`
 	Purpose     string   `json:"purpose"`
 	APIKey      *string  `json:"apiKey"`
+	AppKey      *string  `json:"appKey"`
 	APISecret   *string  `json:"apiSecret"`
 	Temperature *float64 `json:"temperature"`
 	Enabled     *bool    `json:"enabled"`
@@ -41,6 +42,7 @@ type updateLLMConfigRequest struct {
 	Model       *string  `json:"model"`
 	Purpose     *string  `json:"purpose"`
 	APIKey      *string  `json:"apiKey"`
+	AppKey      *string  `json:"appKey"`
 	APISecret   *string  `json:"apiSecret"`
 	Temperature *float64 `json:"temperature"`
 	Enabled     *bool    `json:"enabled"`
@@ -62,6 +64,7 @@ type llmConfigResponse struct {
 	Enabled             bool    `json:"enabled"`
 	IsDefault           bool    `json:"isDefault"`
 	APIKeyConfigured    bool    `json:"apiKeyConfigured"`
+	AppKeyConfigured    bool    `json:"appKeyConfigured"`
 	APISecretConfigured bool    `json:"apiSecretConfigured"`
 	CreatedBy           *int64  `json:"createdBy,omitempty"`
 	CreatedAt           string  `json:"createdAt"`
@@ -106,6 +109,7 @@ func (h *LLMHandler) Create(c *gin.Context) {
 		Model:       request.Model,
 		Purpose:     request.Purpose,
 		APIKey:      request.APIKey,
+		AppKey:      request.AppKey,
 		APISecret:   request.APISecret,
 		Temperature: temperature,
 		Enabled:     enabled,
@@ -147,6 +151,7 @@ func (h *LLMHandler) Update(c *gin.Context) {
 		Model:       request.Model,
 		Purpose:     request.Purpose,
 		APIKey:      request.APIKey,
+		AppKey:      request.AppKey,
 		APISecret:   request.APISecret,
 		Temperature: request.Temperature,
 		Enabled:     request.Enabled,
@@ -238,6 +243,7 @@ func toLLMConfigResponse(config *model.LLMConfig) llmConfigResponse {
 		Enabled:             config.Enabled,
 		IsDefault:           config.IsDefault,
 		APIKeyConfigured:    config.APIKeyRef != nil && *config.APIKeyRef != "",
+		AppKeyConfigured:    config.AppKeyRef != nil && *config.AppKeyRef != "",
 		APISecretConfigured: config.APISecretRef != nil && *config.APISecretRef != "",
 		CreatedBy:           config.CreatedBy,
 		CreatedAt:           config.CreatedAt.Format(time.RFC3339),

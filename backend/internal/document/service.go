@@ -406,7 +406,9 @@ func (s *Service) buildLLMQualityResult(ctx context.Context, document *model.KBD
 	}
 	response, err := s.llmClient.Chat(ctx, llmsvc.ChatRequest{
 		BaseURL:     config.BaseURL,
+		Provider:    config.Provider,
 		APIKey:      credential.APIKey,
+		AppKey:      credential.AppKey,
 		APISecret:   credential.APISecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,
@@ -436,6 +438,7 @@ func (s *Service) buildLLMQualityResult(ctx context.Context, document *model.KBD
 
 type modelCredential struct {
 	APIKey    string
+	AppKey    string
 	APISecret string
 }
 
@@ -457,6 +460,13 @@ func (s *Service) decryptModelCredential(config *model.LLMConfig) (modelCredenti
 			return modelCredential{}, fmt.Errorf("decrypt api secret: %w", err)
 		}
 		credential.APISecret = decrypted
+	}
+	if config.AppKeyRef != nil && *config.AppKeyRef != "" {
+		decrypted, err := s.secrets.Decrypt(*config.AppKeyRef)
+		if err != nil {
+			return modelCredential{}, fmt.Errorf("decrypt app key: %w", err)
+		}
+		credential.AppKey = decrypted
 	}
 	return credential, nil
 }

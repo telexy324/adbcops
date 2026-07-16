@@ -145,6 +145,7 @@ const defaultLLMForm = {
   model: "gpt-compatible-model",
   purpose: "chat" as LLMPurpose,
   apiKey: "",
+  appKey: "",
   apiSecret: "",
   temperature: "0.2",
   enabled: true,
@@ -233,7 +234,12 @@ export function SettingsPage() {
       );
       setError(null);
       setEditingLLMId(null);
-      setLLMForm((current) => ({ ...current, apiKey: "", apiSecret: "" }));
+      setLLMForm((current) => ({
+        ...current,
+        apiKey: "",
+        appKey: "",
+        apiSecret: "",
+      }));
       queryClient.invalidateQueries({ queryKey: ["settings", "llm-configs"] });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
@@ -334,6 +340,7 @@ export function SettingsPage() {
         model: llmForm.model,
         purpose: llmForm.purpose,
         apiKey: llmForm.apiKey,
+        appKey: llmForm.appKey,
         apiSecret: llmForm.apiSecret,
         temperature: Number(llmForm.temperature),
         enabled: llmForm.enabled,
@@ -387,6 +394,7 @@ export function SettingsPage() {
       model: item.model,
       purpose: item.purpose,
       apiKey: "",
+      appKey: "",
       apiSecret: "",
       temperature: String(item.temperature),
       enabled: item.enabled,
@@ -541,7 +549,8 @@ export function SettingsPage() {
             <form className="space-y-4" onSubmit={submitLLM}>
               {editingLLMId && (
                 <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
-                  正在编辑 #{editingLLMId}。API Key / Secret 留空表示不修改。
+                  正在编辑 #{editingLLMId}。Bearer Token、App Key / Secret
+                  留空表示不修改。
                 </div>
               )}
               <div className="grid gap-3 md:grid-cols-2">
@@ -610,7 +619,7 @@ export function SettingsPage() {
                     <option value="rerank">Rerank</option>
                   </select>
                 </Field>
-                <Field label="API Key">
+                <Field label="API Key / Bearer Token">
                   <Input
                     type="password"
                     value={llmForm.apiKey}
@@ -623,7 +632,20 @@ export function SettingsPage() {
                     placeholder="保存后不回显"
                   />
                 </Field>
-                <Field label="API Secret（可选）">
+                <Field label="App Key（Qwen 网关可选）">
+                  <Input
+                    type="password"
+                    value={llmForm.appKey}
+                    onChange={(event) =>
+                      setLLMForm((current) => ({
+                        ...current,
+                        appKey: event.target.value,
+                      }))
+                    }
+                    placeholder="请求体 app_key，保存后不回显"
+                  />
+                </Field>
+                <Field label="API Secret / App Secret（可选）">
                   <Input
                     type="password"
                     value={llmForm.apiSecret}
@@ -633,7 +655,7 @@ export function SettingsPage() {
                         apiSecret: event.target.value,
                       }))
                     }
-                    placeholder="可为空，保存后不回显"
+                    placeholder="Qwen 请求体 app_secret，保存后不回显"
                   />
                 </Field>
                 <Field label="Temperature">
@@ -961,6 +983,9 @@ function LLMConfigRow({
             <Badge active={item.enabled}>enabled</Badge>
             <Badge active={item.isDefault}>default</Badge>
             <Badge active={item.apiKeyConfigured}>api key configured</Badge>
+            <Badge active={Boolean(item.appKeyConfigured)}>
+              app key configured
+            </Badge>
             <Badge active={item.apiSecretConfigured}>
               api secret configured
             </Badge>

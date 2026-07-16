@@ -821,7 +821,10 @@ describe("SettingsPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Embedding 向量模型")).toBeInTheDocument();
     expect(screen.getByText("Rerank 精排模型")).toBeInTheDocument();
-    expect(screen.getByText("API Secret（可选）")).toBeInTheDocument();
+    expect(screen.getByText("App Key（Qwen 网关可选）")).toBeInTheDocument();
+    expect(
+      screen.getByText("API Secret / App Secret（可选）"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "数据源配置" }),
     ).toBeInTheDocument();

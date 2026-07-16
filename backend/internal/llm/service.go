@@ -50,6 +50,7 @@ type SaveInput struct {
 	Model       string
 	Purpose     string
 	APIKey      *string
+	AppKey      *string
 	APISecret   *string
 	Temperature float64
 	Enabled     bool
@@ -64,6 +65,7 @@ type UpdateInput struct {
 	Model       *string
 	Purpose     *string
 	APIKey      *string
+	AppKey      *string
 	APISecret   *string
 	Temperature *float64
 	Enabled     *bool
@@ -106,6 +108,14 @@ func (s *Service) Create(ctx context.Context, input SaveInput) (*model.LLMConfig
 		apiKeyRef = &encrypted
 	}
 	var apiSecretRef *string
+	var appKeyRef *string
+	if input.AppKey != nil && strings.TrimSpace(*input.AppKey) != "" {
+		encrypted, err := s.secrets.Encrypt(strings.TrimSpace(*input.AppKey))
+		if err != nil {
+			return nil, fmt.Errorf("encrypt app key: %w", err)
+		}
+		appKeyRef = &encrypted
+	}
 	if input.APISecret != nil && strings.TrimSpace(*input.APISecret) != "" {
 		encrypted, err := s.secrets.Encrypt(strings.TrimSpace(*input.APISecret))
 		if err != nil {
@@ -120,6 +130,7 @@ func (s *Service) Create(ctx context.Context, input SaveInput) (*model.LLMConfig
 		Model:        normalized.Model,
 		Purpose:      normalized.Purpose,
 		APIKeyRef:    apiKeyRef,
+		AppKeyRef:    appKeyRef,
 		APISecretRef: apiSecretRef,
 		Temperature:  normalized.Temperature,
 		Enabled:      normalized.Enabled,
@@ -183,6 +194,17 @@ func (s *Service) Update(ctx context.Context, id int64, input UpdateInput) (*mod
 			updates.APIKeyRef = &encrypted
 		}
 	}
+	if input.AppKey != nil {
+		updates.AppKeyRefSet = true
+		appKey := strings.TrimSpace(*input.AppKey)
+		if appKey != "" {
+			encrypted, err := s.secrets.Encrypt(appKey)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt app key: %w", err)
+			}
+			updates.AppKeyRef = &encrypted
+		}
+	}
 	if input.APISecret != nil {
 		updates.APISecretRefSet = true
 		apiSecret := strings.TrimSpace(*input.APISecret)
@@ -230,6 +252,13 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 		}
 	}
 	apiSecret := ""
+	appKey := ""
+	if config.AppKeyRef != nil && *config.AppKeyRef != "" {
+		appKey, err = s.secrets.Decrypt(*config.AppKeyRef)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt app key: %w", err)
+		}
+	}
 	if config.APISecretRef != nil && *config.APISecretRef != "" {
 		apiSecret, err = s.secrets.Decrypt(*config.APISecretRef)
 		if err != nil {
@@ -295,7 +324,9 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 	}
 	result, err := s.client.Chat(ctx, ChatRequest{
 		BaseURL:     config.BaseURL,
+		Provider:    config.Provider,
 		APIKey:      apiKey,
+		AppKey:      appKey,
 		APISecret:   apiSecret,
 		Model:       config.Model,
 		Temperature: config.Temperature,

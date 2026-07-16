@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const defaultHTTPTimeout = 15 * time.Second
+const defaultHTTPTimeout = 180 * time.Second
 
 type ChatMessage struct {
 	Role    string `json:"role"`
@@ -32,7 +32,9 @@ type Usage struct {
 
 type ChatRequest struct {
 	BaseURL     string
+	Provider    string
 	APIKey      string
+	AppKey      string
 	APISecret   string
 	Model       string
 	Temperature float64
@@ -106,11 +108,21 @@ func NewOpenAICompatibleClient(httpClient *http.Client) *OpenAICompatibleClient 
 }
 
 func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error) {
-	endpoint := strings.TrimRight(req.BaseURL, "/") + "/v1/chat/completions"
+	endpoint := modelEndpoint(req.BaseURL, "/v1/chat/completions")
 	payload := map[string]any{
 		"model":       req.Model,
+		"stream":      false,
 		"temperature": req.Temperature,
 		"messages":    req.Messages,
+	}
+	if req.Provider == "qwen" {
+		if req.AppKey != "" {
+			payload["app_key"] = req.AppKey
+		}
+		if req.APISecret != "" {
+			payload["app_secret"] = req.APISecret
+		}
+		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -124,7 +136,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*Ch
 	if req.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+req.APIKey)
 	}
-	if req.APISecret != "" {
+	if req.APISecret != "" && req.Provider != "qwen" {
 		httpRequest.Header.Set("X-API-Secret", req.APISecret)
 	}
 	response, err := c.httpClient.Do(httpRequest)
@@ -137,7 +149,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*Ch
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("llm returned status %d", response.StatusCode)
+		return nil, responseStatusError("llm", response.StatusCode, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	}
 	var decoded struct {
 		Model   string `json:"model"`
@@ -182,7 +194,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*Ch
 }
 
 func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingResult, error) {
-	endpoint := strings.TrimRight(req.BaseURL, "/") + "/v1/embeddings"
+	endpoint := modelEndpoint(req.BaseURL, "/v1/embeddings")
 	payload := map[string]any{
 		"model": req.Model,
 		"input": req.Input,
@@ -212,7 +224,7 @@ func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest
 		return nil, fmt.Errorf("read embedding response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("embedding model returned status %d", response.StatusCode)
+		return nil, responseStatusError("embedding model", response.StatusCode, responseBody, req.APIKey, req.APISecret)
 	}
 	var decoded struct {
 		Model string `json:"model"`
@@ -251,7 +263,7 @@ func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest
 }
 
 func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) (*RerankResult, error) {
-	endpoint := strings.TrimRight(req.BaseURL, "/") + "/v1/rerank"
+	endpoint := modelEndpoint(req.BaseURL, "/v1/rerank")
 	payload := map[string]any{
 		"model":     req.Model,
 		"query":     req.Query,
@@ -285,7 +297,7 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 		return nil, fmt.Errorf("read rerank response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("rerank model returned status %d", response.StatusCode)
+		return nil, responseStatusError("rerank model", response.StatusCode, responseBody, req.APIKey, req.APISecret)
 	}
 	var decoded struct {
 		Model   string `json:"model"`
@@ -313,4 +325,31 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 			TotalTokens:  decoded.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+func modelEndpoint(baseURL, suffix string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(base, suffix) {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(suffix, "/v1/") {
+		return base + strings.TrimPrefix(suffix, "/v1")
+	}
+	return base + suffix
+}
+
+func responseStatusError(service string, status int, body []byte, secrets ...string) error {
+	detail := strings.TrimSpace(string(body))
+	for _, secret := range secrets {
+		if secret != "" {
+			detail = strings.ReplaceAll(detail, secret, "***")
+		}
+	}
+	if len(detail) > 2048 {
+		detail = detail[:2048] + "..."
+	}
+	if detail == "" {
+		return fmt.Errorf("%s returned status %d", service, status)
+	}
+	return fmt.Errorf("%s returned status %d: %s", service, status, detail)
 }
