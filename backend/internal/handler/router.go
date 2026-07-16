@@ -17,6 +17,7 @@ type RouterDependencies struct {
 	DocumentHandler          *DocumentHandler
 	QualityStandardHandler   *QualityStandardHandler
 	QualityEvaluationHandler *QualityEvaluationHandler
+	EmbeddingIndexHandler    *EmbeddingIndexHandler
 	RAGHandler               *RAGHandler
 	DataSourceHandler        *DataSourceHandler
 	AnalysisHandler          *AnalysisHandler
@@ -259,6 +260,16 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 			evaluationRoutes.POST("/:id/override", dependencies.RequireAdmin, dependencies.QualityEvaluationHandler.Override)
 			evaluationRoutes.POST("/:id/publish", dependencies.RequireAdmin, dependencies.QualityEvaluationHandler.Publish)
 		}
+	}
+	if dependencies.EmbeddingIndexHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		indexRoutes := router.Group("/api/knowledge")
+		indexRoutes.Use(dependencies.Authenticate)
+		indexRoutes.POST("/index-jobs", dependencies.RequireAdmin, dependencies.EmbeddingIndexHandler.Create)
+		indexRoutes.GET("/index-jobs/:id", dependencies.EmbeddingIndexHandler.Get)
+		indexRoutes.POST("/index-jobs/:id/build", dependencies.RequireAdmin, dependencies.EmbeddingIndexHandler.Build)
+		indexRoutes.POST("/index-jobs/:id/retry", dependencies.RequireAdmin, dependencies.EmbeddingIndexHandler.Retry)
+		indexRoutes.POST("/indexes/rebuild", dependencies.RequireAdmin, dependencies.EmbeddingIndexHandler.Rebuild)
+		indexRoutes.GET("/indexes/status", dependencies.EmbeddingIndexHandler.Status)
 	}
 	if dependencies.DataSourceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		dataSourceRoutes := router.Group("/api/data-sources")

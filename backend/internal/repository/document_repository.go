@@ -438,6 +438,8 @@ func (r *GORMUserRepository) ListPublishedChunkEmbeddings(ctx context.Context, m
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Where("kb_document.status = ?", model.DocumentStatusPublished).
 		Where("kb_chunk_embedding.model = ?", modelName).
+		Where("kb_chunk_embedding.status = ?", model.EmbeddingIndexReady).
+		Where("kb_chunk_embedding.content_hash = kb_chunk.content_hash").
 		Preload("Chunk").
 		Order("kb_chunk_embedding.updated_at DESC, kb_chunk_embedding.id DESC").
 		Limit(limit).
@@ -460,7 +462,9 @@ func (r *GORMUserRepository) ListPublishedChunksMissingEmbedding(ctx context.Con
 			r.db.Model(&model.KBChunkEmbedding{}).
 				Select("1").
 				Where("kb_chunk_embedding.chunk_id = kb_chunk.id").
-				Where("kb_chunk_embedding.model = ?", modelName),
+				Where("kb_chunk_embedding.model = ?", modelName).
+				Where("kb_chunk_embedding.status = ?", model.EmbeddingIndexReady).
+				Where("kb_chunk_embedding.content_hash = kb_chunk.content_hash"),
 		).
 		Order("kb_chunk.id ASC").
 		Limit(limit).
@@ -483,13 +487,35 @@ func (r *GORMUserRepository) UpsertChunkEmbeddings(ctx context.Context, embeddin
 		if !json.Valid(embeddings[index].Embedding) {
 			return fmt.Errorf("upsert kb chunk embeddings: invalid embedding json for chunk %d", embeddings[index].ChunkID)
 		}
+		if embeddings[index].ModelRevision == "" {
+			embeddings[index].ModelRevision = "runtime"
+		}
+		if embeddings[index].DistanceMetric == "" {
+			embeddings[index].DistanceMetric = "cosine"
+		}
+		if embeddings[index].Status == "" {
+			embeddings[index].Status = model.EmbeddingIndexReady
+		}
+		if embeddings[index].ContentHash == "" {
+			var chunk model.KBChunk
+			if err := r.db.WithContext(ctx).Select("content_hash").First(&chunk, embeddings[index].ChunkID).Error; err != nil {
+				return mapRepositoryError(err)
+			}
+			embeddings[index].ContentHash = chunk.ContentHash
+		}
+		embeddings[index].VectorData = string(embeddings[index].Embedding)
 	}
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "chunk_id"}, {Name: "model"}},
+		Columns: []clause.Column{{Name: "chunk_id"}, {Name: "embedding_config_id"}, {Name: "model_revision"}, {Name: "content_hash"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"llm_config_id",
+			"model",
 			"dimension",
 			"embedding",
+			"vector_data",
+			"normalized",
+			"distance_metric",
+			"status",
+			"error_message",
 			"updated_at",
 		}),
 	}).Create(&embeddings).Error; err != nil {

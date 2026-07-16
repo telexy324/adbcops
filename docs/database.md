@@ -20,6 +20,7 @@
 - `000038_deterministic_quality_evaluation`
 - `000039_quality_evaluation_review`
 - `000040_chunk_strategy_center`
+- `000041_embedding_index_manager`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
@@ -55,6 +56,7 @@
 - `000038`：创建质量评估及 Rule Result 表，保存确定性评分、Hard Gate、Block Evidence、扣分原因和建议。
 - `000039`：增加评分 Review 生命周期、发布不可变约束、重新评分历史指针与人工覆盖审计表。
 - `000040`：创建版本化 Chunk Strategy，并将 Chunk 绑定到 Document Version、Strategy、Parent Chunk 和来源 AST Block。
+- `000041`：启用 pgvector，创建 Embedding Index 状态表，并为向量增加模型 Revision、维度、内容哈希、状态与 vector 数据。
 
 ## Quality Standard 2.0
 
@@ -83,3 +85,12 @@
 - Parent Chunk 保存完整章节，Child Chunk 保存可检索语义单元，并通过 `parent_chunk_id` 关联。
 - `source_block_ids`、页码范围及 `content_hash` 保留从 Chunk 到 AST Block 和原文件位置的追溯链。
 - 表格 Child 重复表头；命令 Child 同时携带前置条件、风险提示、所属步骤及验证/回滚上下文。
+
+## Embedding Index Manager
+
+- `kb_embedding_index` 将 Document Version、Chunk Strategy、Embedding Config、Model Revision 和 Dimension 绑定成一个逻辑索引。
+- 状态流转为 `pending → building → ready`，失败进入 `failed`，Chunk 指纹变化进入 `stale`。
+- `kb_chunk_embedding.vector_data` 使用 pgvector；JSONB `embedding` 暂时保留，兼容 1.9A 落地前的旧 RAG 读取路径。
+- 每个向量同时保存 `content_hash`，只有与当前 Chunk Hash 一致且状态为 Ready 的向量可被读取。
+- 不同 Dimension 或 Model Revision 使用不同逻辑索引；HNSW 以逻辑 Index 为 Partial Index 边界，避免混用维度。
+- HNSW 可配置 `m` 与 `ef_construction`，关闭时使用 pgvector 精确距离计算。

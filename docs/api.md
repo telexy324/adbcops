@@ -1282,3 +1282,36 @@ GET  /api/knowledge/document-versions/{versionId}/chunks?strategyId={strategyId}
 切片请求为 `{ "strategyId": 1 }`。Document Version 必须已成功解析；同一 Version 与 Strategy 组合只允许生成一次，重复请求返回 `40902`。更换 Strategy Version 会创建独立 Chunk Set，旧集合仍可按原 `strategyId` 查询。
 
 每个 Chunk 返回 `chunkType`、`parentChunkId`、`sectionPath`、`sourceBlockIds`、页码范围、上下文、`semanticUnit` 和 `contentHash`。表格 Chunk 的每个分片都包含 Header；`code_with_context` 将命令与前置条件、风险、步骤、验证和回滚信息组合保存。
+
+## Embedding Index Manager
+
+```http
+POST /api/knowledge/index-jobs
+GET  /api/knowledge/index-jobs/{id}
+POST /api/knowledge/index-jobs/{id}/build
+POST /api/knowledge/index-jobs/{id}/retry
+POST /api/knowledge/indexes/rebuild
+GET  /api/knowledge/indexes/status?documentVersionId={versionId}&strategyId={strategyId}
+```
+
+创建 Pending Index：
+
+```json
+{
+  "documentVersionId": 1001,
+  "strategyId": 2,
+  "embeddingConfigId": 5,
+  "modelRevision": "text-embedding-v3-2026-07",
+  "dimension": 1536,
+  "normalized": true,
+  "hnswEnabled": true,
+  "hnswM": 16,
+  "hnswEfConstruction": 64
+}
+```
+
+`build` 和 `retry` 接受 `{ "batchSize": 64 }`，服务端限制最大 Batch 为 100。一次 Batch 只发起一次多 Input Embedding 调用，并校验所有向量的模型名和 Dimension。
+
+Index 构建失败会保存 `failed` 和错误信息，可通过 `retry` 重试；`rebuild` 请求为 `{ "indexId": 10, "batchSize": 64 }`。Chunk ID 或 Content Hash 集合变化时，查询 Index/Status 会自动将 Ready 标记为 `stale`。
+
+Status 响应中的 `ready=true` 可供发布门禁使用，条件是至少一个 Index 状态为 Ready、Chunk 数大于零，且 `embeddedCount == chunkCount`。HNSW 按 Index ID 和固定 Dimension 创建 Partial Index，不会在一个物理索引中混合模型 Revision 或维度。

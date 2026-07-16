@@ -178,15 +178,23 @@ type KBChunkStrategy struct {
 func (KBChunkStrategy) TableName() string { return "kb_chunk_strategy" }
 
 type KBChunkEmbedding struct {
-	ID          int64     `gorm:"column:id;primaryKey" json:"id"`
-	ChunkID     int64     `gorm:"column:chunk_id;not null" json:"chunkId"`
-	LLMConfigID *int64    `gorm:"column:llm_config_id" json:"llmConfigId,omitempty"`
-	Model       string    `gorm:"column:model;size:255;not null" json:"model"`
-	Dimension   int       `gorm:"column:dimension;not null" json:"dimension"`
-	Embedding   []byte    `gorm:"column:embedding;type:jsonb;not null" json:"embedding,omitempty"`
-	Chunk       KBChunk   `gorm:"foreignKey:ChunkID;references:ID" json:"chunk,omitempty"`
-	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt   time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ID             int64     `gorm:"column:id;primaryKey" json:"id"`
+	IndexID        *int64    `gorm:"column:index_id" json:"indexId,omitempty"`
+	ChunkID        int64     `gorm:"column:chunk_id;not null" json:"chunkId"`
+	LLMConfigID    *int64    `gorm:"column:embedding_config_id" json:"embeddingConfigId,omitempty"`
+	Model          string    `gorm:"column:model;size:255;not null" json:"model"`
+	ModelRevision  string    `gorm:"column:model_revision;size:120;not null" json:"modelRevision"`
+	Dimension      int       `gorm:"column:dimension;not null" json:"dimension"`
+	Embedding      []byte    `gorm:"column:embedding;type:jsonb;not null" json:"embedding,omitempty"`
+	VectorData     string    `gorm:"column:vector_data;type:vector" json:"-"`
+	ContentHash    string    `gorm:"column:content_hash;size:128;not null" json:"contentHash"`
+	Normalized     bool      `gorm:"column:normalized;not null" json:"normalized"`
+	DistanceMetric string    `gorm:"column:distance_metric;size:30;not null" json:"distanceMetric"`
+	Status         string    `gorm:"column:status;size:30;not null" json:"status"`
+	ErrorMessage   *string   `gorm:"column:error_message" json:"errorMessage,omitempty"`
+	Chunk          KBChunk   `gorm:"foreignKey:ChunkID;references:ID" json:"chunk,omitempty"`
+	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
 }
 
 func (KBChunkEmbedding) TableName() string {

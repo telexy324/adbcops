@@ -23,6 +23,7 @@ import (
 	"aiops-platform/backend/internal/database"
 	datasourcesvc "aiops-platform/backend/internal/datasource"
 	documentsvc "aiops-platform/backend/internal/document"
+	embeddingsvc "aiops-platform/backend/internal/embeddingindex"
 	evidencesvc "aiops-platform/backend/internal/evidence"
 	"aiops-platform/backend/internal/handler"
 	incidentsvc "aiops-platform/backend/internal/incident"
@@ -197,6 +198,7 @@ func run() error {
 	}
 	qualityStandardHandler := handler.NewQualityStandardHandler(qualityStandardService, cfg.FileStorage.MaxUploadBytes)
 	qualityEvaluationHandler := handler.NewQualityEvaluationHandler(qualityeval.NewService(userRepository).WithLLM(credentialManager, llmClient))
+	embeddingIndexHandler := handler.NewEmbeddingIndexHandler(embeddingsvc.NewService(userRepository, credentialManager, llmClient))
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
@@ -228,6 +230,7 @@ func run() error {
 			DocumentHandler:          documentHandler,
 			QualityStandardHandler:   qualityStandardHandler,
 			QualityEvaluationHandler: qualityEvaluationHandler,
+			EmbeddingIndexHandler:    embeddingIndexHandler,
 			RAGHandler:               ragHandler,
 			DataSourceHandler:        dataSourceHandler,
 			AnalysisHandler:          analysisHandler,
