@@ -52,6 +52,7 @@ type QARecord struct {
 	RewrittenQuery string    `gorm:"column:rewritten_query;not null" json:"rewrittenQuery"`
 	Answer         string    `gorm:"column:answer;not null" json:"answer"`
 	Citations      []byte    `gorm:"column:citations;type:jsonb" json:"citations,omitempty"`
+	RetrievalTrace []byte    `gorm:"column:retrieval_trace;type:jsonb" json:"retrievalTrace,omitempty"`
 	RecallCount    int       `gorm:"column:recall_count;not null" json:"recallCount"`
 	LLMConfigID    *int64    `gorm:"column:llm_config_id" json:"llmConfigId,omitempty"`
 	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`

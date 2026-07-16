@@ -150,6 +150,47 @@ export type Citation = {
   snippet: string;
 };
 
+export type RetrievalTrace = {
+  queryUnderstanding: {
+    normalizedQuery: string;
+    keywords: string[];
+    entities: string[];
+    systemName: string;
+    componentName: string;
+    environment: string;
+    docTypes: string[];
+    timeSensitivity: string;
+    mustHaveTerms: string[];
+    negativeTerms: string[];
+  };
+  filters: {
+    permissionScope: string;
+    systemName?: string;
+    componentName?: string;
+    environment?: string;
+    docTypes?: string[];
+    mustHaveTerms?: string[];
+    negativeTerms?: string[];
+    evaluatedAt: string;
+  };
+  rrfK: number;
+  channels: Array<{
+    channel: string;
+    count: number;
+    degraded: boolean;
+    error?: string;
+  }>;
+  candidates: Array<{
+    chunkId: number;
+    rrfScore: number;
+    channelRanks: Array<{
+      channel: string;
+      rank: number;
+      rawScore: number;
+    }>;
+  }>;
+};
+
 export type AskResponse = {
   conversation: {
     id: number;
@@ -166,6 +207,7 @@ export type AskResponse = {
   answer: string;
   citations: Citation[];
   recallCount: number;
+  retrievalTrace: RetrievalTrace;
 };
 
 export type UploadDocumentInput = {

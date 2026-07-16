@@ -51,6 +51,7 @@ func (h *RAGHandler) Ask(c *gin.Context) {
 		"answer":         result.Answer,
 		"citations":      result.Citations,
 		"recallCount":    result.RecallCount,
+		"retrievalTrace": result.Retrieval,
 	})
 }
 

@@ -90,8 +90,71 @@ func TestAskWorksWithEmbeddingAndRerankModels(t *testing.T) {
 	if client.embedCalls == 0 || client.rerankCalls == 0 {
 		t.Fatalf("embedCalls=%d rerankCalls=%d", client.embedCalls, client.rerankCalls)
 	}
-	if len(store.embeddings) != 2 {
-		t.Fatalf("persistent embeddings = %d, want 2", len(store.embeddings))
+	if store.trigramCalls == 0 || store.denseCalls == 0 {
+		t.Fatalf("trigramCalls=%d denseCalls=%d", store.trigramCalls, store.denseCalls)
+	}
+}
+
+func TestFuseRRFCombinesChannelRanks(t *testing.T) {
+	first := model.KBChunk{ID: 1}
+	second := model.KBChunk{ID: 2}
+	result := fuseRRF(map[string][]repository.RankedKnowledgeChunk{
+		"dense_vector":  {{Chunk: first, Score: .9}, {Chunk: second, Score: .8}},
+		"pg_trgm":       {{Chunk: second, Score: .7}, {Chunk: first, Score: .6}},
+		"exact_keyword": {{Chunk: second, Score: 1}},
+	}, 60, 10)
+	if len(result) != 2 || result[0].Chunk.ID != second.ID {
+		t.Fatalf("fused result = %+v", result)
+	}
+	want := 1.0/61 + 1.0/61 + 1.0/62
+	if diff := result[0].Score - want; diff < -1e-12 || diff > 1e-12 {
+		t.Fatalf("score=%v want=%v", result[0].Score, want)
+	}
+	if len(result[0].Ranks) != 3 {
+		t.Fatalf("ranks = %+v", result[0].Ranks)
+	}
+}
+
+func TestAskDenseFailureDegradesToLexical(t *testing.T) {
+	store := newFakeRepository()
+	store.failDense = true
+	store.llmConfigs[model.LLMPurposeEmbedding] = &model.LLMConfig{ID: 2, Purpose: model.LLMPurposeEmbedding, Model: "embed-model", Enabled: true, IsDefault: true}
+	documentID := store.addDocument(model.DocumentStatusPublished)
+	store.addChunk(documentID, "数据库连接池耗尽时先查看活跃连接。")
+	service := NewService(store, nil, &semanticFakeClient{})
+	result, err := service.Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "数据库连接池怎么排查？"})
+	if err != nil || result.RecallCount != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if store.trigramCalls == 0 {
+		t.Fatal("lexical channel was not executed")
+	}
+	foundDegraded := false
+	for _, channel := range result.Retrieval.Channels {
+		if channel.Channel == "dense_vector" && channel.Degraded {
+			foundDegraded = true
+		}
+	}
+	if !foundDegraded {
+		t.Fatalf("trace = %+v", result.Retrieval)
+	}
+}
+
+func TestAskAppliesMetadataFilterBeforeChannels(t *testing.T) {
+	store := newFakeRepository()
+	service := NewService(store, nil, nil)
+	result, err := service.Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "生产环境故障排查"})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if store.lastFilter.PermissionScope != "authenticated_published" || store.lastFilter.Environment != "prod" {
+		t.Fatalf("filter = %+v", store.lastFilter)
+	}
+	if len(store.lastFilter.DocTypes) != 1 || store.lastFilter.DocTypes[0] != "incident_report" {
+		t.Fatalf("docTypes = %+v", store.lastFilter.DocTypes)
+	}
+	if len(result.Retrieval.Channels) == 0 || result.Retrieval.Channels[0].Channel != "metadata_filter" {
+		t.Fatalf("channels = %+v", result.Retrieval.Channels)
 	}
 }
 
@@ -108,6 +171,65 @@ type fakeRepository struct {
 	embeddings         map[string]model.KBChunkEmbedding
 	qaRecords          []model.QARecord
 	llmConfigs         map[string]*model.LLMConfig
+	trigramCalls       int
+	denseCalls         int
+	failDense          bool
+	lastFilter         repository.KnowledgeRetrievalFilter
+}
+
+func (f *fakeRepository) rankedSearch(query string, limit int) []repository.RankedKnowledgeChunk {
+	chunks, _ := f.SearchChunks(context.Background(), query, limit)
+	results := make([]repository.RankedKnowledgeChunk, 0, len(chunks))
+	for index, chunk := range chunks {
+		results = append(results, repository.RankedKnowledgeChunk{Chunk: chunk, Score: 1 / float64(index+1)})
+	}
+	return results
+}
+
+func (f *fakeRepository) SearchChunksTrigram(_ context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	f.trigramCalls++
+	f.lastFilter = filter
+	return f.rankedSearch(query, limit), nil
+}
+
+func (f *fakeRepository) SearchChunksExact(_ context.Context, terms []string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	f.lastFilter = filter
+	return f.rankedSearch(strings.Join(terms, " "), limit), nil
+}
+
+func (f *fakeRepository) SearchChunksTitleSection(_ context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	f.lastFilter = filter
+	return f.rankedSearch(query, limit), nil
+}
+
+func (f *fakeRepository) SearchChunksPossibleQuestions(_ context.Context, _ string, filter repository.KnowledgeRetrievalFilter, _ int) ([]repository.RankedKnowledgeChunk, error) {
+	f.lastFilter = filter
+	return nil, nil
+}
+
+func (f *fakeRepository) SearchChunksDense(_ context.Context, _ []float64, _ int64, _ string, _ repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	f.denseCalls++
+	if f.failDense {
+		return nil, errors.New("dense index unavailable")
+	}
+	var results []repository.RankedKnowledgeChunk
+	for documentID, chunks := range f.chunks {
+		if f.documents[documentID] != model.DocumentStatusPublished {
+			continue
+		}
+		for _, chunk := range chunks {
+			score := .1
+			if strings.Contains(chunk.Content, "连接池") {
+				score = .9
+			}
+			results = append(results, repository.RankedKnowledgeChunk{Chunk: chunk, Score: score})
+		}
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
 }
 
 func newFakeRepository() *fakeRepository {

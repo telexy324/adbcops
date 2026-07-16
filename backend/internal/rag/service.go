@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -17,12 +16,10 @@ import (
 )
 
 const (
-	defaultRecallLimit  = 5
-	maxRecallLimit      = 10
-	maxQuestionBytes    = 8192
-	noEvidenceAnswer    = "未找到可依据的已发布知识，无法基于知识库回答该问题。"
-	maxVectorCandidates = 1000
-	maxVectorBuildBatch = 100
+	defaultRecallLimit = 5
+	maxRecallLimit     = 10
+	maxQuestionBytes   = 8192
+	noEvidenceAnswer   = "未找到可依据的已发布知识，无法基于知识库回答该问题。"
 )
 
 var (
@@ -34,11 +31,11 @@ type Repository interface {
 	CreateConversation(ctx context.Context, conversation *model.Conversation) error
 	FindConversationByID(ctx context.Context, id int64) (*model.Conversation, error)
 	CreateMessage(ctx context.Context, message *model.Message) error
-	SearchChunks(ctx context.Context, query string, limit int) ([]model.KBChunk, error)
-	ListPublishedChunks(ctx context.Context, limit int) ([]model.KBChunk, error)
-	ListPublishedChunkEmbeddings(ctx context.Context, modelName string, limit int) ([]model.KBChunkEmbedding, error)
-	ListPublishedChunksMissingEmbedding(ctx context.Context, modelName string, limit int) ([]model.KBChunk, error)
-	UpsertChunkEmbeddings(ctx context.Context, embeddings []model.KBChunkEmbedding) error
+	SearchChunksTrigram(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
+	SearchChunksExact(ctx context.Context, terms []string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
+	SearchChunksTitleSection(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
+	SearchChunksPossibleQuestions(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
+	SearchChunksDense(ctx context.Context, vector []float64, configID int64, modelName string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -85,6 +82,7 @@ type AskResult struct {
 	Answer       string              `json:"answer"`
 	Citations    []Citation          `json:"citations"`
 	RecallCount  int                 `json:"recallCount"`
+	Retrieval    RetrievalTrace      `json:"retrievalTrace"`
 }
 
 func NewService(repository Repository, secrets SecretManager, client llmsvc.Client) *Service {
@@ -110,18 +108,13 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	}
 	embeddingConfig, embeddingCredential, embeddingReady := s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
 	rerankConfig, rerankCredential, rerankReady := s.loadOptionalModel(ctx, model.LLMPurposeRerank)
-	rewritten := s.rewriteQuery(ctx, question, llmConfig, llmCredential, llmReady)
-	chunks, err := s.recall(ctx, question, rewritten, limit*4)
-	if err != nil {
-		return nil, fmt.Errorf("recall knowledge chunks: %w", err)
-	}
-	if embeddingReady {
-		chunks = s.embeddingRank(ctx, rewritten, chunks, limit*3, embeddingConfig, embeddingCredential)
-	}
+	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
+	rewritten := understood.NormalizedQuery
+	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady)
 	if rerankReady {
 		chunks = s.modelRerank(ctx, question, chunks, limit, rerankConfig, rerankCredential)
-	} else {
-		chunks = lexicalRerankChunks(question, rewritten, chunks, limit)
+	} else if len(chunks) > limit {
+		chunks = chunks[:limit]
 	}
 	citations := buildCitations(chunks)
 	answer, err := s.answer(ctx, question, rewritten, chunks, citations, llmConfig, llmCredential, llmReady)
@@ -131,6 +124,10 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	citationJSON, err := json.Marshal(citations)
 	if err != nil {
 		return nil, fmt.Errorf("encode citations: %w", err)
+	}
+	retrievalJSON, err := json.Marshal(retrievalTrace)
+	if err != nil {
+		return nil, fmt.Errorf("encode retrieval trace: %w", err)
 	}
 	userMetadata, _ := json.Marshal(map[string]any{"source": "rag", "rewrittenQuery": rewritten})
 	userMessage := &model.Message{
@@ -147,6 +144,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		"recallCount":    len(chunks),
 		"embeddingModel": modelName(embeddingConfig, embeddingReady),
 		"rerankModel":    modelName(rerankConfig, rerankReady),
+		"retrievalTrace": json.RawMessage(retrievalJSON),
 	})
 	assistantMessage := &model.Message{
 		ConversationID: conversation.ID,
@@ -173,6 +171,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		Citations:      citationJSON,
 		RecallCount:    len(chunks),
 		LLMConfigID:    llmConfigID,
+		RetrievalTrace: retrievalJSON,
 	}
 	if err := s.repository.CreateQARecord(ctx, record); err != nil {
 		return nil, fmt.Errorf("create qa record: %w", err)
@@ -187,6 +186,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		Answer:       answer,
 		Citations:    citations,
 		RecallCount:  len(chunks),
+		Retrieval:    retrievalTrace,
 	}, nil
 }
 
@@ -232,35 +232,6 @@ func (s *Service) loadLLM(ctx context.Context) (*model.LLMConfig, modelCredentia
 		return nil, modelCredential{}, false, err
 	}
 	return config, credential, s.client != nil, nil
-}
-
-func (s *Service) recall(ctx context.Context, question, rewritten string, limit int) ([]model.KBChunk, error) {
-	chunks, err := s.repository.SearchChunks(ctx, rewritten, limit)
-	if err != nil || len(chunks) > 0 {
-		return chunks, err
-	}
-	seen := make(map[int64]struct{})
-	var recalled []model.KBChunk
-	for _, term := range tokenize(question + " " + rewritten) {
-		if len([]rune(term)) < 2 {
-			continue
-		}
-		more, err := s.repository.SearchChunks(ctx, term, limit)
-		if err != nil {
-			return nil, err
-		}
-		for _, chunk := range more {
-			if _, ok := seen[chunk.ID]; ok {
-				continue
-			}
-			seen[chunk.ID] = struct{}{}
-			recalled = append(recalled, chunk)
-			if len(recalled) >= limit {
-				return recalled, nil
-			}
-		}
-	}
-	return recalled, nil
 }
 
 func (s *Service) loadOptionalModel(ctx context.Context, purpose string) (*model.LLMConfig, modelCredential, bool) {
@@ -317,102 +288,6 @@ func (s *Service) decryptModelCredential(config *model.LLMConfig) (modelCredenti
 	return credential, nil
 }
 
-func (s *Service) embeddingRank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, credential modelCredential) []model.KBChunk {
-	client, ok := s.client.(llmsvc.EmbeddingClient)
-	if !ok || config == nil {
-		return chunks
-	}
-	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
-		BaseURL:   config.BaseURL,
-		APIKey:    credential.APIKey,
-		APISecret: credential.APISecret,
-		Model:     config.Model,
-		Input:     []string{query},
-	})
-	if err != nil || result == nil || len(result.Embeddings) == 0 {
-		return chunks
-	}
-	queryEmbedding := result.Embeddings[0]
-	s.ensureChunkEmbeddings(ctx, client, config, credential)
-	indexes, err := s.repository.ListPublishedChunkEmbeddings(ctx, config.Model, maxVectorCandidates)
-	if err != nil || len(indexes) == 0 {
-		return chunks
-	}
-	type scoredChunk struct {
-		chunk model.KBChunk
-		score float64
-	}
-	scored := make([]scoredChunk, 0, len(indexes))
-	for _, item := range indexes {
-		vector, err := decodeEmbedding(item.Embedding)
-		if err != nil || item.Dimension != len(vector) {
-			continue
-		}
-		scored = append(scored, scoredChunk{chunk: item.Chunk, score: cosine(queryEmbedding, vector)})
-	}
-	if len(scored) == 0 {
-		return chunks
-	}
-	sort.SliceStable(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
-	})
-	ranked := make([]model.KBChunk, 0, len(scored))
-	for _, item := range scored {
-		if item.chunk.ID == 0 {
-			continue
-		}
-		ranked = append(ranked, item.chunk)
-		if len(ranked) >= limit {
-			return ranked
-		}
-	}
-	if len(ranked) == 0 {
-		return chunks
-	}
-	return ranked
-}
-
-func (s *Service) ensureChunkEmbeddings(ctx context.Context, client llmsvc.EmbeddingClient, config *model.LLMConfig, credential modelCredential) {
-	missing, err := s.repository.ListPublishedChunksMissingEmbedding(ctx, config.Model, maxVectorBuildBatch)
-	if err != nil || len(missing) == 0 {
-		return
-	}
-	inputs := make([]string, 0, len(missing))
-	for _, chunk := range missing {
-		inputs = append(inputs, chunk.Content)
-	}
-	result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
-		BaseURL:   config.BaseURL,
-		APIKey:    credential.APIKey,
-		APISecret: credential.APISecret,
-		Model:     config.Model,
-		Input:     inputs,
-	})
-	if err != nil || result == nil || len(result.Embeddings) != len(missing) {
-		return
-	}
-	configID := config.ID
-	embeddings := make([]model.KBChunkEmbedding, 0, len(missing))
-	for index, chunk := range missing {
-		vector := result.Embeddings[index]
-		if len(vector) == 0 {
-			continue
-		}
-		encoded, err := json.Marshal(vector)
-		if err != nil {
-			continue
-		}
-		embeddings = append(embeddings, model.KBChunkEmbedding{
-			ChunkID:     chunk.ID,
-			LLMConfigID: &configID,
-			Model:       config.Model,
-			Dimension:   len(vector),
-			Embedding:   encoded,
-		})
-	}
-	_ = s.repository.UpsertChunkEmbeddings(ctx, embeddings)
-}
-
 func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.KBChunk, limit int, config *model.LLMConfig, credential modelCredential) []model.KBChunk {
 	client, ok := s.client.(llmsvc.RerankClient)
 	if !ok || config == nil || len(chunks) == 0 {
@@ -459,34 +334,6 @@ func (s *Service) modelRerank(ctx context.Context, query string, chunks []model.
 		}
 	}
 	return ranked
-}
-
-func (s *Service) rewriteQuery(ctx context.Context, question string, config *model.LLMConfig, credential modelCredential, ready bool) string {
-	fallback := ruleBasedRewrite(question)
-	if !ready || config == nil {
-		return fallback
-	}
-	result, err := s.client.Chat(ctx, llmsvc.ChatRequest{
-		BaseURL:     config.BaseURL,
-		Provider:    config.Provider,
-		APIKey:      credential.APIKey,
-		AppKey:      credential.AppKey,
-		APISecret:   credential.APISecret,
-		Model:       config.Model,
-		Temperature: 0,
-		Messages: []llmsvc.ChatMessage{
-			{Role: model.MessageRoleSystem, Content: "Rewrite the user's operations question into a concise Chinese knowledge-base search query. Return only the query."},
-			{Role: model.MessageRoleUser, Content: question},
-		},
-	})
-	if err != nil {
-		return fallback
-	}
-	rewritten, err := normalizeQuestion(result.Content)
-	if err != nil {
-		return fallback
-	}
-	return rewritten
 }
 
 func (s *Service) answer(ctx context.Context, question, rewritten string, chunks []model.KBChunk, citations []Citation, config *model.LLMConfig, credential modelCredential, ready bool) (string, error) {
@@ -565,30 +412,6 @@ func dedupeChunks(chunks []model.KBChunk) []model.KBChunk {
 		result = append(result, chunk)
 	}
 	return result
-}
-
-func cosine(a, b []float64) float64 {
-	if len(a) == 0 || len(a) != len(b) {
-		return 0
-	}
-	var dot, normA, normB float64
-	for index := range a {
-		dot += a[index] * b[index]
-		normA += a[index] * a[index]
-		normB += b[index] * b[index]
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
-}
-
-func decodeEmbedding(raw []byte) ([]float64, error) {
-	var vector []float64
-	if err := json.Unmarshal(raw, &vector); err != nil {
-		return nil, err
-	}
-	return vector, nil
 }
 
 func modelName(config *model.LLMConfig, ready bool) string {
