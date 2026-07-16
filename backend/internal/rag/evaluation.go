@@ -11,6 +11,7 @@ import (
 
 type EvaluationSearchInput struct {
 	Question               string
+	DocumentVersionID      *int64
 	Limit                  int
 	EmbeddingConfigID      *int64
 	EmbeddingModelRevision string
@@ -52,7 +53,7 @@ func (s *Service) EvaluateRetrieval(ctx context.Context, actor *model.AppUser, i
 	embeddingRevision := s.readyEmbeddingRevision(ctx, embeddingConfig, embeddingReady, input.ChunkStrategyID, input.EmbeddingModelRevision)
 	understood := s.understandQuery(ctx, question, chatConfig, chatCredential, chatReady)
 	chunks, trace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{
-		StrategyID: input.ChunkStrategyID, EmbeddingModelRevision: embeddingRevision,
+		StrategyID: input.ChunkStrategyID, EmbeddingModelRevision: embeddingRevision, DocumentVersionID: input.DocumentVersionID,
 	})
 	trace.Configuration = retrievalConfiguration(embeddingConfig, embeddingReady, embeddingRevision, rerankConfig, rerankReady, input.ChunkStrategyID)
 	documents, documentErr := s.loadRetrievalDocuments(ctx, chunks)

@@ -38,6 +38,7 @@ var (
 	ErrUnsupportedExt      = errors.New("unsupported file type")
 	ErrInvalidReviewAction = errors.New("invalid review action")
 	ErrCannotPublish       = errors.New("document cannot be published")
+	ErrPublicationGate     = errors.New("publication gate is not satisfied")
 	ErrParseQualityFailed  = errors.New("document parsing failed or parse quality is insufficient")
 )
 
@@ -79,6 +80,7 @@ type Service struct {
 	chunkSize      int
 	chunkOverlap   int
 	parserRegistry *ParserRegistry
+	publication    PublicationRepository
 }
 
 type UploadMetadata struct {
@@ -115,7 +117,9 @@ func NewService(documents Repository, localFileDir string, maxUploadBytes int64,
 	if err != nil {
 		return nil, fmt.Errorf("initialize parser registry: %w", err)
 	}
-	return &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap, parserRegistry: parserRegistry}, nil
+	service := &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap, parserRegistry: parserRegistry}
+	service.publication, _ = documents.(PublicationRepository)
+	return service, nil
 }
 
 func (s *Service) WithQualityLLM(secrets SecretManager, client llmsvc.Client) *Service {
@@ -584,6 +588,20 @@ func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id i
 	toStatus, err := reviewActionTargetStatus(action)
 	if err != nil {
 		return nil, err
+	}
+	if s.publication != nil && action == model.DocumentReviewActionPublish {
+		version, findErr := s.documents.FindLatestDocumentVersion(ctx, document.ID)
+		if findErr != nil {
+			return nil, findErr
+		}
+		published, _, publishErr := s.PublishVersion(ctx, actor, version.ID, input.Comment)
+		return published, publishErr
+	}
+	if s.publication != nil && action == model.DocumentReviewActionDeprecate && document.CurrentPublishedVersionID != nil {
+		if _, deprecateErr := s.DeprecateVersion(ctx, actor, *document.CurrentPublishedVersionID, input.Comment); deprecateErr != nil {
+			return nil, deprecateErr
+		}
+		return s.documents.FindDocumentByID(ctx, document.ID)
 	}
 	if action == model.DocumentReviewActionPublish && !CanPublish(document) {
 		return nil, ErrCannotPublish

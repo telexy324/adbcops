@@ -24,32 +24,36 @@ const (
 	DocumentVersionStatusDraft      = "draft"
 	DocumentVersionStatusProcessing = "processing"
 	DocumentVersionStatusReviewing  = "reviewing"
+	DocumentVersionStatusPublished  = "published"
+	DocumentVersionStatusSuperseded = "superseded"
+	DocumentVersionStatusDeprecated = "deprecated"
 	DocumentVersionStatusFailed     = "failed"
 )
 
 type KBDocument struct {
-	ID            int64      `gorm:"column:id;primaryKey" json:"id"`
-	Title         string     `gorm:"column:title;size:255;not null" json:"title"`
-	FileName      string     `gorm:"column:file_name;size:255;not null" json:"fileName"`
-	FilePath      string     `gorm:"column:file_path;not null" json:"filePath"`
-	FileType      string     `gorm:"column:file_type;size:50;not null" json:"fileType"`
-	SystemName    *string    `gorm:"column:system_name;size:100" json:"systemName,omitempty"`
-	ComponentName *string    `gorm:"column:component_name;size:100" json:"componentName,omitempty"`
-	Environment   *string    `gorm:"column:environment;size:50" json:"environment,omitempty"`
-	DocType       *string    `gorm:"column:doc_type;size:100" json:"docType,omitempty"`
-	Version       string     `gorm:"column:version;size:50" json:"version"`
-	Status        string     `gorm:"column:status;size:50" json:"status"`
-	Tags          []byte     `gorm:"column:tags;type:jsonb" json:"tags,omitempty"`
-	Summary       *string    `gorm:"column:summary" json:"summary,omitempty"`
-	ValidFrom     *time.Time `gorm:"column:valid_from" json:"validFrom,omitempty"`
-	ValidUntil    *time.Time `gorm:"column:valid_until" json:"validUntil,omitempty"`
-	QualityScore  int        `gorm:"column:quality_score" json:"qualityScore"`
-	QualityResult []byte     `gorm:"column:quality_result;type:jsonb" json:"qualityResult,omitempty"`
-	CreatedBy     *int64     `gorm:"column:created_by" json:"createdBy,omitempty"`
-	ReviewedBy    *int64     `gorm:"column:reviewed_by" json:"reviewedBy,omitempty"`
-	CreatedAt     time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
-	ReviewedAt    *time.Time `gorm:"column:reviewed_at" json:"reviewedAt,omitempty"`
+	ID                        int64      `gorm:"column:id;primaryKey" json:"id"`
+	Title                     string     `gorm:"column:title;size:255;not null" json:"title"`
+	FileName                  string     `gorm:"column:file_name;size:255;not null" json:"fileName"`
+	FilePath                  string     `gorm:"column:file_path;not null" json:"filePath"`
+	FileType                  string     `gorm:"column:file_type;size:50;not null" json:"fileType"`
+	SystemName                *string    `gorm:"column:system_name;size:100" json:"systemName,omitempty"`
+	ComponentName             *string    `gorm:"column:component_name;size:100" json:"componentName,omitempty"`
+	Environment               *string    `gorm:"column:environment;size:50" json:"environment,omitempty"`
+	DocType                   *string    `gorm:"column:doc_type;size:100" json:"docType,omitempty"`
+	Version                   string     `gorm:"column:version;size:50" json:"version"`
+	Status                    string     `gorm:"column:status;size:50" json:"status"`
+	Tags                      []byte     `gorm:"column:tags;type:jsonb" json:"tags,omitempty"`
+	Summary                   *string    `gorm:"column:summary" json:"summary,omitempty"`
+	ValidFrom                 *time.Time `gorm:"column:valid_from" json:"validFrom,omitempty"`
+	ValidUntil                *time.Time `gorm:"column:valid_until" json:"validUntil,omitempty"`
+	QualityScore              int        `gorm:"column:quality_score" json:"qualityScore"`
+	QualityResult             []byte     `gorm:"column:quality_result;type:jsonb" json:"qualityResult,omitempty"`
+	CreatedBy                 *int64     `gorm:"column:created_by" json:"createdBy,omitempty"`
+	ReviewedBy                *int64     `gorm:"column:reviewed_by" json:"reviewedBy,omitempty"`
+	CreatedAt                 time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt                 time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ReviewedAt                *time.Time `gorm:"column:reviewed_at" json:"reviewedAt,omitempty"`
+	CurrentPublishedVersionID *int64     `gorm:"column:current_published_version_id" json:"currentPublishedVersionId,omitempty"`
 }
 
 const (
@@ -65,30 +69,35 @@ func (KBDocument) TableName() string {
 }
 
 type KBDocumentVersion struct {
-	ID             int64      `gorm:"column:id;primaryKey" json:"id"`
-	DocumentID     int64      `gorm:"column:document_id;not null" json:"documentId"`
-	Version        string     `gorm:"column:version;size:50;not null" json:"version"`
-	RevisionNo     int        `gorm:"column:revision_no;not null" json:"revisionNo"`
-	FileName       string     `gorm:"column:file_name;size:255;not null" json:"fileName"`
-	FilePath       string     `gorm:"column:file_path;not null" json:"-"`
-	FileType       string     `gorm:"column:file_type;size:50;not null" json:"fileType"`
-	FileHash       string     `gorm:"column:file_hash;size:128;not null" json:"fileHash"`
-	ParserName     *string    `gorm:"column:parser_name;size:100" json:"parserName,omitempty"`
-	ParserVersion  *string    `gorm:"column:parser_version;size:50" json:"parserVersion,omitempty"`
-	Language       *string    `gorm:"column:language;size:30" json:"language,omitempty"`
-	Status         string     `gorm:"column:status;size:30;not null" json:"status"`
-	Metadata       []byte     `gorm:"column:metadata;type:jsonb" json:"metadata,omitempty"`
-	DocumentSchema []byte     `gorm:"column:document_schema;type:jsonb" json:"documentSchema,omitempty"`
-	ParseQuality   []byte     `gorm:"column:parse_quality;type:jsonb" json:"parseQuality,omitempty"`
-	ContentSummary *string    `gorm:"column:content_summary" json:"contentSummary,omitempty"`
-	ValidFrom      *time.Time `gorm:"column:valid_from" json:"validFrom,omitempty"`
-	ValidUntil     *time.Time `gorm:"column:valid_until" json:"validUntil,omitempty"`
-	ReviewDueAt    *time.Time `gorm:"column:review_due_at" json:"reviewDueAt,omitempty"`
-	CreatedBy      *int64     `gorm:"column:created_by" json:"createdBy,omitempty"`
-	ReviewedBy     *int64     `gorm:"column:reviewed_by" json:"reviewedBy,omitempty"`
-	CreatedAt      time.Time  `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt      time.Time  `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
-	ReviewedAt     *time.Time `gorm:"column:reviewed_at" json:"reviewedAt,omitempty"`
+	ID              int64           `gorm:"column:id;primaryKey" json:"id"`
+	DocumentID      int64           `gorm:"column:document_id;not null" json:"documentId"`
+	Version         string          `gorm:"column:version;size:50;not null" json:"version"`
+	RevisionNo      int             `gorm:"column:revision_no;not null" json:"revisionNo"`
+	FileName        string          `gorm:"column:file_name;size:255;not null" json:"fileName"`
+	FilePath        string          `gorm:"column:file_path;not null" json:"-"`
+	FileType        string          `gorm:"column:file_type;size:50;not null" json:"fileType"`
+	FileHash        string          `gorm:"column:file_hash;size:128;not null" json:"fileHash"`
+	ParserName      *string         `gorm:"column:parser_name;size:100" json:"parserName,omitempty"`
+	ParserVersion   *string         `gorm:"column:parser_version;size:50" json:"parserVersion,omitempty"`
+	Language        *string         `gorm:"column:language;size:30" json:"language,omitempty"`
+	Status          string          `gorm:"column:status;size:30;not null" json:"status"`
+	Metadata        []byte          `gorm:"column:metadata;type:jsonb" json:"metadata,omitempty"`
+	DocumentSchema  []byte          `gorm:"column:document_schema;type:jsonb" json:"documentSchema,omitempty"`
+	ParseQuality    []byte          `gorm:"column:parse_quality;type:jsonb" json:"parseQuality,omitempty"`
+	ContentSummary  *string         `gorm:"column:content_summary" json:"contentSummary,omitempty"`
+	ValidFrom       *time.Time      `gorm:"column:valid_from" json:"validFrom,omitempty"`
+	ValidUntil      *time.Time      `gorm:"column:valid_until" json:"validUntil,omitempty"`
+	ReviewDueAt     *time.Time      `gorm:"column:review_due_at" json:"reviewDueAt,omitempty"`
+	CreatedBy       *int64          `gorm:"column:created_by" json:"createdBy,omitempty"`
+	ReviewedBy      *int64          `gorm:"column:reviewed_by" json:"reviewedBy,omitempty"`
+	CreatedAt       time.Time       `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt       time.Time       `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	ReviewedAt      *time.Time      `gorm:"column:reviewed_at" json:"reviewedAt,omitempty"`
+	PublishedBy     *int64          `gorm:"column:published_by" json:"publishedBy,omitempty"`
+	PublishedAt     *time.Time      `gorm:"column:published_at" json:"publishedAt,omitempty"`
+	SupersededAt    *time.Time      `gorm:"column:superseded_at" json:"supersededAt,omitempty"`
+	DeprecatedAt    *time.Time      `gorm:"column:deprecated_at" json:"deprecatedAt,omitempty"`
+	PublicationGate json.RawMessage `gorm:"column:publication_gate;type:jsonb" json:"publicationGate,omitempty"`
 }
 
 func (KBDocumentVersion) TableName() string { return "kb_document_version" }

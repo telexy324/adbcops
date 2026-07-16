@@ -23,22 +23,23 @@ func NewDocumentHandler(service *documentsvc.Service, maxUploadBytes int64) *Doc
 }
 
 type documentResponse struct {
-	ID            int64           `json:"id"`
-	Title         string          `json:"title"`
-	FileName      string          `json:"fileName"`
-	FileType      string          `json:"fileType"`
-	SystemName    *string         `json:"systemName,omitempty"`
-	ComponentName *string         `json:"componentName,omitempty"`
-	Environment   *string         `json:"environment,omitempty"`
-	DocType       *string         `json:"docType,omitempty"`
-	Version       string          `json:"version"`
-	Status        string          `json:"status"`
-	Tags          json.RawMessage `json:"tags,omitempty"`
-	Summary       *string         `json:"summary,omitempty"`
-	QualityScore  int             `json:"qualityScore"`
-	CreatedBy     *int64          `json:"createdBy,omitempty"`
-	CreatedAt     string          `json:"createdAt"`
-	UpdatedAt     string          `json:"updatedAt"`
+	ID                        int64           `json:"id"`
+	Title                     string          `json:"title"`
+	FileName                  string          `json:"fileName"`
+	FileType                  string          `json:"fileType"`
+	SystemName                *string         `json:"systemName,omitempty"`
+	ComponentName             *string         `json:"componentName,omitempty"`
+	Environment               *string         `json:"environment,omitempty"`
+	DocType                   *string         `json:"docType,omitempty"`
+	Version                   string          `json:"version"`
+	Status                    string          `json:"status"`
+	Tags                      json.RawMessage `json:"tags,omitempty"`
+	Summary                   *string         `json:"summary,omitempty"`
+	QualityScore              int             `json:"qualityScore"`
+	CreatedBy                 *int64          `json:"createdBy,omitempty"`
+	CreatedAt                 string          `json:"createdAt"`
+	UpdatedAt                 string          `json:"updatedAt"`
+	CurrentPublishedVersionID *int64          `json:"currentPublishedVersionId,omitempty"`
 }
 
 type qualityStandardResponse struct {
@@ -81,6 +82,9 @@ type documentVersionResponse struct {
 	CreatedBy      *int64          `json:"createdBy,omitempty"`
 	CreatedAt      string          `json:"createdAt"`
 	UpdatedAt      string          `json:"updatedAt"`
+	PublishedAt    *string         `json:"publishedAt,omitempty"`
+	SupersededAt   *string         `json:"supersededAt,omitempty"`
+	DeprecatedAt   *string         `json:"deprecatedAt,omitempty"`
 }
 
 type parsedStructureResponse struct {
@@ -109,6 +113,10 @@ type knowledgeSearchRequest struct {
 	Limit int    `json:"limit"`
 }
 
+type versionActionRequest struct {
+	Comment string `json:"comment"`
+}
+
 func (h *DocumentHandler) Upload(c *gin.Context) {
 	actor, ok := currentUser(c)
 	if !ok {
@@ -133,6 +141,40 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		return
 	}
 	success(c, toDocumentResponse(document))
+}
+
+func (h *DocumentHandler) UploadVersion(c *gin.Context) {
+	actor, documentID, ok := currentUserAndDocumentID(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadBytes+1024*1024)
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	version, err := h.service.UploadVersion(c.Request.Context(), actor, documentID, fileHeader, c.PostForm("version"))
+	if handleDocumentError(c, err, "upload document version failed") {
+		return
+	}
+	success(c, toDocumentVersionResponse(version))
+}
+
+func (h *DocumentHandler) Versions(c *gin.Context) {
+	actor, documentID, ok := currentUserAndDocumentID(c)
+	if !ok {
+		return
+	}
+	versions, err := h.service.ListVersions(c.Request.Context(), actor, documentID)
+	if handleDocumentError(c, err, "list document versions failed") {
+		return
+	}
+	items := make([]documentVersionResponse, 0, len(versions))
+	for i := range versions {
+		items = append(items, toDocumentVersionResponse(&versions[i]))
+	}
+	success(c, gin.H{"items": items, "count": len(items)})
 }
 
 func (h *DocumentHandler) UploadQualityStandard(c *gin.Context) {
@@ -249,6 +291,112 @@ func (h *DocumentHandler) GetVersion(c *gin.Context) {
 		return
 	}
 	success(c, toDocumentVersionResponse(version))
+}
+
+func (h *DocumentHandler) PublicationGate(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	gate, err := h.service.EvaluatePublicationGate(c.Request.Context(), actor, versionID)
+	if handleDocumentError(c, err, "evaluate publication gate failed") {
+		return
+	}
+	success(c, gate)
+}
+
+func (h *DocumentHandler) PublishVersion(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	var request versionActionRequest
+	if c.Request.ContentLength > 0 && c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	document, gate, err := h.service.PublishVersion(c.Request.Context(), actor, versionID, request.Comment)
+	if err != nil {
+		if errors.Is(err, documentsvc.ErrPublicationGate) {
+			failure(c, http.StatusConflict, 40903, "publication gate is not satisfied")
+			return
+		}
+		if handleDocumentError(c, err, "publish document version failed") {
+			return
+		}
+	}
+	success(c, gin.H{"document": toDocumentResponse(document), "gate": gate})
+}
+
+func (h *DocumentHandler) DeprecateVersion(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	var request versionActionRequest
+	if c.Request.ContentLength > 0 && c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	version, err := h.service.DeprecateVersion(c.Request.Context(), actor, versionID, request.Comment)
+	if handleDocumentError(c, err, "deprecate document version failed") {
+		return
+	}
+	success(c, toDocumentVersionResponse(version))
+}
+
+func (h *DocumentHandler) DiffVersions(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	fromID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	toID, err := strconv.ParseInt(c.Param("otherVersionId"), 10, 64)
+	if err != nil || toID <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	diff, err := h.service.DiffVersions(c.Request.Context(), actor, fromID, toID)
+	if handleDocumentError(c, err, "diff document versions failed") {
+		return
+	}
+	success(c, diff)
+}
+
+func (h *DocumentHandler) HistoricalCitation(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	chunkID, err := strconv.ParseInt(c.Param("chunkId"), 10, 64)
+	if err != nil || chunkID <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	citation, err := h.service.ResolveHistoricalCitation(c.Request.Context(), actor, versionID, chunkID)
+	if handleDocumentError(c, err, "resolve historical citation failed") {
+		return
+	}
+	success(c, citation)
 }
 
 func (h *DocumentHandler) ParseVersion(c *gin.Context) {
@@ -523,6 +671,10 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40006, "invalid review action")
 	case errors.Is(err, documentsvc.ErrCannotPublish):
 		failure(c, http.StatusConflict, 40901, "document cannot be published")
+	case errors.Is(err, documentsvc.ErrPublicationGate):
+		failure(c, http.StatusConflict, 40903, "publication gate is not satisfied")
+	case errors.Is(err, repository.ErrImmutable):
+		failure(c, http.StatusConflict, 40904, "document version state is immutable")
 	case errors.Is(err, documentsvc.ErrChunkSetExists):
 		failure(c, http.StatusConflict, 40902, err.Error())
 	case errors.Is(err, documentsvc.ErrAdminRequired):
@@ -547,6 +699,7 @@ func toDocumentVersionResponse(version *model.KBDocumentVersion) documentVersion
 		ParserName: version.ParserName, ParserVersion: version.ParserVersion, Language: version.Language,
 		Status: version.Status, Metadata: json.RawMessage(version.Metadata), ParseQuality: json.RawMessage(version.ParseQuality), DocumentSchema: json.RawMessage(version.DocumentSchema),
 		CreatedBy: version.CreatedBy, CreatedAt: version.CreatedAt.Format(time.RFC3339), UpdatedAt: version.UpdatedAt.Format(time.RFC3339),
+		PublishedAt: formatOptionalTime(version.PublishedAt), SupersededAt: formatOptionalTime(version.SupersededAt), DeprecatedAt: formatOptionalTime(version.DeprecatedAt),
 	}
 }
 
@@ -562,23 +715,32 @@ func toParsedStructureResponse(structure *documentsvc.ParsedStructure) parsedStr
 
 func toDocumentResponse(document *model.KBDocument) documentResponse {
 	return documentResponse{
-		ID:            document.ID,
-		Title:         document.Title,
-		FileName:      document.FileName,
-		FileType:      document.FileType,
-		SystemName:    document.SystemName,
-		ComponentName: document.ComponentName,
-		Environment:   document.Environment,
-		DocType:       document.DocType,
-		Version:       document.Version,
-		Status:        document.Status,
-		Tags:          rawJSON(document.Tags),
-		Summary:       document.Summary,
-		QualityScore:  document.QualityScore,
-		CreatedBy:     document.CreatedBy,
-		CreatedAt:     document.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:     document.UpdatedAt.Format(time.RFC3339),
+		ID:                        document.ID,
+		Title:                     document.Title,
+		FileName:                  document.FileName,
+		FileType:                  document.FileType,
+		SystemName:                document.SystemName,
+		ComponentName:             document.ComponentName,
+		Environment:               document.Environment,
+		DocType:                   document.DocType,
+		Version:                   document.Version,
+		Status:                    document.Status,
+		Tags:                      rawJSON(document.Tags),
+		Summary:                   document.Summary,
+		QualityScore:              document.QualityScore,
+		CreatedBy:                 document.CreatedBy,
+		CreatedAt:                 document.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:                 document.UpdatedAt.Format(time.RFC3339),
+		CurrentPublishedVersionID: document.CurrentPublishedVersionID,
 	}
+}
+
+func formatOptionalTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.Format(time.RFC3339)
+	return &formatted
 }
 
 func toQualityStandardResponse(standard *model.KBQualityStandard) qualityStandardResponse {

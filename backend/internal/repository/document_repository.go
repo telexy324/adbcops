@@ -402,6 +402,7 @@ func (r *GORMUserRepository) SearchChunks(ctx context.Context, query string, lim
 	if err := r.db.WithContext(ctx).
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("kb_chunk.document_version_id = kb_document.current_published_version_id").
 		Where("kb_chunk.search_text ILIKE ? OR kb_chunk.content ILIKE ?", pattern, pattern).
 		Order(clause.OrderBy{Expression: clause.Expr{SQL: "similarity(coalesce(kb_chunk.search_text, ''), ?) DESC, kb_chunk.chunk_index ASC", Vars: []any{query}}}).
 		Limit(limit).
@@ -419,6 +420,7 @@ func (r *GORMUserRepository) ListPublishedChunks(ctx context.Context, limit int)
 	if err := r.db.WithContext(ctx).
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("kb_chunk.document_version_id = kb_document.current_published_version_id").
 		Order("kb_chunk.id DESC").
 		Limit(limit).
 		Find(&chunks).Error; err != nil {
@@ -437,6 +439,7 @@ func (r *GORMUserRepository) ListPublishedChunkEmbeddings(ctx context.Context, m
 		Joins("JOIN kb_chunk ON kb_chunk.id = kb_chunk_embedding.chunk_id").
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("kb_chunk.document_version_id = kb_document.current_published_version_id").
 		Where("kb_chunk_embedding.model = ?", modelName).
 		Where("kb_chunk_embedding.status = ?", model.EmbeddingIndexReady).
 		Where("kb_chunk_embedding.content_hash = kb_chunk.content_hash").
@@ -458,6 +461,7 @@ func (r *GORMUserRepository) ListPublishedChunksMissingEmbedding(ctx context.Con
 		Model(&model.KBChunk{}).
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Where("kb_document.status = ?", model.DocumentStatusPublished).
+		Where("kb_chunk.document_version_id = kb_document.current_published_version_id").
 		Where("NOT EXISTS (?)",
 			r.db.Model(&model.KBChunkEmbedding{}).
 				Select("1").

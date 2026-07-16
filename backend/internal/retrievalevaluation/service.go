@@ -253,7 +253,7 @@ func (s *Service) run(ctx context.Context, actor *model.AppUser, mode string, co
 
 func (s *Service) evaluateCase(ctx context.Context, actor *model.AppUser, runID int64, testCase model.KBRetrievalTestCase, config RunConfig) (model.KBRetrievalEvaluationResult, CaseMetrics) {
 	search, err := s.retriever.EvaluateRetrieval(ctx, actor, rag.EvaluationSearchInput{
-		Question: testCase.Question, Limit: config.Limit, EmbeddingConfigID: config.EmbeddingConfigID,
+		Question: testCase.Question, Limit: config.Limit, DocumentVersionID: config.DocumentVersionID, EmbeddingConfigID: config.EmbeddingConfigID,
 		EmbeddingModelRevision: config.EmbeddingModelRevision, RerankConfigID: config.RerankConfigID,
 		ChunkStrategyID: config.ChunkStrategyID, DisableEmbedding: config.DisableEmbedding, DisableRerank: config.DisableRerank,
 	})

@@ -94,6 +94,7 @@ type rankedCandidate struct {
 type retrievalOptions struct {
 	StrategyID             *int64
 	EmbeddingModelRevision string
+	DocumentVersionID      *int64
 }
 
 func (s *Service) understandQuery(ctx context.Context, question string, config *model.LLMConfig, credential modelCredential, ready bool) QueryUnderstanding {
@@ -171,8 +172,9 @@ func cleanTerms(values []string) []string {
 
 func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstanding, embeddingConfig *model.LLMConfig, credential modelCredential, embeddingReady bool, options retrievalOptions) ([]model.KBChunk, RetrievalTrace) {
 	filter := repository.KnowledgeRetrievalFilter{
-		PermissionScope: "authenticated_published",
-		SystemName:      understood.SystemName, ComponentName: understood.ComponentName,
+		PermissionScope:   "authenticated_published",
+		DocumentVersionID: options.DocumentVersionID,
+		SystemName:        understood.SystemName, ComponentName: understood.ComponentName,
 		Environment: understood.Environment, DocTypes: understood.DocTypes,
 		MustHaveTerms: understood.MustHaveTerms, NegativeTerms: understood.NegativeTerms, Now: time.Now().UTC(),
 		StrategyID: options.StrategyID, EmbeddingModelRevision: options.EmbeddingModelRevision,

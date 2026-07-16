@@ -13,6 +13,7 @@ import (
 
 type KnowledgeRetrievalFilter struct {
 	PermissionScope        string    `json:"permissionScope"`
+	DocumentVersionID      *int64    `json:"documentVersionId,omitempty"`
 	SystemName             string    `json:"systemName,omitempty"`
 	ComponentName          string    `json:"componentName,omitempty"`
 	Environment            string    `json:"environment,omitempty"`
@@ -59,9 +60,18 @@ func (r *GORMRAGRepository) retrievalScope(ctx context.Context, filter Knowledge
 	}
 	query := r.db.WithContext(ctx).Table("kb_chunk").
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
-		Where("kb_document.status = ?", model.DocumentStatusPublished).
-		Where("(kb_document.valid_from IS NULL OR kb_document.valid_from <= ?)", now).
-		Where("(kb_document.valid_until IS NULL OR kb_document.valid_until > ?)", now)
+		Joins("JOIN kb_document_version ON kb_document_version.id = kb_chunk.document_version_id")
+	if filter.DocumentVersionID != nil {
+		query = query.Where("kb_chunk.document_version_id = ?", *filter.DocumentVersionID)
+	} else {
+		query = query.Where("kb_document.status = ?", model.DocumentStatusPublished).
+			Where("kb_chunk.document_version_id = kb_document.current_published_version_id").
+			Where("kb_document_version.status = ?", model.DocumentVersionStatusPublished).
+			Where("(kb_document.valid_from IS NULL OR kb_document.valid_from <= ?)", now).
+			Where("(kb_document.valid_until IS NULL OR kb_document.valid_until > ?)", now).
+			Where("(kb_document_version.valid_from IS NULL OR kb_document_version.valid_from <= ?)", now).
+			Where("(kb_document_version.valid_until IS NULL OR kb_document_version.valid_until > ?)", now)
+	}
 	if filter.SystemName != "" {
 		query = query.Where("lower(coalesce(kb_document.system_name, '')) = lower(?)", filter.SystemName)
 	}
@@ -208,6 +218,7 @@ func (r *GORMRAGRepository) FindKnowledgeChunksByIDs(ctx context.Context, ids []
 	if err := r.db.WithContext(ctx).Table("kb_chunk").
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Where("kb_chunk.id IN ? AND kb_document.status = ?", ids, model.DocumentStatusPublished).
+		Where("kb_chunk.document_version_id = kb_document.current_published_version_id").
 		Order("kb_chunk.id ASC").Find(&chunks).Error; err != nil {
 		return nil, fmt.Errorf("find retrieval chunks: %w", err)
 	}

@@ -210,6 +210,8 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		documentRoutes.GET("", dependencies.DocumentHandler.List)
 		documentRoutes.GET("/:id", dependencies.DocumentHandler.Get)
 		documentRoutes.GET("/:id/versions/latest", dependencies.DocumentHandler.LatestVersion)
+		documentRoutes.GET("/:id/versions", dependencies.DocumentHandler.Versions)
+		documentRoutes.POST("/:id/versions/upload", dependencies.DocumentHandler.UploadVersion)
 		documentRoutes.GET("/:id/chunks", dependencies.DocumentHandler.Chunks)
 		if dependencies.RequireAdmin != nil {
 			documentRoutes.POST("/:id/review", dependencies.RequireAdmin, dependencies.DocumentHandler.Review)
@@ -225,6 +227,13 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 			knowledgeRoutes.POST("/chunk-strategies", dependencies.RequireAdmin, dependencies.DocumentHandler.CreateChunkStrategy)
 		}
 		knowledgeRoutes.GET("/document-versions/:versionId", dependencies.DocumentHandler.GetVersion)
+		knowledgeRoutes.GET("/document-versions/:versionId/publication-gate", dependencies.DocumentHandler.PublicationGate)
+		knowledgeRoutes.GET("/document-versions/:versionId/diff/:otherVersionId", dependencies.DocumentHandler.DiffVersions)
+		knowledgeRoutes.GET("/document-versions/:versionId/citations/:chunkId", dependencies.DocumentHandler.HistoricalCitation)
+		if dependencies.RequireAdmin != nil {
+			knowledgeRoutes.POST("/document-versions/:versionId/publish", dependencies.RequireAdmin, dependencies.DocumentHandler.PublishVersion)
+			knowledgeRoutes.POST("/document-versions/:versionId/deprecate", dependencies.RequireAdmin, dependencies.DocumentHandler.DeprecateVersion)
+		}
 		knowledgeRoutes.POST("/document-versions/:versionId/parse", dependencies.DocumentHandler.ParseVersion)
 		knowledgeRoutes.GET("/document-versions/:versionId/blocks", dependencies.DocumentHandler.ParsedStructure)
 		knowledgeRoutes.POST("/document-versions/:versionId/chunk", dependencies.DocumentHandler.ChunkVersion)
