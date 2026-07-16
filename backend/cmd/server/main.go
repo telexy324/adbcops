@@ -39,6 +39,7 @@ import (
 	ragsvc "aiops-platform/backend/internal/rag"
 	redissvc "aiops-platform/backend/internal/redis"
 	"aiops-platform/backend/internal/repository"
+	retrievaleval "aiops-platform/backend/internal/retrievalevaluation"
 	"aiops-platform/backend/internal/skillframework"
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
 	tidbsvc "aiops-platform/backend/internal/tidb"
@@ -199,6 +200,7 @@ func run() error {
 	qualityStandardHandler := handler.NewQualityStandardHandler(qualityStandardService, cfg.FileStorage.MaxUploadBytes)
 	qualityEvaluationHandler := handler.NewQualityEvaluationHandler(qualityeval.NewService(userRepository).WithLLM(credentialManager, llmClient))
 	embeddingIndexHandler := handler.NewEmbeddingIndexHandler(embeddingsvc.NewService(userRepository, credentialManager, llmClient))
+	retrievalEvaluationHandler := handler.NewRetrievalEvaluationHandler(retrievaleval.NewService(userRepository, ragService))
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
@@ -221,32 +223,33 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.Address(),
 		Handler: handler.NewRouter(logger, handler.RouterDependencies{
-			AuditHandler:             auditHandler,
-			AuditRecorder:            auditLogRepository,
-			AuthHandler:              authHandler,
-			UserHandler:              userHandler,
-			ConversationHandler:      conversationHandler,
-			LLMHandler:               llmHandler,
-			DocumentHandler:          documentHandler,
-			QualityStandardHandler:   qualityStandardHandler,
-			QualityEvaluationHandler: qualityEvaluationHandler,
-			EmbeddingIndexHandler:    embeddingIndexHandler,
-			RAGHandler:               ragHandler,
-			DataSourceHandler:        dataSourceHandler,
-			AnalysisHandler:          analysisHandler,
-			EventHandler:             eventHandler,
-			EvidenceHandler:          evidenceHandler,
-			TopologyHandler:          topologyHandler,
-			TimelineHandler:          timelineHandler,
-			CorrelationHandler:       correlationHandler,
-			IncidentHandler:          incidentHandler,
-			ToolHandler:              toolHandler,
-			SkillHandler:             skillHandler,
-			AgentHandler:             agentHandler,
-			WorkflowHandler:          workflowHandler,
-			SFTPHandler:              sftpHandler,
-			K8sHandler:               k8sHandler,
-			MetricsHandler:           metricsHandler,
+			AuditHandler:               auditHandler,
+			AuditRecorder:              auditLogRepository,
+			AuthHandler:                authHandler,
+			UserHandler:                userHandler,
+			ConversationHandler:        conversationHandler,
+			LLMHandler:                 llmHandler,
+			DocumentHandler:            documentHandler,
+			QualityStandardHandler:     qualityStandardHandler,
+			QualityEvaluationHandler:   qualityEvaluationHandler,
+			EmbeddingIndexHandler:      embeddingIndexHandler,
+			RetrievalEvaluationHandler: retrievalEvaluationHandler,
+			RAGHandler:                 ragHandler,
+			DataSourceHandler:          dataSourceHandler,
+			AnalysisHandler:            analysisHandler,
+			EventHandler:               eventHandler,
+			EvidenceHandler:            evidenceHandler,
+			TopologyHandler:            topologyHandler,
+			TimelineHandler:            timelineHandler,
+			CorrelationHandler:         correlationHandler,
+			IncidentHandler:            incidentHandler,
+			ToolHandler:                toolHandler,
+			SkillHandler:               skillHandler,
+			AgentHandler:               agentHandler,
+			WorkflowHandler:            workflowHandler,
+			SFTPHandler:                sftpHandler,
+			K8sHandler:                 k8sHandler,
+			MetricsHandler:             metricsHandler,
 			ReadinessCheck: func(ctx context.Context) error {
 				return databaseConnection.SQL.PingContext(ctx)
 			},

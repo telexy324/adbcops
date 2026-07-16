@@ -12,14 +12,16 @@ import (
 )
 
 type KnowledgeRetrievalFilter struct {
-	PermissionScope string    `json:"permissionScope"`
-	SystemName      string    `json:"systemName,omitempty"`
-	ComponentName   string    `json:"componentName,omitempty"`
-	Environment     string    `json:"environment,omitempty"`
-	DocTypes        []string  `json:"docTypes,omitempty"`
-	MustHaveTerms   []string  `json:"mustHaveTerms,omitempty"`
-	NegativeTerms   []string  `json:"negativeTerms,omitempty"`
-	Now             time.Time `json:"evaluatedAt"`
+	PermissionScope        string    `json:"permissionScope"`
+	SystemName             string    `json:"systemName,omitempty"`
+	ComponentName          string    `json:"componentName,omitempty"`
+	Environment            string    `json:"environment,omitempty"`
+	DocTypes               []string  `json:"docTypes,omitempty"`
+	MustHaveTerms          []string  `json:"mustHaveTerms,omitempty"`
+	NegativeTerms          []string  `json:"negativeTerms,omitempty"`
+	StrategyID             *int64    `json:"strategyId,omitempty"`
+	EmbeddingModelRevision string    `json:"embeddingModelRevision,omitempty"`
+	Now                    time.Time `json:"evaluatedAt"`
 }
 
 type RankedKnowledgeChunk struct {
@@ -38,6 +40,8 @@ type RAGRepository interface {
 	SearchChunksDense(ctx context.Context, vector []float64, configID int64, modelName string, filter KnowledgeRetrievalFilter, limit int) ([]RankedKnowledgeChunk, error)
 	FindKnowledgeDocumentsByIDs(ctx context.Context, ids []int64) ([]model.KBDocument, error)
 	FindKnowledgeChunksByIDs(ctx context.Context, ids []int64) ([]model.KBChunk, error)
+	FindLLMConfigByID(ctx context.Context, id int64) (*model.LLMConfig, error)
+	FindReadyEmbeddingModelRevision(ctx context.Context, configID int64, strategyID *int64) (string, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -69,6 +73,9 @@ func (r *GORMRAGRepository) retrievalScope(ctx context.Context, filter Knowledge
 	}
 	if len(filter.DocTypes) > 0 {
 		query = query.Where("kb_document.doc_type IN ?", filter.DocTypes)
+	}
+	if filter.StrategyID != nil {
+		query = query.Where("kb_chunk.strategy_id = ?", *filter.StrategyID)
 	}
 	for _, term := range filter.MustHaveTerms {
 		if term = strings.TrimSpace(term); term != "" {
@@ -169,6 +176,9 @@ func (r *GORMRAGRepository) SearchChunksDense(ctx context.Context, vector []floa
 		Where("kb_chunk_embedding.vector_data IS NOT NULL").
 		Where("kb_chunk_embedding.content_hash = kb_chunk.content_hash").
 		Where("kb_embedding_index.status = 'ready'")
+	if filter.EmbeddingModelRevision != "" {
+		query = query.Where("kb_chunk_embedding.model_revision = ?", filter.EmbeddingModelRevision)
+	}
 	if err := query.Select("kb_chunk.*, 1 - ("+distance+") AS retrieval_score", string(encoded)).
 		Order(gorm.Expr(distance+" ASC, kb_chunk.id ASC", string(encoded))).
 		Limit(limit).Scan(&rows).Error; err != nil {
@@ -202,6 +212,22 @@ func (r *GORMRAGRepository) FindKnowledgeChunksByIDs(ctx context.Context, ids []
 		return nil, fmt.Errorf("find retrieval chunks: %w", err)
 	}
 	return chunks, nil
+}
+
+func (r *GORMRAGRepository) FindLLMConfigByID(ctx context.Context, id int64) (*model.LLMConfig, error) {
+	return (&GORMLLMRepository{db: r.db}).FindLLMConfigByID(ctx, id)
+}
+
+func (r *GORMRAGRepository) FindReadyEmbeddingModelRevision(ctx context.Context, configID int64, strategyID *int64) (string, error) {
+	var index model.KBEmbeddingIndex
+	query := r.db.WithContext(ctx).Where("embedding_config_id = ? AND status = ?", configID, model.EmbeddingIndexReady)
+	if strategyID != nil {
+		query = query.Where("strategy_id = ?", *strategyID)
+	}
+	if err := query.Order("completed_at DESC NULLS LAST, id DESC").First(&index).Error; err != nil {
+		return "", mapRepositoryError(err)
+	}
+	return index.ModelRevision, nil
 }
 
 type GORMRAGRepository struct {

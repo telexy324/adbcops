@@ -67,17 +67,17 @@ type ContextBlockTrace struct {
 }
 
 type ContextBlock struct {
-	CitationID        string
-	DocumentID        int64
-	DocumentVersionID int64
-	ChunkIDs          []int64
-	ChunkIndex        int
-	Title             *string
-	Section           *string
-	Content           string
-	Applicability     string
-	ChunkType         string
-	RetrievalTrace    []ContextEvidenceTrace
+	CitationID        string                 `json:"citationId"`
+	DocumentID        int64                  `json:"documentId"`
+	DocumentVersionID int64                  `json:"documentVersionId"`
+	ChunkIDs          []int64                `json:"chunkIds"`
+	ChunkIndex        int                    `json:"chunkIndex"`
+	Title             *string                `json:"title,omitempty"`
+	Section           *string                `json:"section,omitempty"`
+	Content           string                 `json:"content"`
+	Applicability     string                 `json:"applicability,omitempty"`
+	ChunkType         string                 `json:"chunkType"`
+	RetrievalTrace    []ContextEvidenceTrace `json:"retrievalTrace"`
 }
 
 func (s *Service) loadRetrievalDocuments(ctx context.Context, chunks []model.KBChunk) (map[int64]model.KBDocument, error) {

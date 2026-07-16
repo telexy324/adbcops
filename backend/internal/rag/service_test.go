@@ -233,6 +233,30 @@ func TestContextBuilderExpandsParentTitle(t *testing.T) {
 	}
 }
 
+func TestEvaluateRetrievalUsesExplicitConfigurationWithoutWritingQA(t *testing.T) {
+	store := newFakeRepository()
+	embedding := &model.LLMConfig{ID: 2, Purpose: model.LLMPurposeEmbedding, Model: "embed-model", Enabled: true}
+	rerank := &model.LLMConfig{ID: 3, Purpose: model.LLMPurposeRerank, Model: "rerank-model", Enabled: true}
+	store.llmConfigs[model.LLMPurposeEmbedding], store.llmConfigs[model.LLMPurposeRerank] = embedding, rerank
+	documentID := store.addDocument(model.DocumentStatusPublished)
+	store.addChunk(documentID, "数据库连接池排障步骤。")
+	strategyID := int64(8)
+	result, err := NewService(store, nil, &semanticFakeClient{}).EvaluateRetrieval(context.Background(), &model.AppUser{ID: 1, Role: model.RoleAdmin}, EvaluationSearchInput{
+		Question: "连接池排障", EmbeddingConfigID: &embedding.ID, EmbeddingModelRevision: "revision-v2",
+		RerankConfigID: &rerank.ID, ChunkStrategyID: &strategyID,
+	})
+	if err != nil || len(result.Citations) != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	config := result.RetrievalTrace.Configuration
+	if config.EmbeddingConfigID == nil || *config.EmbeddingConfigID != 2 || config.EmbeddingModelRevision != "revision-v2" || config.RerankConfigID == nil || config.ChunkStrategyID == nil {
+		t.Fatalf("configuration = %+v", config)
+	}
+	if len(store.qaRecords) != 0 || len(store.conversations) != 0 || len(store.messages) != 0 {
+		t.Fatalf("evaluation wrote production records: qa=%d conversations=%d messages=%d", len(store.qaRecords), len(store.conversations), len(store.messages))
+	}
+}
+
 type fakeRepository struct {
 	nextConversationID int64
 	nextMessageID      int64
@@ -503,6 +527,19 @@ func (f *fakeRepository) FindDefaultEnabledLLMConfigByPurpose(_ context.Context,
 		return nil, repository.ErrNotFound
 	}
 	return config, nil
+}
+
+func (f *fakeRepository) FindLLMConfigByID(_ context.Context, id int64) (*model.LLMConfig, error) {
+	for _, config := range f.llmConfigs {
+		if config.ID == id {
+			return config, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *fakeRepository) FindReadyEmbeddingModelRevision(_ context.Context, _ int64, _ *int64) (string, error) {
+	return "test-revision", nil
 }
 
 func (f *fakeRepository) CreateQARecord(_ context.Context, record *model.QARecord) error {

@@ -37,6 +37,8 @@ type Repository interface {
 	SearchChunksDense(ctx context.Context, vector []float64, configID int64, modelName string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
 	FindKnowledgeDocumentsByIDs(ctx context.Context, ids []int64) ([]model.KBDocument, error)
 	FindKnowledgeChunksByIDs(ctx context.Context, ids []int64) ([]model.KBChunk, error)
+	FindLLMConfigByID(ctx context.Context, id int64) (*model.LLMConfig, error)
+	FindReadyEmbeddingModelRevision(ctx context.Context, configID int64, strategyID *int64) (string, error)
 	FindDefaultEnabledLLMConfig(ctx context.Context) (*model.LLMConfig, error)
 	FindDefaultEnabledLLMConfigByPurpose(ctx context.Context, purpose string) (*model.LLMConfig, error)
 	CreateQARecord(ctx context.Context, record *model.QARecord) error
@@ -112,9 +114,11 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	}
 	embeddingConfig, embeddingCredential, embeddingReady := s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
 	rerankConfig, rerankCredential, rerankReady := s.loadOptionalModel(ctx, model.LLMPurposeRerank)
+	embeddingRevision := s.readyEmbeddingRevision(ctx, embeddingConfig, embeddingReady, nil, "")
 	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
 	rewritten := understood.NormalizedQuery
-	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady)
+	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
+	retrievalTrace.Configuration = retrievalConfiguration(embeddingConfig, embeddingReady, embeddingRevision, rerankConfig, rerankReady, nil)
 	documents, documentErr := s.loadRetrievalDocuments(ctx, chunks)
 	if documentErr != nil {
 		documents = map[int64]model.KBDocument{}

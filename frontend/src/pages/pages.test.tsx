@@ -27,6 +27,8 @@ vi.mock("@/api/knowledge", () => ({
   listQualityStandards: vi.fn().mockResolvedValue([]),
   listDocuments: vi.fn().mockResolvedValue([]),
   reprocessDocument: vi.fn(),
+  runRetrievalLab: vi.fn(),
+  runRetrievalSmoke: vi.fn(),
   reviewAction: vi.fn(),
   reviewQuality: vi.fn(),
   toAPIErrorMessage: vi.fn(() => "请求失败"),

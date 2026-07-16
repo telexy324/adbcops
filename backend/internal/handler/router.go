@@ -8,35 +8,36 @@ import (
 )
 
 type RouterDependencies struct {
-	AuditHandler             *AuditHandler
-	AuditRecorder            appmiddleware.AuditRecorder
-	AuthHandler              *AuthHandler
-	UserHandler              *UserHandler
-	ConversationHandler      *ConversationHandler
-	LLMHandler               *LLMHandler
-	DocumentHandler          *DocumentHandler
-	QualityStandardHandler   *QualityStandardHandler
-	QualityEvaluationHandler *QualityEvaluationHandler
-	EmbeddingIndexHandler    *EmbeddingIndexHandler
-	RAGHandler               *RAGHandler
-	DataSourceHandler        *DataSourceHandler
-	AnalysisHandler          *AnalysisHandler
-	EventHandler             *EventHandler
-	EvidenceHandler          *EvidenceHandler
-	TopologyHandler          *TopologyHandler
-	TimelineHandler          *TimelineHandler
-	CorrelationHandler       *CorrelationHandler
-	IncidentHandler          *IncidentHandler
-	ToolHandler              *ToolHandler
-	SkillHandler             *SkillHandler
-	AgentHandler             *AgentHandler
-	WorkflowHandler          *WorkflowHandler
-	SFTPHandler              *SFTPHandler
-	K8sHandler               *K8sHandler
-	MetricsHandler           *MetricsHandler
-	ReadinessCheck           ReadinessChecker
-	Authenticate             gin.HandlerFunc
-	RequireAdmin             gin.HandlerFunc
+	AuditHandler               *AuditHandler
+	AuditRecorder              appmiddleware.AuditRecorder
+	AuthHandler                *AuthHandler
+	UserHandler                *UserHandler
+	ConversationHandler        *ConversationHandler
+	LLMHandler                 *LLMHandler
+	DocumentHandler            *DocumentHandler
+	QualityStandardHandler     *QualityStandardHandler
+	QualityEvaluationHandler   *QualityEvaluationHandler
+	EmbeddingIndexHandler      *EmbeddingIndexHandler
+	RetrievalEvaluationHandler *RetrievalEvaluationHandler
+	RAGHandler                 *RAGHandler
+	DataSourceHandler          *DataSourceHandler
+	AnalysisHandler            *AnalysisHandler
+	EventHandler               *EventHandler
+	EvidenceHandler            *EvidenceHandler
+	TopologyHandler            *TopologyHandler
+	TimelineHandler            *TimelineHandler
+	CorrelationHandler         *CorrelationHandler
+	IncidentHandler            *IncidentHandler
+	ToolHandler                *ToolHandler
+	SkillHandler               *SkillHandler
+	AgentHandler               *AgentHandler
+	WorkflowHandler            *WorkflowHandler
+	SFTPHandler                *SFTPHandler
+	K8sHandler                 *K8sHandler
+	MetricsHandler             *MetricsHandler
+	ReadinessCheck             ReadinessChecker
+	Authenticate               gin.HandlerFunc
+	RequireAdmin               gin.HandlerFunc
 }
 
 // NewRouter creates the HTTP router and installs the common middleware stack.
@@ -270,6 +271,16 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		indexRoutes.POST("/index-jobs/:id/retry", dependencies.RequireAdmin, dependencies.EmbeddingIndexHandler.Retry)
 		indexRoutes.POST("/indexes/rebuild", dependencies.RequireAdmin, dependencies.EmbeddingIndexHandler.Rebuild)
 		indexRoutes.GET("/indexes/status", dependencies.EmbeddingIndexHandler.Status)
+	}
+	if dependencies.RetrievalEvaluationHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		routes := router.Group("/api/knowledge/retrieval-evaluations")
+		routes.Use(dependencies.Authenticate)
+		routes.GET("/test-cases", dependencies.RetrievalEvaluationHandler.ListTestCases)
+		routes.GET("/runs", dependencies.RetrievalEvaluationHandler.ListRuns)
+		routes.GET("/runs/:id", dependencies.RetrievalEvaluationHandler.GetRun)
+		routes.POST("/test-cases", dependencies.RequireAdmin, dependencies.RetrievalEvaluationHandler.CreateTestCase)
+		routes.POST("/smoke", dependencies.RequireAdmin, dependencies.RetrievalEvaluationHandler.Smoke)
+		routes.POST("/lab", dependencies.RequireAdmin, dependencies.RetrievalEvaluationHandler.Lab)
 	}
 	if dependencies.DataSourceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		dataSourceRoutes := router.Group("/api/data-sources")

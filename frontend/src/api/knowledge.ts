@@ -234,6 +234,14 @@ export type RetrievalTrace = {
       }>;
     }>;
   };
+  configuration: {
+    embeddingConfigId?: number;
+    embeddingModel?: string;
+    embeddingModelRevision?: string;
+    rerankConfigId?: number;
+    rerankModel?: string;
+    chunkStrategyId?: number;
+  };
 };
 
 export type AskResponse = {
@@ -253,6 +261,70 @@ export type AskResponse = {
   citations: Citation[];
   recallCount: number;
   retrievalTrace: RetrievalTrace;
+};
+
+export type RetrievalEvaluationMetrics = {
+  recallAtK: number;
+  mrr: number;
+  ndcgAtK: number;
+  hitRate: number;
+  citationAccuracy: number;
+  answerGroundedness: number;
+  noAnswerPrecision: number;
+  smokeCoverage: number;
+};
+
+export type RetrievalEvaluationRun = {
+  id: number;
+  mode: "smoke" | "lab";
+  name: string;
+  status: "running" | "completed" | "failed";
+  documentVersionId?: number;
+  embeddingConfigId?: number;
+  embeddingModel?: string;
+  embeddingModelRevision?: string;
+  rerankConfigId?: number;
+  rerankModel?: string;
+  chunkStrategyId?: number;
+  metrics: RetrievalEvaluationMetrics;
+  caseCount: number;
+  passed: boolean;
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type RetrievalTestCase = {
+  id: number;
+  documentId?: number;
+  documentVersionId?: number;
+  question: string;
+  category:
+    "title" | "core_step" | "error_code" | "scenario" | "irrelevant" | "custom";
+  expectedDocumentIds: number[];
+  expectedChunkIds: number[];
+  expectedSections: string[];
+  mustIncludeFacts: string[];
+  mustNotInclude: string[];
+  expectNoAnswer: boolean;
+  source: "manual" | "author" | "llm_reviewed" | "qa_feedback";
+  enabled: boolean;
+};
+
+export type RetrievalRunConfig = {
+  name?: string;
+  caseIds?: number[];
+  documentVersionId?: number;
+  embeddingConfigId?: number;
+  embeddingModelRevision?: string;
+  rerankConfigId?: number;
+  chunkStrategyId?: number;
+  disableEmbedding?: boolean;
+  disableRerank?: boolean;
+  limit?: number;
+  thresholds?: {
+    minimumRecallAtK?: number;
+    minimumCitationAccuracy?: number;
+  };
 };
 
 export type UploadDocumentInput = {
@@ -367,6 +439,55 @@ export async function askKnowledge(input: {
 }) {
   const response = await apiClient.post<ApiEnvelope<AskResponse>>(
     "/api/knowledge/ask",
+    input,
+  );
+  return response.data.data;
+}
+
+export async function runRetrievalSmoke(
+  input: RetrievalRunConfig & {
+    documentVersionId: number;
+  },
+) {
+  const response = await apiClient.post<ApiEnvelope<RetrievalEvaluationRun>>(
+    "/api/knowledge/retrieval-evaluations/smoke",
+    input,
+  );
+  return response.data.data;
+}
+
+export async function runRetrievalLab(input: {
+  documentVersionId?: number;
+  caseIds?: number[];
+  variants: RetrievalRunConfig[];
+}) {
+  const response = await apiClient.post<
+    ApiEnvelope<{ runs: RetrievalEvaluationRun[]; count: number }>
+  >("/api/knowledge/retrieval-evaluations/lab", input);
+  return response.data.data.runs;
+}
+
+export async function listRetrievalEvaluationRuns(limit = 20) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: RetrievalEvaluationRun[]; count: number }>
+  >("/api/knowledge/retrieval-evaluations/runs", { params: { limit } });
+  return response.data.data.items;
+}
+
+export async function listRetrievalTestCases(documentVersionId?: number) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: RetrievalTestCase[]; count: number }>
+  >("/api/knowledge/retrieval-evaluations/test-cases", {
+    params: { documentVersionId },
+  });
+  return response.data.data.items;
+}
+
+export async function createRetrievalTestCase(
+  input: Omit<RetrievalTestCase, "id">,
+) {
+  const response = await apiClient.post<ApiEnvelope<RetrievalTestCase>>(
+    "/api/knowledge/retrieval-evaluations/test-cases",
     input,
   );
   return response.data.data;

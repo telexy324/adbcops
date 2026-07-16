@@ -60,12 +60,40 @@ type RetrievalTrace struct {
 	Candidates    []RetrievalCandidateTrace           `json:"candidates"`
 	Rerank        RerankTrace                         `json:"rerank"`
 	Context       ContextBuildTrace                   `json:"contextBuilder"`
+	Configuration RetrievalConfigurationTrace         `json:"configuration"`
+}
+
+type RetrievalConfigurationTrace struct {
+	EmbeddingConfigID      *int64 `json:"embeddingConfigId,omitempty"`
+	EmbeddingModel         string `json:"embeddingModel,omitempty"`
+	EmbeddingModelRevision string `json:"embeddingModelRevision,omitempty"`
+	RerankConfigID         *int64 `json:"rerankConfigId,omitempty"`
+	RerankModel            string `json:"rerankModel,omitempty"`
+	ChunkStrategyID        *int64 `json:"chunkStrategyId,omitempty"`
+}
+
+func retrievalConfiguration(embedding *model.LLMConfig, embeddingReady bool, revision string, rerank *model.LLMConfig, rerankReady bool, strategyID *int64) RetrievalConfigurationTrace {
+	result := RetrievalConfigurationTrace{EmbeddingModelRevision: revision, ChunkStrategyID: strategyID}
+	if embeddingReady && embedding != nil {
+		id := embedding.ID
+		result.EmbeddingConfigID, result.EmbeddingModel = &id, embedding.Model
+	}
+	if rerankReady && rerank != nil {
+		id := rerank.ID
+		result.RerankConfigID, result.RerankModel = &id, rerank.Model
+	}
+	return result
 }
 
 type rankedCandidate struct {
 	Chunk model.KBChunk
 	Score float64
 	Ranks []ChannelRank
+}
+
+type retrievalOptions struct {
+	StrategyID             *int64
+	EmbeddingModelRevision string
 }
 
 func (s *Service) understandQuery(ctx context.Context, question string, config *model.LLMConfig, credential modelCredential, ready bool) QueryUnderstanding {
@@ -141,12 +169,13 @@ func cleanTerms(values []string) []string {
 	return result
 }
 
-func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstanding, embeddingConfig *model.LLMConfig, credential modelCredential, embeddingReady bool) ([]model.KBChunk, RetrievalTrace) {
+func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstanding, embeddingConfig *model.LLMConfig, credential modelCredential, embeddingReady bool, options retrievalOptions) ([]model.KBChunk, RetrievalTrace) {
 	filter := repository.KnowledgeRetrievalFilter{
 		PermissionScope: "authenticated_published",
 		SystemName:      understood.SystemName, ComponentName: understood.ComponentName,
 		Environment: understood.Environment, DocTypes: understood.DocTypes,
 		MustHaveTerms: understood.MustHaveTerms, NegativeTerms: understood.NegativeTerms, Now: time.Now().UTC(),
+		StrategyID: options.StrategyID, EmbeddingModelRevision: options.EmbeddingModelRevision,
 	}
 	trace := RetrievalTrace{Understanding: understood, Filters: filter, RRFK: defaultRRFK}
 	trace.Channels = append(trace.Channels, ChannelTrace{Channel: "metadata_filter"})

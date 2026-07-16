@@ -6,6 +6,7 @@ import {
   Bot,
   CheckCircle2,
   FileText,
+  FlaskConical,
   Loader2,
   MessageSquareText,
   RefreshCw,
@@ -23,6 +24,8 @@ import {
   listQualityStandards,
   listDocuments,
   reprocessDocument,
+  runRetrievalLab,
+  runRetrievalSmoke,
   reviewAction,
   reviewQuality,
   toAPIErrorMessage,
@@ -31,6 +34,7 @@ import {
   type AskResponse,
   type KnowledgeDocument,
   type QualityResult,
+  type RetrievalEvaluationRun,
 } from "@/api/knowledge";
 import { Button } from "@/components/ui/button";
 import {
@@ -90,6 +94,14 @@ export function KnowledgePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [evaluationID, setEvaluationID] = useState("");
+  const [retrievalVersionID, setRetrievalVersionID] = useState("");
+  const [retrievalEmbeddingID, setRetrievalEmbeddingID] = useState("");
+  const [retrievalRerankID, setRetrievalRerankID] = useState("");
+  const [retrievalStrategyID, setRetrievalStrategyID] = useState("");
+  const [retrievalRevision, setRetrievalRevision] = useState("");
+  const [retrievalRuns, setRetrievalRuns] = useState<RetrievalEvaluationRun[]>(
+    [],
+  );
 
   const documentsQuery = useQuery({
     queryKey: ["knowledge", "documents"],
@@ -215,6 +227,35 @@ export function KnowledgePage() {
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
 
+  const smokeMutation = useMutation({
+    mutationFn: runRetrievalSmoke,
+    onSuccess: (run) => {
+      setRetrievalRuns([run]);
+      setNotice(`Smoke Test 完成：${run.passed ? "通过" : "未通过"}`);
+      setError(null);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const labMutation = useMutation({
+    mutationFn: runRetrievalLab,
+    onSuccess: (runs) => {
+      setRetrievalRuns(runs);
+      setNotice("Retrieval Lab 对比完成。");
+      setError(null);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const retrievalVersion = Number(retrievalVersionID);
+  const retrievalConfig = {
+    embeddingConfigId: positiveNumber(retrievalEmbeddingID),
+    embeddingModelRevision: retrievalRevision.trim() || undefined,
+    rerankConfigId: positiveNumber(retrievalRerankID),
+    chunkStrategyId: positiveNumber(retrievalStrategyID),
+    limit: 5,
+  };
+
   function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file) {
@@ -329,6 +370,144 @@ export function KnowledgePage() {
           >
             打开 Review <ArrowRight className="size-4" />
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="border-violet-200 bg-violet-50/40 shadow-none">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FlaskConical className="size-5 text-violet-600" />
+            Retrieval Evaluation Center
+          </CardTitle>
+          <CardDescription>
+            在发布前运行 Smoke Test，或比较 lexical、默认配置与指定的 Embedding
+            / Rerank / Chunk Strategy。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-5">
+            <Input
+              type="number"
+              min="1"
+              placeholder="Version ID"
+              value={retrievalVersionID}
+              onChange={(event) => setRetrievalVersionID(event.target.value)}
+            />
+            <Input
+              type="number"
+              min="1"
+              placeholder="Embedding Config"
+              value={retrievalEmbeddingID}
+              onChange={(event) => setRetrievalEmbeddingID(event.target.value)}
+            />
+            <Input
+              type="number"
+              min="1"
+              placeholder="Rerank Config"
+              value={retrievalRerankID}
+              onChange={(event) => setRetrievalRerankID(event.target.value)}
+            />
+            <Input
+              type="number"
+              min="1"
+              placeholder="Strategy ID"
+              value={retrievalStrategyID}
+              onChange={(event) => setRetrievalStrategyID(event.target.value)}
+            />
+            <Input
+              placeholder="Embedding Revision"
+              value={retrievalRevision}
+              onChange={(event) => setRetrievalRevision(event.target.value)}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              disabled={
+                !Number.isInteger(retrievalVersion) ||
+                retrievalVersion <= 0 ||
+                smokeMutation.isPending
+              }
+              onClick={() =>
+                smokeMutation.mutate({
+                  documentVersionId: retrievalVersion,
+                  ...retrievalConfig,
+                })
+              }
+            >
+              {smokeMutation.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="size-4" />
+              )}
+              运行 Smoke Test
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                !Number.isInteger(retrievalVersion) ||
+                retrievalVersion <= 0 ||
+                labMutation.isPending
+              }
+              onClick={() =>
+                labMutation.mutate({
+                  documentVersionId: retrievalVersion,
+                  variants: [
+                    {
+                      name: "lexical-only",
+                      disableEmbedding: true,
+                      disableRerank: true,
+                      limit: 5,
+                    },
+                    { name: "default-production", limit: 5 },
+                    { name: "configured-variant", ...retrievalConfig },
+                  ],
+                })
+              }
+            >
+              {labMutation.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <FlaskConical className="size-4" />
+              )}
+              对比三组配置
+            </Button>
+          </div>
+          {retrievalRuns.length > 0 && (
+            <div className="grid gap-3 lg:grid-cols-3">
+              {retrievalRuns.map((run) => (
+                <div
+                  key={run.id}
+                  className="rounded-lg border border-violet-200 bg-white p-3 text-xs text-slate-600"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold text-slate-800">{run.name}</p>
+                    <span
+                      className={
+                        run.passed ? "text-emerald-600" : "text-rose-600"
+                      }
+                    >
+                      {run.passed ? "PASS" : "FAIL"}
+                    </span>
+                  </div>
+                  <p className="mt-2">
+                    Recall@K {percent(run.metrics.recallAtK)} · MRR{" "}
+                    {percent(run.metrics.mrr)}
+                  </p>
+                  <p>
+                    nDCG {percent(run.metrics.ndcgAtK)} · Citation{" "}
+                    {percent(run.metrics.citationAccuracy)}
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    Embedding {run.embeddingModel ?? "off/default"} · Rerank{" "}
+                    {run.rerankModel ?? "off/default"} · Strategy{" "}
+                    {run.chunkStrategyId ?? "default"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -789,8 +968,9 @@ export function KnowledgePage() {
                           className="rounded-lg bg-white p-3 text-xs text-slate-600 ring-1 ring-slate-200"
                         >
                           <p className="font-semibold text-slate-700">
-                            [{citation.citationId}] · doc #{citation.documentId} ·
-                            version #{citation.documentVersionId} · chunks {citation.chunkIds.join(", ")}
+                            [{citation.citationId}] · doc #{citation.documentId}{" "}
+                            · version #{citation.documentVersionId} · chunks{" "}
+                            {citation.chunkIds.join(", ")}
                           </p>
                           <p className="mt-1 leading-5">{citation.snippet}</p>
                         </div>
@@ -813,6 +993,15 @@ export function KnowledgePage() {
       </section>
     </div>
   );
+}
+
+function positiveNumber(value: string) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function percent(value: number | undefined) {
+  return `${((value ?? 0) * 100).toFixed(1)}%`;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
