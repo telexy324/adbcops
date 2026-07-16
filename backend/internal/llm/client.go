@@ -6,12 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"aiops-platform/backend/internal/auditutil"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 )
 
-const defaultHTTPTimeout = 180 * time.Second
+const (
+	defaultHTTPTimeout = 180 * time.Second
+	maxLogBodyBytes    = 64 << 10
+)
 
 type ChatMessage struct {
 	Role    string `json:"role"`
@@ -98,13 +106,21 @@ type RerankClient interface {
 
 type OpenAICompatibleClient struct {
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 func NewOpenAICompatibleClient(httpClient *http.Client) *OpenAICompatibleClient {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: defaultHTTPTimeout}
 	}
-	return &OpenAICompatibleClient{httpClient: httpClient}
+	return &OpenAICompatibleClient{httpClient: httpClient, logger: slog.Default()}
+}
+
+func (c *OpenAICompatibleClient) WithLogger(logger *slog.Logger) *OpenAICompatibleClient {
+	if logger != nil {
+		c.logger = logger
+	}
+	return c
 }
 
 func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*ChatResult, error) {
@@ -128,8 +144,11 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*Ch
 	if err != nil {
 		return nil, fmt.Errorf("encode chat request: %w", err)
 	}
+	c.logRequest(ctx, "chat", endpoint, req.Model, body, req.APIKey, req.AppKey, req.APISecret)
+	startedAt := time.Now()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
+		c.logFailure(ctx, "chat", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("create chat request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
@@ -141,13 +160,16 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (*Ch
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
+		c.logFailure(ctx, "chat", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("send chat request: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
+		c.logFailure(ctx, "chat", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("read chat response: %w", err)
 	}
+	c.logResponse(ctx, "chat", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, responseStatusError("llm", response.StatusCode, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	}
@@ -203,8 +225,11 @@ func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest
 	if err != nil {
 		return nil, fmt.Errorf("encode embedding request: %w", err)
 	}
+	c.logRequest(ctx, "embedding", endpoint, req.Model, body, req.APIKey, req.APISecret)
+	startedAt := time.Now()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
 		return nil, fmt.Errorf("create embedding request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
@@ -216,13 +241,16 @@ func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
 		return nil, fmt.Errorf("send embedding request: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
 		return nil, fmt.Errorf("read embedding response: %w", err)
 	}
+	c.logResponse(ctx, "embedding", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.APISecret)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, responseStatusError("embedding model", response.StatusCode, responseBody, req.APIKey, req.APISecret)
 	}
@@ -276,8 +304,11 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("encode rerank request: %w", err)
 	}
+	c.logRequest(ctx, "rerank", endpoint, req.Model, body, req.APIKey, req.APISecret)
+	startedAt := time.Now()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
 		return nil, fmt.Errorf("create rerank request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
@@ -289,13 +320,16 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
 		return nil, fmt.Errorf("send rerank request: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
 		return nil, fmt.Errorf("read rerank response: %w", err)
 	}
+	c.logResponse(ctx, "rerank", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.APISecret)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, responseStatusError("rerank model", response.StatusCode, responseBody, req.APIKey, req.APISecret)
 	}
@@ -327,6 +361,91 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 	}, nil
 }
 
+func (c *OpenAICompatibleClient) logRequest(ctx context.Context, operation, endpoint, model string, body []byte, secrets ...string) {
+	c.logger.InfoContext(ctx, "llm outbound request",
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+		"operation", operation,
+		"method", http.MethodPost,
+		"endpoint", logEndpoint(endpoint),
+		"model", model,
+		"authorization", credentialState(firstSecret(secrets)),
+		"request_body", sanitizeLogBody(body, secrets...),
+	)
+}
+
+func (c *OpenAICompatibleClient) logResponse(ctx context.Context, operation, endpoint, model string, status int, startedAt time.Time, body []byte, secrets ...string) {
+	attrs := []any{
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+		"operation", operation,
+		"endpoint", logEndpoint(endpoint),
+		"model", model,
+		"status", status,
+		"latency_ms", time.Since(startedAt).Milliseconds(),
+		"response_body", sanitizeLogBody(body, secrets...),
+	}
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
+		c.logger.InfoContext(ctx, "llm outbound response", attrs...)
+		return
+	}
+	c.logger.ErrorContext(ctx, "llm outbound response", attrs...)
+}
+
+func (c *OpenAICompatibleClient) logFailure(ctx context.Context, operation, endpoint, model string, startedAt time.Time, err error, secrets ...string) {
+	c.logger.ErrorContext(ctx, "llm outbound request failed",
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+		"operation", operation,
+		"endpoint", logEndpoint(endpoint),
+		"model", model,
+		"latency_ms", time.Since(startedAt).Milliseconds(),
+		"error", sanitizeLogText(err.Error(), secrets...),
+	)
+}
+
+func firstSecret(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func credentialState(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "not configured"
+	}
+	return "Bearer ***"
+}
+
+func logEndpoint(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return strings.SplitN(endpoint, "?", 2)[0]
+	}
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.User = nil
+	return parsed.String()
+}
+
+func sanitizeLogBody(body []byte, secrets ...string) string {
+	detail := sanitizeLogText(strings.TrimSpace(string(body)), secrets...)
+	if sanitized := auditutil.SanitizeJSON([]byte(detail), maxLogBodyBytes); len(sanitized) > 0 {
+		return string(sanitized)
+	}
+	if len(detail) > maxLogBodyBytes {
+		return detail[:maxLogBodyBytes] + "...[truncated]"
+	}
+	return detail
+}
+
+func sanitizeLogText(detail string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			detail = strings.ReplaceAll(detail, secret, "***")
+		}
+	}
+	return detail
+}
+
 func modelEndpoint(baseURL, suffix string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.HasSuffix(base, suffix) {
@@ -339,12 +458,7 @@ func modelEndpoint(baseURL, suffix string) string {
 }
 
 func responseStatusError(service string, status int, body []byte, secrets ...string) error {
-	detail := strings.TrimSpace(string(body))
-	for _, secret := range secrets {
-		if secret != "" {
-			detail = strings.ReplaceAll(detail, secret, "***")
-		}
-	}
+	detail := sanitizeLogBody(body, secrets...)
 	if len(detail) > 2048 {
 		detail = detail[:2048] + "..."
 	}

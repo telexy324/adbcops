@@ -4879,6 +4879,8 @@ GET /api/health
 - Qwen3 Chat Completions 网关兼容：Bearer Token、`app_key`、`app_secret`、`stream=false`、`enable_thinking=false`；
 - Base URL 支持服务根路径、`/v1` 路径和完整模型接口路径，避免重复拼接 `/v1`；
 - LLM HTTP 调用默认超时 180 秒，支持 Qwen3 等长耗时模型返回完整结果；
+- Chat、Embedding、Rerank 调用统一打印结构化请求、响应和异常日志，包含 request ID、模型、接口、HTTP 状态和耗时；
+- 模型请求与响应正文写入日志，单个正文最多 64 KiB，超限明确标记截断；Bearer Token、API Key、App Key、App Secret 和 URL 查询参数必须脱敏；
 - Embedding API；
 - Rerank API；
 - Test API；
@@ -4892,6 +4894,7 @@ GET /api/health
 - 每种用途默认模型唯一；
 - 已有 LLM 配置可在配置中心编辑；
 - Mock LLM 测试通过。
+- Chat、Embedding、Rerank 的请求和响应日志可通过 request ID 串联，且测试证明凭据不泄漏。
 
 ### Task 1.5：文档上传
 
@@ -6091,6 +6094,7 @@ GET /api/health
 - Skill errors；
 - Tool errors；
 - LLM usage；
+- LLM / Embedding / Rerank 请求、响应、状态和耗时日志；
 - datasource health。
 
 ### Task 5.4：安全测试
