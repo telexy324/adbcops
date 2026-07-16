@@ -7,6 +7,7 @@ import { KnowledgePage } from "@/pages/knowledge-page";
 import { LoginPage } from "@/pages/login-page";
 import { NotFoundPage } from "@/pages/not-found-page";
 import { OperationsPage } from "@/pages/operations-page";
+import { QualityReviewPage } from "@/pages/quality-review-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { TopologyConfigurationPage } from "@/pages/topology-configuration-page";
 import { TopologyPage } from "@/pages/topology-page";
@@ -27,6 +28,10 @@ export const router = createBrowserRouter([
       { path: "/dashboard", element: <DashboardPage /> },
       { path: "/analysis", element: <AnalysisPage /> },
       { path: "/knowledge", element: <KnowledgePage /> },
+      {
+        path: "/knowledge/evaluations/:id/review",
+        element: <QualityReviewPage />,
+      },
       { path: "/workflows", element: <WorkflowPage /> },
       { path: "/topology", element: <TopologyPage /> },
       {

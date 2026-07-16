@@ -18,6 +18,7 @@
 - `000036_quality_standard_model`
 - `000037_quality_standard_import`
 - `000038_deterministic_quality_evaluation`
+- `000039_quality_evaluation_review`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
@@ -51,6 +52,7 @@
 - `000036`：将旧版上传型标准表保留为 `kb_quality_standard_legacy`，创建版本化的 Standard、Profile、Criterion、Rule 表并写入内置默认标准。
 - `000037`：创建评分标准导入审计表，保留原始 Word/Excel 文件哈希、解析器版本、Warning、Validation Error、Preview 和生成的 Draft 关联。
 - `000038`：创建质量评估及 Rule Result 表，保存确定性评分、Hard Gate、Block Evidence、扣分原因和建议。
+- `000039`：增加评分 Review 生命周期、发布不可变约束、重新评分历史指针与人工覆盖审计表。
 
 ## Quality Standard 2.0
 
@@ -69,3 +71,5 @@
 - 明文凭据的 Evidence 只保存脱敏占位符，不写入检测到的原始 Secret。
 - `source=deterministic` 不会为 semantic/LLM Rule 生成评分；此类结果标记为 `manual_confirmation_required`。
 - `source=hybrid` 保存确定性规则与通过 Evidence 校验的 LLM Rule 结果；`model_config_id` 固定本次模型配置，`result` 记录 Criterion 分数、Map 调用次数、校验 Warning 和降级组件。
+- `review_status=published` 的评估不可再覆盖；`kb_quality_evaluation_override` 保存人工修改前后值、理由、操作人和时间。
+- 重新评分创建新评估，并用 `supersedes_evaluation_id` 保留与旧评估的历史关系。

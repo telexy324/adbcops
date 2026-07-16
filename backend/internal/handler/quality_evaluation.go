@@ -64,6 +64,75 @@ func (h *QualityEvaluationHandler) RuleResults(c *gin.Context) {
 	success(c, gin.H{"items": results, "count": len(results)})
 }
 
+func (h *QualityEvaluationHandler) Override(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := qualityID(c, "id")
+	if !ok {
+		return
+	}
+	var request qualityeval.OverrideInput
+	if c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	evaluation, err := h.service.Override(c.Request.Context(), actor, id, request)
+	if handleQualityEvaluationError(c, err) {
+		return
+	}
+	success(c, evaluation)
+}
+
+func (h *QualityEvaluationHandler) Publish(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := qualityID(c, "id")
+	if !ok {
+		return
+	}
+	evaluation, err := h.service.Publish(c.Request.Context(), actor, id)
+	if handleQualityEvaluationError(c, err) {
+		return
+	}
+	success(c, evaluation)
+}
+
+func (h *QualityEvaluationHandler) Rerun(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := qualityID(c, "id")
+	if !ok {
+		return
+	}
+	evaluation, err := h.service.Rerun(c.Request.Context(), actor, id)
+	if handleQualityEvaluationError(c, err) {
+		return
+	}
+	success(c, evaluation)
+}
+
+func (h *QualityEvaluationHandler) Overrides(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := qualityID(c, "id")
+	if !ok {
+		return
+	}
+	audits, err := h.service.Overrides(c.Request.Context(), actor, id)
+	if handleQualityEvaluationError(c, err) {
+		return
+	}
+	success(c, gin.H{"items": audits, "count": len(audits)})
+}
+
 func handleQualityEvaluationError(c *gin.Context, err error) bool {
 	if err == nil {
 		return false
@@ -76,7 +145,9 @@ func handleQualityEvaluationError(c *gin.Context, err error) bool {
 		failure(c, http.StatusForbidden, 40331, err.Error())
 	case errors.Is(err, qualityeval.ErrProfileNotPublished), errors.Is(err, qualityeval.ErrDocumentNotParsed):
 		failure(c, http.StatusConflict, 40931, err.Error())
-	case errors.Is(err, qualityeval.ErrUnsupportedMode), errors.Is(err, qualityeval.ErrInvalidEvaluation):
+	case errors.Is(err, qualityeval.ErrPublishedImmutable):
+		failure(c, http.StatusConflict, 40932, err.Error())
+	case errors.Is(err, qualityeval.ErrUnsupportedMode), errors.Is(err, qualityeval.ErrInvalidEvaluation), errors.Is(err, qualityeval.ErrOverrideReason):
 		failure(c, http.StatusUnprocessableEntity, 42231, err.Error())
 	default:
 		failure(c, http.StatusInternalServerError, 50001, "quality evaluation request failed")

@@ -78,6 +78,69 @@ export type ReviewResponse = {
   canPublish: boolean;
 };
 
+export type QualityEvaluation = {
+  id: number;
+  documentVersionId: number;
+  qualityProfileId: number;
+  qualityProfileVersion: string;
+  parseScore?: number;
+  contentScore?: number;
+  retrievalScore?: number;
+  totalScore?: number;
+  gateStatus: "pass" | "warning" | "blocked";
+  level?: string;
+  source: string;
+  summary?: string;
+  result?: {
+    criterionScores?: Record<string, { score: number; maxScore: number }>;
+    hardGateViolations?: string[];
+  };
+  status: string;
+  reviewStatus: "draft" | "published" | "superseded";
+  publishedBy?: number;
+  publishedAt?: string;
+  supersedesEvaluationId?: number;
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type QualityRuleResult = {
+  id: number;
+  evaluationId: number;
+  criterionKey: string;
+  ruleKey: string;
+  score?: number;
+  maxScore?: number;
+  status?: string;
+  confidence?: number;
+  evidence?: Array<{
+    blockId?: string;
+    sectionPath?: string[];
+    page?: number;
+    quote?: string;
+    reason?: string;
+  }>;
+  deductionReason?: string;
+  suggestion?: string;
+  source: string;
+  manuallyOverridden: boolean;
+  overriddenBy?: number;
+  overrideComment?: string;
+};
+
+export type QualityOverrideAudit = {
+  id: number;
+  evaluationId: number;
+  ruleResultId: number;
+  previousScore?: number;
+  overriddenScore?: number;
+  previousStatus?: string;
+  overriddenStatus?: string;
+  comment: string;
+  createdBy: number;
+  createdAt: string;
+};
+
 export type Citation = {
   documentId: number;
   chunkId: number;
@@ -146,7 +209,10 @@ export async function listQualityStandards() {
   return response.data.data;
 }
 
-export async function uploadQualityStandard(input: { file: File; title: string }) {
+export async function uploadQualityStandard(input: {
+  file: File;
+  title: string;
+}) {
   const form = new FormData();
   form.append("file", input.file);
   form.append("title", input.title);
@@ -171,10 +237,7 @@ export async function getDocumentChunks(documentId: number) {
   return response.data.data;
 }
 
-export async function reviewQuality(
-  documentId: number,
-  result: QualityResult,
-) {
+export async function reviewQuality(documentId: number, result: QualityResult) {
   const response = await apiClient.post<ApiEnvelope<ReviewResponse>>(
     `/api/documents/${documentId}/review`,
     { result },
@@ -218,6 +281,57 @@ export async function askKnowledge(input: {
   const response = await apiClient.post<ApiEnvelope<AskResponse>>(
     "/api/knowledge/ask",
     input,
+  );
+  return response.data.data;
+}
+
+export async function getQualityEvaluation(id: number) {
+  const response = await apiClient.get<ApiEnvelope<QualityEvaluation>>(
+    `/api/knowledge/evaluations/${id}`,
+  );
+  return response.data.data;
+}
+
+export async function listQualityRuleResults(id: number) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: QualityRuleResult[]; count: number }>
+  >(`/api/knowledge/evaluations/${id}/rule-results`);
+  return response.data.data.items;
+}
+
+export async function listQualityOverrideAudits(id: number) {
+  const response = await apiClient.get<
+    ApiEnvelope<{ items: QualityOverrideAudit[]; count: number }>
+  >(`/api/knowledge/evaluations/${id}/overrides`);
+  return response.data.data.items;
+}
+
+export async function overrideQualityRule(
+  evaluationId: number,
+  input: {
+    ruleResultId: number;
+    score: number;
+    status: string;
+    comment: string;
+  },
+) {
+  const response = await apiClient.post<ApiEnvelope<QualityEvaluation>>(
+    `/api/knowledge/evaluations/${evaluationId}/override`,
+    input,
+  );
+  return response.data.data;
+}
+
+export async function publishQualityEvaluation(id: number) {
+  const response = await apiClient.post<ApiEnvelope<QualityEvaluation>>(
+    `/api/knowledge/evaluations/${id}/publish`,
+  );
+  return response.data.data;
+}
+
+export async function rerunQualityEvaluation(id: number) {
+  const response = await apiClient.post<ApiEnvelope<QualityEvaluation>>(
+    `/api/knowledge/evaluations/${id}/rerun`,
   );
   return response.data.data;
 }

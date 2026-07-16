@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
+  ArrowRight,
   Bot,
   CheckCircle2,
   FileText,
@@ -13,6 +14,7 @@ import {
   UploadCloud,
   XCircle,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import {
   autoReviewQuality,
@@ -64,6 +66,7 @@ const statusTone: Record<string, string> = {
 
 export function KnowledgePage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [selectedID, setSelectedID] = useState<number | null>(null);
   const [uploadForm, setUploadForm] = useState({
     title: "",
@@ -86,6 +89,7 @@ export function KnowledgePage() {
   const [lastAnswer, setLastAnswer] = useState<AskResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [evaluationID, setEvaluationID] = useState("");
 
   const documentsQuery = useQuery({
     queryKey: ["knowledge", "documents"],
@@ -115,7 +119,9 @@ export function KnowledgePage() {
       setSelectedID(document.id);
       setNotice("上传成功，下一步可以解析切片。");
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["knowledge", "documents"],
+      });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
@@ -125,7 +131,9 @@ export function KnowledgePage() {
     onSuccess: () => {
       setNotice("解析切片完成。");
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "chunks", selectedID] });
+      void queryClient.invalidateQueries({
+        queryKey: ["knowledge", "chunks", selectedID],
+      });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
@@ -138,7 +146,9 @@ export function KnowledgePage() {
       setSelectedStandardIDs((current) => [...current, standard.id]);
       setNotice("评分标准上传成功。");
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "quality-standards"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["knowledge", "quality-standards"],
+      });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
@@ -150,7 +160,9 @@ export function KnowledgePage() {
       setSelectedID(response.document.id);
       setNotice(`质检完成，状态：${response.document.status}`);
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["knowledge", "documents"],
+      });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
@@ -164,7 +176,9 @@ export function KnowledgePage() {
       }
       setNotice(`自动评分完成，状态：${response.document.status}`);
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["knowledge", "documents"],
+      });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
@@ -183,7 +197,9 @@ export function KnowledgePage() {
       setSelectedID(response.document.id);
       setNotice(`审核动作已提交：${response.document.status}`);
       setError(null);
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "documents"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["knowledge", "documents"],
+      });
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });
@@ -255,7 +271,8 @@ export function KnowledgePage() {
             知识中心
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-            覆盖上传、解析、质检、审核发布与 RAG 问答。只有 published 文档会进入正式问答召回。
+            覆盖上传、解析、质检、审核发布与 RAG 问答。只有 published
+            文档会进入正式问答召回。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -280,6 +297,40 @@ export function KnowledgePage() {
           {error ?? notice}
         </div>
       )}
+
+      <Card className="border-cyan-200 bg-cyan-50/40 shadow-none">
+        <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-slate-900">
+              Quality Evaluation Review
+            </p>
+            <p className="text-sm text-slate-500">
+              查看分项证据、Hard Gate、人工覆盖审计，并发布或重新评分。
+            </p>
+          </div>
+          <Input
+            className="sm:w-48"
+            type="number"
+            min="1"
+            value={evaluationID}
+            onChange={(event) => setEvaluationID(event.target.value)}
+            placeholder="Evaluation ID"
+            aria-label="Quality Evaluation ID"
+          />
+          <Button
+            type="button"
+            disabled={
+              !Number.isInteger(Number(evaluationID)) ||
+              Number(evaluationID) <= 0
+            }
+            onClick={() =>
+              navigate(`/knowledge/evaluations/${evaluationID}/review`)
+            }
+          >
+            打开 Review <ArrowRight className="size-4" />
+          </Button>
+        </CardContent>
+      </Card>
 
       <section className="grid gap-6 xl:grid-cols-[0.9fr_1.15fr_1fr]">
         <Card className="border-slate-200/80 shadow-none">
@@ -382,7 +433,10 @@ export function KnowledgePage() {
               </Button>
             </form>
 
-            <form className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3" onSubmit={submitStandard}>
+            <form
+              className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
+              onSubmit={submitStandard}
+            >
               <div>
                 <p className="text-sm font-semibold text-slate-700">评分标准</p>
                 <p className="mt-1 text-xs text-slate-400">
@@ -400,10 +454,16 @@ export function KnowledgePage() {
                 <Input
                   type="file"
                   accept=".md,.txt,.docx,.xlsx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  onChange={(event) => setStandardFile(event.target.files?.[0] ?? null)}
+                  onChange={(event) =>
+                    setStandardFile(event.target.files?.[0] ?? null)
+                  }
                 />
               </Field>
-              <Button className="w-full" variant="outline" disabled={uploadStandardMutation.isPending}>
+              <Button
+                className="w-full"
+                variant="outline"
+                disabled={uploadStandardMutation.isPending}
+              >
                 {uploadStandardMutation.isPending && (
                   <Loader2 className="size-4 animate-spin" />
                 )}
@@ -485,14 +545,19 @@ export function KnowledgePage() {
                     <Info label="系统" value={selectedDocument.systemName} />
                     <Info label="组件" value={selectedDocument.componentName} />
                     <Info label="环境" value={selectedDocument.environment} />
-                    <Info label="质量分" value={String(selectedDocument.qualityScore)} />
+                    <Info
+                      label="质量分"
+                      value={String(selectedDocument.qualityScore)}
+                    />
                   </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
-                    onClick={() => reprocessMutation.mutate(selectedDocument.id)}
+                    onClick={() =>
+                      reprocessMutation.mutate(selectedDocument.id)
+                    }
                     disabled={reprocessMutation.isPending}
                   >
                     <RefreshCw
@@ -561,7 +626,9 @@ export function KnowledgePage() {
                     <input
                       type="checkbox"
                       checked={useDefaultQuality}
-                      onChange={(event) => setUseDefaultQuality(event.target.checked)}
+                      onChange={(event) =>
+                        setUseDefaultQuality(event.target.checked)
+                      }
                     />
                     使用默认评分标准
                   </label>
@@ -640,22 +707,26 @@ export function KnowledgePage() {
                     </span>
                   </div>
                   <div className="max-h-72 space-y-2 overflow-y-auto p-3">
-                    {(chunksQuery.data?.chunks ?? []).slice(0, 5).map((chunk) => (
-                      <div
-                        key={chunk.id}
-                        className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"
-                      >
-                        <p className="mb-1 font-semibold text-slate-700">
-                          #{chunk.chunkIndex} {chunk.sourceSection ?? ""}
+                    {(chunksQuery.data?.chunks ?? [])
+                      .slice(0, 5)
+                      .map((chunk) => (
+                        <div
+                          key={chunk.id}
+                          className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600"
+                        >
+                          <p className="mb-1 font-semibold text-slate-700">
+                            #{chunk.chunkIndex} {chunk.sourceSection ?? ""}
+                          </p>
+                          {chunk.content}
+                        </div>
+                      ))}
+                    {selectedID &&
+                      !chunksQuery.isLoading &&
+                      !chunksQuery.data?.chunkCount && (
+                        <p className="p-3 text-sm text-slate-400">
+                          暂无 chunk，点击“解析切片”生成。
                         </p>
-                        {chunk.content}
-                      </div>
-                    ))}
-                    {selectedID && !chunksQuery.isLoading && !chunksQuery.data?.chunkCount && (
-                      <p className="p-3 text-sm text-slate-400">
-                        暂无 chunk，点击“解析切片”生成。
-                      </p>
-                    )}
+                      )}
                   </div>
                 </div>
               </>
@@ -744,13 +815,7 @@ export function KnowledgePage() {
   );
 }
 
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
@@ -806,7 +871,12 @@ function ReviewButton({
   disabled: boolean;
 }) {
   return (
-    <Button type="button" variant="outline" onClick={action} disabled={disabled}>
+    <Button
+      type="button"
+      variant="outline"
+      onClick={action}
+      disabled={disabled}
+    >
       {icon}
       {label}
     </Button>

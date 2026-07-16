@@ -246,6 +246,12 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		evaluationRoutes.POST("", dependencies.QualityEvaluationHandler.Create)
 		evaluationRoutes.GET("/:id", dependencies.QualityEvaluationHandler.Get)
 		evaluationRoutes.GET("/:id/rule-results", dependencies.QualityEvaluationHandler.RuleResults)
+		evaluationRoutes.GET("/:id/overrides", dependencies.QualityEvaluationHandler.Overrides)
+		evaluationRoutes.POST("/:id/rerun", dependencies.QualityEvaluationHandler.Rerun)
+		if dependencies.RequireAdmin != nil {
+			evaluationRoutes.POST("/:id/override", dependencies.RequireAdmin, dependencies.QualityEvaluationHandler.Override)
+			evaluationRoutes.POST("/:id/publish", dependencies.RequireAdmin, dependencies.QualityEvaluationHandler.Publish)
+		}
 	}
 	if dependencies.DataSourceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		dataSourceRoutes := router.Group("/api/data-sources")

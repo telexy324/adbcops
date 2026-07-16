@@ -20,6 +20,8 @@ var (
 	ErrDocumentNotParsed   = errors.New("document version has not passed parsing")
 	ErrUnsupportedMode     = errors.New("quality evaluation mode must be deterministic, hybrid, or llm")
 	ErrForbidden           = errors.New("quality evaluation access forbidden")
+	ErrOverrideReason      = errors.New("manual override reason is required")
+	ErrPublishedImmutable  = errors.New("published quality evaluation is immutable")
 )
 
 type Repository interface {
@@ -32,6 +34,9 @@ type Repository interface {
 	CreateQualityEvaluation(context.Context, *model.KBQualityEvaluation) error
 	FindQualityEvaluation(context.Context, int64) (*model.KBQualityEvaluation, error)
 	ListQualityRuleResults(context.Context, int64) ([]model.KBQualityRuleResult, error)
+	ApplyQualityEvaluationOverride(context.Context, repository.QualityEvaluationReviewUpdate) error
+	PublishQualityEvaluation(context.Context, int64, int64, time.Time) (*model.KBQualityEvaluation, error)
+	ListQualityEvaluationOverrides(context.Context, int64) ([]model.KBQualityEvaluationOverride, error)
 	FindDefaultEnabledLLMConfigByPurpose(context.Context, string) (*model.LLMConfig, error)
 }
 
@@ -62,6 +67,10 @@ type CreateInput struct {
 }
 
 func (s *Service) Create(ctx context.Context, actor *model.AppUser, input CreateInput) (*model.KBQualityEvaluation, error) {
+	return s.create(ctx, actor, input, nil)
+}
+
+func (s *Service) create(ctx context.Context, actor *model.AppUser, input CreateInput, supersedes *int64) (*model.KBQualityEvaluation, error) {
 	if actor == nil || input.DocumentVersionID <= 0 || input.QualityProfileID <= 0 {
 		return nil, ErrInvalidEvaluation
 	}
@@ -159,7 +168,7 @@ func (s *Service) Create(ctx context.Context, actor *model.AppUser, input Create
 	parseScore, totalScore, level, now := parseQualityScore(parseQuality), output.ContentScore, output.Level, s.now()
 	summary := fmt.Sprintf("%s evaluation assessed %d rules; %d rules await semantic or human evaluation; %d hard-gate violations.", source, output.AssessedRuleCount, output.PendingRuleCount, len(output.HardGateViolations))
 	result := marshal(map[string]any{"hardGateViolations": output.HardGateViolations, "assessedRuleCount": output.AssessedRuleCount, "pendingRuleCount": output.PendingRuleCount, "criterionScores": criterionScores, "degradedComponents": degraded, "validationWarnings": validationWarnings, "llmCalls": llmCalls, "llmFailedCalls": llmFailedCalls, "documentId": documentRow.ID})
-	evaluation := &model.KBQualityEvaluation{DocumentVersionID: version.ID, QualityProfileID: profile.ID, QualityProfileVersion: standard.Version, ParseScore: &parseScore, ContentScore: &output.ContentScore, TotalScore: &totalScore, GateStatus: output.GateStatus, Level: &level, Source: source, ModelConfigID: modelConfigID, Summary: &summary, Result: result, Status: "completed", CompletedAt: &now, RuleResults: output.Results}
+	evaluation := &model.KBQualityEvaluation{DocumentVersionID: version.ID, QualityProfileID: profile.ID, QualityProfileVersion: standard.Version, ParseScore: &parseScore, ContentScore: &output.ContentScore, TotalScore: &totalScore, GateStatus: output.GateStatus, Level: &level, Source: source, ModelConfigID: modelConfigID, Summary: &summary, Result: result, Status: "completed", ReviewStatus: "draft", SupersedesEvaluationID: supersedes, CompletedAt: &now, RuleResults: output.Results}
 	if err := s.repository.CreateQualityEvaluation(ctx, evaluation); err != nil {
 		return nil, err
 	}
@@ -297,6 +306,171 @@ func (s *Service) RuleResults(ctx context.Context, actor *model.AppUser, id int6
 		return nil, err
 	}
 	return s.repository.ListQualityRuleResults(ctx, id)
+}
+
+type OverrideInput struct {
+	RuleResultID int64    `json:"ruleResultId"`
+	Score        *float64 `json:"score"`
+	Status       string   `json:"status"`
+	Comment      string   `json:"comment"`
+}
+
+func (s *Service) Override(ctx context.Context, actor *model.AppUser, id int64, input OverrideInput) (*model.KBQualityEvaluation, error) {
+	if actor == nil || actor.Role != model.RoleAdmin {
+		return nil, ErrForbidden
+	}
+	comment := strings.TrimSpace(input.Comment)
+	if comment == "" {
+		return nil, ErrOverrideReason
+	}
+	if id <= 0 || input.RuleResultID <= 0 || input.Score == nil || *input.Score < 0 || !validFindingStatus(input.Status) {
+		return nil, ErrInvalidEvaluation
+	}
+	evaluation, err := s.Get(ctx, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureEvaluationMutable(evaluation); err != nil {
+		return nil, err
+	}
+	profile, err := s.repository.FindQualityProfile(ctx, evaluation.QualityProfileID)
+	if err != nil {
+		return nil, err
+	}
+	results, err := s.repository.ListQualityRuleResults(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	index := -1
+	for i := range results {
+		if results[i].ID == input.RuleResultID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return nil, repository.ErrNotFound
+	}
+	current := results[index]
+	if current.MaxScore == nil || *input.Score > *current.MaxScore {
+		return nil, ErrInvalidEvaluation
+	}
+	status := strings.TrimSpace(input.Status)
+	actorID := actor.ID
+	results[index].Score = input.Score
+	results[index].FindingStatus = &status
+	results[index].Source = "manual"
+	results[index].ManuallyOverridden = true
+	results[index].OverriddenBy = &actorID
+	results[index].OverrideComment = &comment
+	aggregated := aggregateResults(profile, results)
+	evaluation.ContentScore, evaluation.TotalScore = &aggregated.ContentScore, &aggregated.ContentScore
+	evaluation.GateStatus = aggregated.GateStatus
+	evaluation.Level = &aggregated.Level
+	resultPayload := map[string]any{}
+	_ = json.Unmarshal(evaluation.Result, &resultPayload)
+	resultPayload["hardGateViolations"] = aggregated.HardGateViolations
+	resultPayload["assessedRuleCount"] = aggregated.AssessedRuleCount
+	resultPayload["pendingRuleCount"] = aggregated.PendingRuleCount
+	resultPayload["criterionScores"] = criterionScoresFromResults(results)
+	evaluation.Result = marshal(resultPayload)
+	summary := fmt.Sprintf("reviewed evaluation assessed %d rules; %d rules await evaluation; %d hard-gate violations.", aggregated.AssessedRuleCount, aggregated.PendingRuleCount, len(aggregated.HardGateViolations))
+	evaluation.Summary = &summary
+	audit := &model.KBQualityEvaluationOverride{EvaluationID: id, RuleResultID: current.ID, PreviousScore: current.Score, OverriddenScore: input.Score, PreviousStatus: current.FindingStatus, OverriddenStatus: &status, Comment: comment, CreatedBy: actor.ID}
+	if err := s.repository.ApplyQualityEvaluationOverride(ctx, repository.QualityEvaluationReviewUpdate{Evaluation: evaluation, RuleResult: &results[index], Audit: audit}); err != nil {
+		if errors.Is(err, repository.ErrImmutable) {
+			return nil, ErrPublishedImmutable
+		}
+		return nil, err
+	}
+	evaluation.RuleResults = results
+	return evaluation, nil
+}
+
+func (s *Service) Publish(ctx context.Context, actor *model.AppUser, id int64) (*model.KBQualityEvaluation, error) {
+	if actor == nil || actor.Role != model.RoleAdmin || id <= 0 {
+		return nil, ErrForbidden
+	}
+	if _, err := s.Get(ctx, actor, id); err != nil {
+		return nil, err
+	}
+	evaluation, err := s.repository.PublishQualityEvaluation(ctx, id, actor.ID, s.now())
+	if errors.Is(err, repository.ErrImmutable) {
+		return nil, ErrPublishedImmutable
+	}
+	return evaluation, err
+}
+
+func (s *Service) Rerun(ctx context.Context, actor *model.AppUser, id int64) (*model.KBQualityEvaluation, error) {
+	original, err := s.Get(ctx, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	mode := "deterministic"
+	if original.Source != "deterministic" {
+		mode = "hybrid"
+	}
+	return s.create(ctx, actor, CreateInput{DocumentVersionID: original.DocumentVersionID, QualityProfileID: original.QualityProfileID, Mode: mode, Force: true}, &original.ID)
+}
+
+func (s *Service) Overrides(ctx context.Context, actor *model.AppUser, id int64) ([]model.KBQualityEvaluationOverride, error) {
+	if _, err := s.Get(ctx, actor, id); err != nil {
+		return nil, err
+	}
+	return s.repository.ListQualityEvaluationOverrides(ctx, id)
+}
+
+func aggregateResults(profile *model.KBQualityProfile, results []model.KBQualityRuleResult) EngineOutput {
+	output := EngineOutput{Results: results, HardGateViolations: []string{}}
+	hardGates := map[string]bool{}
+	for _, criterion := range profile.Criteria {
+		for _, rule := range criterion.Rules {
+			hardGates[criterion.CriterionKey+"\x00"+rule.RuleKey] = rule.HardGate
+		}
+	}
+	earned, maxScore := 0.0, 0.0
+	for _, result := range results {
+		if result.Score == nil {
+			output.PendingRuleCount++
+			continue
+		}
+		output.AssessedRuleCount++
+		earned += *result.Score
+		if result.MaxScore != nil {
+			maxScore += *result.MaxScore
+		}
+		if hardGates[result.CriterionKey+"\x00"+result.RuleKey] && result.FindingStatus != nil && *result.FindingStatus != FindingPresent && *result.FindingStatus != FindingNotApplicable {
+			output.HardGateViolations = append(output.HardGateViolations, result.RuleKey)
+		}
+	}
+	if maxScore > 0 {
+		output.ContentScore = roundScore(earned / maxScore * profile.TotalScore)
+	}
+	switch {
+	case len(output.HardGateViolations) > 0 || output.ContentScore < profile.WarningScore:
+		output.GateStatus, output.Level = "blocked", "blocked"
+	case output.ContentScore < profile.PassScore:
+		output.GateStatus, output.Level = "warning", "warning"
+	default:
+		output.GateStatus, output.Level = "pass", "pass"
+	}
+	return output
+}
+
+func validFindingStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case FindingPresent, FindingMissing, FindingPartial, FindingConflicting, FindingOutdated, FindingUnsafe, FindingNotApplicable, FindingManualConfirmationRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func ensureEvaluationMutable(evaluation *model.KBQualityEvaluation) error {
+	if evaluation == nil || evaluation.ReviewStatus != "draft" {
+		return ErrPublishedImmutable
+	}
+	return nil
 }
 
 func (s *Service) loadAccessibleVersion(ctx context.Context, actor *model.AppUser, versionID int64) (*model.KBDocumentVersion, *model.KBDocument, error) {
