@@ -11,10 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type QualityStandardHandler struct{ service *qualitysvc.Service }
+type QualityStandardHandler struct {
+	service        *qualitysvc.Service
+	maxUploadBytes int64
+}
 
-func NewQualityStandardHandler(service *qualitysvc.Service) *QualityStandardHandler {
-	return &QualityStandardHandler{service: service}
+func NewQualityStandardHandler(service *qualitysvc.Service, maxUploadBytes int64) *QualityStandardHandler {
+	return &QualityStandardHandler{service: service, maxUploadBytes: maxUploadBytes}
 }
 
 func (h *QualityStandardHandler) List(c *gin.Context) {
@@ -40,6 +43,41 @@ func (h *QualityStandardHandler) Create(c *gin.Context) {
 		return
 	}
 	success(c, standard)
+}
+
+func (h *QualityStandardHandler) Import(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.service == nil {
+		failure(c, http.StatusServiceUnavailable, 50301, "quality standard importer unavailable")
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxUploadBytes+(1<<20))
+	file, err := c.FormFile("file")
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			failure(c, http.StatusRequestEntityTooLarge, 41321, qualitysvc.ErrImportFileTooLarge.Error())
+			return
+		}
+		failure(c, http.StatusBadRequest, 40001, "quality standard file is required")
+		return
+	}
+	result, err := h.service.Import(c.Request.Context(), actor.ID, file, qualitysvc.ImportOptions{
+		Name: c.PostForm("name"), Version: c.PostForm("version"), ProfileKey: c.PostForm("profileKey"), ProfileName: c.PostForm("profileName"),
+	})
+	var validationError *qualitysvc.ImportValidationError
+	if errors.As(err, &validationError) {
+		recordFailureError(c, err, "quality standard import validation failed")
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"code": 42223, "message": err.Error(), "data": validationError.Result})
+		return
+	}
+	if handleQualityStandardError(c, err) {
+		return
+	}
+	success(c, result)
 }
 
 func (h *QualityStandardHandler) Get(c *gin.Context) {
@@ -196,6 +234,12 @@ func handleQualityStandardError(c *gin.Context, err error) bool {
 		failure(c, http.StatusConflict, 40922, err.Error())
 	case errors.Is(err, qualitysvc.ErrInvalidStandard):
 		failure(c, http.StatusUnprocessableEntity, 42221, err.Error())
+	case errors.Is(err, qualitysvc.ErrUnsupportedImportFile):
+		failure(c, http.StatusUnsupportedMediaType, 41521, err.Error())
+	case errors.Is(err, qualitysvc.ErrImportFileTooLarge):
+		failure(c, http.StatusRequestEntityTooLarge, 41321, err.Error())
+	case errors.Is(err, qualitysvc.ErrImporterNotConfigured):
+		failure(c, http.StatusServiceUnavailable, 50321, err.Error())
 	default:
 		failure(c, http.StatusInternalServerError, 50001, "quality standard request failed")
 	}

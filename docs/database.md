@@ -16,6 +16,7 @@
 - `000010_create_analysis_tasks`
 - `000035_knowledge_document_versions`
 - `000036_quality_standard_model`
+- `000037_quality_standard_import`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
@@ -47,6 +48,7 @@
 - `000010`：创建分析任务表。
 - `000035`：创建 Knowledge Center 2.0 文档版本与 AST Block 表，并为升级前文档回填可识别的 legacy version。
 - `000036`：将旧版上传型标准表保留为 `kb_quality_standard_legacy`，创建版本化的 Standard、Profile、Criterion、Rule 表并写入内置默认标准。
+- `000037`：创建评分标准导入审计表，保留原始 Word/Excel 文件哈希、解析器版本、Warning、Validation Error、Preview 和生成的 Draft 关联。
 
 ## Quality Standard 2.0
 
@@ -56,3 +58,4 @@
 - `kb_quality_rule`：可执行规则、严重度、扣分、hard gate、证据要求和检测配置。
 - 服务层要求每个 Profile 的 Criterion 权重合计为 `1.0000`、最大分合计等于 `total_score`，并要求 rule key 在同一 Profile 内唯一。
 - `published` 标准不可更新结构；修改时必须创建新的 `(name, version)` 草稿。
+- `kb_quality_standard_import` 记录 `uploaded → validation_failed/awaiting_confirmation` 导入结果；`stored_file_path` 仅供服务端读取，不通过 API 返回。

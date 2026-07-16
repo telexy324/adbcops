@@ -230,6 +230,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		qualityRoutes.GET("/quality-standards/:id", dependencies.QualityStandardHandler.Get)
 		qualityRoutes.GET("/quality-profiles/:id", dependencies.QualityStandardHandler.GetProfile)
 		qualityRoutes.POST("/quality-standards", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Create)
+		qualityRoutes.POST("/quality-standards/import", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Import)
 		qualityRoutes.PUT("/quality-standards/:id", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Update)
 		qualityRoutes.POST("/quality-standards/:id/validate", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Validate)
 		qualityRoutes.POST("/quality-standards/:id/publish", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Publish)

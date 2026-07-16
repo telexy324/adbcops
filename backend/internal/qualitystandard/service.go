@@ -27,11 +27,25 @@ type Repository interface {
 	FindQualityProfile(context.Context, int64) (*model.KBQualityProfile, error)
 	CreateQualityProfile(context.Context, *model.KBQualityProfile) error
 	ReplaceQualityProfile(context.Context, *model.KBQualityProfile) error
+	CreateQualityStandardImport(context.Context, *model.KBQualityStandardImport) error
+	UpdateQualityStandardImport(context.Context, *model.KBQualityStandardImport) error
 }
 
-type Service struct{ repository Repository }
+type Service struct {
+	repository Repository
+	importer   *Importer
+}
 
 func NewService(repository Repository) *Service { return &Service{repository: repository} }
+
+func (s *Service) ConfigureImporter(localFileDir string, maxUploadBytes int64) error {
+	importer, err := NewImporter(localFileDir, maxUploadBytes)
+	if err != nil {
+		return err
+	}
+	s.importer = importer
+	return nil
+}
 
 type ValidationResult struct {
 	Valid  bool     `json:"valid"`
@@ -251,8 +265,12 @@ func Validate(standard *model.KBStructuredQualityStandard) ValidationResult {
 			if !oneOf(c.ScoringMethod, "rule", "llm", "hybrid", "manual") {
 				errs = append(errs, cp+" scoringMethod is invalid")
 			}
+			if c.Weight <= 0 || c.MaxScore <= 0 {
+				errs = append(errs, cp+" weight and maxScore must be positive")
+			}
 			weight += c.Weight
 			score += c.MaxScore
+			ruleScore := 0.0
 			for ri := range c.Rules {
 				r := &c.Rules[ri]
 				rp := fmt.Sprintf("%s rule[%d]", cp, ri)
@@ -266,15 +284,22 @@ func Validate(standard *model.KBStructuredQualityStandard) ValidationResult {
 				if !oneOf(r.RuleType, "field_presence", "section_presence", "pattern", "metadata", "consistency", "freshness", "semantic", "safety", "cross_reference", "manual") {
 					errs = append(errs, rp+" ruleType is invalid")
 				}
+				if !oneOf(r.Severity, "info", "low", "medium", "high", "critical") {
+					errs = append(errs, rp+" severity is invalid")
+				}
 				if r.MaxScore < 0 {
 					errs = append(errs, rp+" maxScore cannot be negative")
 				}
+				ruleScore += r.MaxScore
 				if r.HardGate && (r.Description == nil || strings.TrimSpace(*r.Description) == "") {
 					errs = append(errs, rp+" hard gate requires an explanation")
 				}
 				if r.HardGate && !validJSONObject(r.EvidenceRequirement) {
 					errs = append(errs, rp+" hard gate requires evidenceRequirement")
 				}
+			}
+			if len(c.Rules) > 0 && math.Abs(ruleScore-c.MaxScore) > 0.005 {
+				errs = append(errs, fmt.Sprintf("%s rule max scores must total %.2f", cp, c.MaxScore))
 			}
 		}
 		if math.Abs(weight-1) > 0.0001 {

@@ -1167,6 +1167,7 @@ POST /api/workflow-runs/{id}/cancel
 ```http
 GET    /api/knowledge/quality-standards
 POST   /api/knowledge/quality-standards
+POST   /api/knowledge/quality-standards/import
 GET    /api/knowledge/quality-standards/{id}
 PUT    /api/knowledge/quality-standards/{id}
 POST   /api/knowledge/quality-standards/{id}/validate
@@ -1188,3 +1189,22 @@ POST   /api/knowledge/quality-profiles/{id}/clone
 ```
 
 校验失败返回 `42221`；尝试更新 Published 标准返回 `40921`。旧接口 `/api/documents/quality-standards` 继续管理上传型评分参考文件，与 2.0 结构化标准隔离。
+
+### Word/Excel 标准导入
+
+`POST /api/knowledge/quality-standards/import` 使用 `multipart/form-data`：
+
+- `file`：必填，只接受 `.docx` 或 `.xlsx`；
+- `name`、`version`：可选，缺失时从文件标题推断并生成 Warning；
+- `profileKey`、`profileName`：Word 未声明 Profile 时可用于补充 Profile 信息。
+
+Excel 推荐使用设计文档定义的 19 列模板。Word 将 Heading 映射为 Criterion、表格行映射为 Rule；中文或非标准列名会在 `warnings` 中返回 `ambiguous_header_mapping`，不会静默映射。
+
+导入响应包含：
+
+- `import`：原文件哈希、大小、解析器及导入状态；
+- `draft`：结构化 Standard/Profile/Criterion/Rule Preview；
+- `validation`：总分、权重、重复 key、rule type、hard gate 等校验结果；
+- `warnings`：推断和模糊映射信息。
+
+有效导入固定创建 `draft`，导入状态为 `awaiting_confirmation`。管理员随后显式调用 `/{id}/publish` 才代表人工确认。校验失败返回 `42223`，同时保留原文件和 Preview 供修正；不创建可发布标准。

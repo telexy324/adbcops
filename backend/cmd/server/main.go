@@ -190,7 +190,11 @@ func run() error {
 	conversationHandler := handler.NewConversationHandler(conversationService)
 	llmHandler := handler.NewLLMHandler(llmService)
 	documentHandler := handler.NewDocumentHandler(documentService, cfg.FileStorage.MaxUploadBytes)
-	qualityStandardHandler := handler.NewQualityStandardHandler(qualitysvc.NewService(userRepository))
+	qualityStandardService := qualitysvc.NewService(userRepository)
+	if err := qualityStandardService.ConfigureImporter(cfg.FileStorage.LocalFileDir, cfg.FileStorage.MaxUploadBytes); err != nil {
+		return fmt.Errorf("initialize quality standard importer: %w", err)
+	}
+	qualityStandardHandler := handler.NewQualityStandardHandler(qualityStandardService, cfg.FileStorage.MaxUploadBytes)
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)

@@ -85,3 +85,24 @@ type KBQualityRule struct {
 }
 
 func (KBQualityRule) TableName() string { return "kb_quality_rule" }
+
+type KBQualityStandardImport struct {
+	ID               int64           `gorm:"column:id;primaryKey" json:"id"`
+	StandardID       *int64          `gorm:"column:standard_id" json:"standardId,omitempty"`
+	OriginalFileName string          `gorm:"column:original_file_name;size:255;not null" json:"originalFileName"`
+	StoredFilePath   string          `gorm:"column:stored_file_path;not null" json:"-"`
+	FileType         string          `gorm:"column:file_type;size:20;not null" json:"fileType"`
+	FileSize         int64           `gorm:"column:file_size;not null" json:"fileSize"`
+	FileHash         string          `gorm:"column:file_hash;size:64;not null" json:"fileHash"`
+	ParserName       *string         `gorm:"column:parser_name;size:120" json:"parserName,omitempty"`
+	ParserVersion    *string         `gorm:"column:parser_version;size:50" json:"parserVersion,omitempty"`
+	Status           string          `gorm:"column:status;size:40;not null" json:"status"`
+	Warnings         json.RawMessage `gorm:"column:warnings;type:jsonb;not null" json:"warnings"`
+	ValidationErrors json.RawMessage `gorm:"column:validation_errors;type:jsonb;not null" json:"validationErrors"`
+	Preview          json.RawMessage `gorm:"column:preview;type:jsonb" json:"preview,omitempty"`
+	CreatedBy        *int64          `gorm:"column:created_by" json:"createdBy,omitempty"`
+	CreatedAt        time.Time       `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt        time.Time       `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+}
+
+func (KBQualityStandardImport) TableName() string { return "kb_quality_standard_import" }

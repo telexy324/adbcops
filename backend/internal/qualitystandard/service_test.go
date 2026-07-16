@@ -84,8 +84,9 @@ func containsError(errors []string, part string) bool {
 }
 
 type stubRepository struct {
-	standard *model.KBStructuredQualityStandard
-	replaced bool
+	standard     *model.KBStructuredQualityStandard
+	importRecord *model.KBQualityStandardImport
+	replaced     bool
 }
 
 func (s *stubRepository) ListStructuredQualityStandards(context.Context) ([]model.KBStructuredQualityStandard, error) {
@@ -94,7 +95,10 @@ func (s *stubRepository) ListStructuredQualityStandards(context.Context) ([]mode
 func (s *stubRepository) FindStructuredQualityStandard(context.Context, int64) (*model.KBStructuredQualityStandard, error) {
 	return s.standard, nil
 }
-func (s *stubRepository) CreateStructuredQualityStandard(context.Context, *model.KBStructuredQualityStandard) error {
+
+func (s *stubRepository) CreateStructuredQualityStandard(_ context.Context, standard *model.KBStructuredQualityStandard) error {
+	standard.ID = 42
+	s.standard = standard
 	return nil
 }
 func (s *stubRepository) ReplaceStructuredQualityStandard(context.Context, *model.KBStructuredQualityStandard) error {
@@ -111,5 +115,15 @@ func (s *stubRepository) CreateQualityProfile(context.Context, *model.KBQualityP
 	return nil
 }
 func (s *stubRepository) ReplaceQualityProfile(context.Context, *model.KBQualityProfile) error {
+	return nil
+}
+
+func (s *stubRepository) CreateQualityStandardImport(_ context.Context, record *model.KBQualityStandardImport) error {
+	record.ID = 7
+	s.importRecord = record
+	return nil
+}
+func (s *stubRepository) UpdateQualityStandardImport(_ context.Context, record *model.KBQualityStandardImport) error {
+	s.importRecord = record
 	return nil
 }
