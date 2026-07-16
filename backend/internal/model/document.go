@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	DocumentStatusDraft      = "draft"
@@ -127,24 +130,52 @@ func (KBQualityStandard) TableName() string {
 }
 
 type KBChunk struct {
-	ID                int64     `gorm:"column:id;primaryKey" json:"id"`
-	DocumentID        int64     `gorm:"column:document_id;not null" json:"documentId"`
-	ChunkIndex        int       `gorm:"column:chunk_index;not null" json:"chunkIndex"`
-	Content           string    `gorm:"column:content;not null" json:"content"`
-	SourceTitle       *string   `gorm:"column:source_title;size:255" json:"sourceTitle,omitempty"`
-	SourceSection     *string   `gorm:"column:source_section;size:255" json:"sourceSection,omitempty"`
-	SourcePage        *int      `gorm:"column:source_page" json:"sourcePage,omitempty"`
-	TokenCount        int       `gorm:"column:token_count" json:"tokenCount"`
-	Summary           *string   `gorm:"column:summary" json:"summary,omitempty"`
-	SearchText        *string   `gorm:"column:search_text" json:"searchText,omitempty"`
-	Keywords          []byte    `gorm:"column:keywords;type:jsonb" json:"keywords,omitempty"`
-	PossibleQuestions []byte    `gorm:"column:possible_questions;type:jsonb" json:"possibleQuestions,omitempty"`
-	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	ID                int64           `gorm:"column:id;primaryKey" json:"id"`
+	DocumentID        int64           `gorm:"column:document_id;not null" json:"documentId"`
+	DocumentVersionID int64           `gorm:"column:document_version_id;not null" json:"documentVersionId"`
+	StrategyID        int64           `gorm:"column:strategy_id;not null" json:"strategyId"`
+	ParentChunkID     *int64          `gorm:"column:parent_chunk_id" json:"parentChunkId,omitempty"`
+	ChunkIndex        int             `gorm:"column:chunk_index;not null" json:"chunkIndex"`
+	ChunkType         string          `gorm:"column:chunk_type;size:50;not null" json:"chunkType"`
+	SectionPath       json.RawMessage `gorm:"column:section_path;type:jsonb" json:"sectionPath,omitempty"`
+	SourceBlockIDs    json.RawMessage `gorm:"column:source_block_ids;type:jsonb;not null" json:"sourceBlockIds"`
+	SourcePageStart   *int            `gorm:"column:source_page_start" json:"sourcePageStart,omitempty"`
+	SourcePageEnd     *int            `gorm:"column:source_page_end" json:"sourcePageEnd,omitempty"`
+	Content           string          `gorm:"column:content;not null" json:"content"`
+	ContextBefore     *string         `gorm:"column:context_before" json:"contextBefore,omitempty"`
+	ContextAfter      *string         `gorm:"column:context_after" json:"contextAfter,omitempty"`
+	TokenCount        int             `gorm:"column:token_count" json:"tokenCount"`
+	ContentHash       string          `gorm:"column:content_hash;size:128;not null" json:"contentHash"`
+	SiblingGroup      *string         `gorm:"column:sibling_group;size:128" json:"siblingGroup,omitempty"`
+	SemanticUnit      *string         `gorm:"column:semantic_unit;size:80" json:"semanticUnit,omitempty"`
+	SourceTitle       *string         `gorm:"column:source_title;size:255" json:"sourceTitle,omitempty"`
+	SourceSection     *string         `gorm:"column:source_section;size:255" json:"sourceSection,omitempty"`
+	SourcePage        *int            `gorm:"column:source_page" json:"sourcePage,omitempty"`
+	Summary           *string         `gorm:"column:summary" json:"summary,omitempty"`
+	SearchText        *string         `gorm:"column:search_text" json:"searchText,omitempty"`
+	Keywords          []byte          `gorm:"column:keywords;type:jsonb" json:"keywords,omitempty"`
+	PossibleQuestions []byte          `gorm:"column:possible_questions;type:jsonb" json:"possibleQuestions,omitempty"`
+	CreatedAt         time.Time       `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	ParentChunkIndex  *int            `gorm:"-" json:"-"`
 }
 
 func (KBChunk) TableName() string {
 	return "kb_chunk"
 }
+
+type KBChunkStrategy struct {
+	ID                 int64           `gorm:"column:id;primaryKey" json:"id"`
+	Name               string          `gorm:"column:name;size:120;not null" json:"name"`
+	Version            string          `gorm:"column:version;size:50;not null" json:"version"`
+	ApplicableDocTypes json.RawMessage `gorm:"column:applicable_doc_types;type:jsonb" json:"applicableDocTypes,omitempty"`
+	Config             json.RawMessage `gorm:"column:config;type:jsonb;not null" json:"config"`
+	Enabled            bool            `gorm:"column:enabled;not null" json:"enabled"`
+	CreatedBy          *int64          `gorm:"column:created_by" json:"createdBy,omitempty"`
+	CreatedAt          time.Time       `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt          time.Time       `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+}
+
+func (KBChunkStrategy) TableName() string { return "kb_chunk_strategy" }
 
 type KBChunkEmbedding struct {
 	ID          int64     `gorm:"column:id;primaryKey" json:"id"`

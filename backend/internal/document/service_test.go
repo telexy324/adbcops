@@ -472,6 +472,8 @@ type fakeRepository struct {
 	versionBlocks  map[int64][]model.KBDocumentBlock
 	chunks         map[int64][]model.KBChunk
 	standards      map[int64]*model.KBQualityStandard
+	strategies     map[int64]*model.KBChunkStrategy
+	versionChunks  map[int64][]model.KBChunk
 	llmConfig      *model.LLMConfig
 	reviews        []model.KBDocumentReview
 }
@@ -488,6 +490,8 @@ func newFakeRepository() *fakeRepository {
 		versionBlocks:  make(map[int64][]model.KBDocumentBlock),
 		chunks:         make(map[int64][]model.KBChunk),
 		standards:      make(map[int64]*model.KBQualityStandard),
+		strategies:     make(map[int64]*model.KBChunkStrategy),
+		versionChunks:  make(map[int64][]model.KBChunk),
 	}
 }
 
@@ -608,6 +612,66 @@ func (f *fakeRepository) RecordDocumentVersionParse(_ context.Context, versionID
 
 func (f *fakeRepository) ListDocumentVersionBlocks(_ context.Context, versionID int64) ([]model.KBDocumentBlock, error) {
 	return append([]model.KBDocumentBlock(nil), f.versionBlocks[versionID]...), nil
+}
+
+func (f *fakeRepository) CreateChunkStrategy(_ context.Context, strategy *model.KBChunkStrategy) error {
+	strategy.ID = int64(len(f.strategies) + 1)
+	f.strategies[strategy.ID] = strategy
+	return nil
+}
+
+func (f *fakeRepository) ListChunkStrategies(_ context.Context, enabledOnly bool) ([]model.KBChunkStrategy, error) {
+	result := []model.KBChunkStrategy{}
+	for _, strategy := range f.strategies {
+		if !enabledOnly || strategy.Enabled {
+			result = append(result, *strategy)
+		}
+	}
+	return result, nil
+}
+
+func (f *fakeRepository) FindChunkStrategy(_ context.Context, id int64) (*model.KBChunkStrategy, error) {
+	strategy, ok := f.strategies[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	copyStrategy := *strategy
+	return &copyStrategy, nil
+}
+
+func (f *fakeRepository) CreateDocumentVersionChunks(_ context.Context, versionID, strategyID int64, chunks []model.KBChunk) error {
+	key := versionID*1000000 + strategyID
+	if len(f.versionChunks[key]) > 0 {
+		return repository.ErrImmutable
+	}
+	stored := make([]model.KBChunk, len(chunks))
+	ids := map[int]int64{}
+	for index := range chunks {
+		chunks[index].ID = f.nextChunkID
+		f.nextChunkID++
+		if chunks[index].ParentChunkIndex != nil {
+			parentID := ids[*chunks[index].ParentChunkIndex]
+			chunks[index].ParentChunkID = &parentID
+		}
+		ids[chunks[index].ChunkIndex] = chunks[index].ID
+		stored[index] = chunks[index]
+	}
+	f.versionChunks[key] = stored
+	return nil
+}
+
+func (f *fakeRepository) ListDocumentVersionChunks(_ context.Context, versionID int64, strategyID *int64) ([]model.KBChunk, error) {
+	result := []model.KBChunk{}
+	for key, chunks := range f.versionChunks {
+		if key/1000000 != versionID {
+			continue
+		}
+		if strategyID != nil && key%1000000 != *strategyID {
+			continue
+		}
+		result = append(result, chunks...)
+	}
+	return result, nil
 }
 
 func optionalTestString(value string) *string {

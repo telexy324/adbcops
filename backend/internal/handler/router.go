@@ -217,9 +217,16 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		knowledgeRoutes := router.Group("/api/knowledge")
 		knowledgeRoutes.Use(dependencies.Authenticate)
 		knowledgeRoutes.POST("/search", dependencies.DocumentHandler.Search)
+		knowledgeRoutes.GET("/chunk-strategies", dependencies.DocumentHandler.ChunkStrategies)
+		knowledgeRoutes.GET("/chunk-strategies/:strategyId", dependencies.DocumentHandler.ChunkStrategy)
+		if dependencies.RequireAdmin != nil {
+			knowledgeRoutes.POST("/chunk-strategies", dependencies.RequireAdmin, dependencies.DocumentHandler.CreateChunkStrategy)
+		}
 		knowledgeRoutes.GET("/document-versions/:versionId", dependencies.DocumentHandler.GetVersion)
 		knowledgeRoutes.POST("/document-versions/:versionId/parse", dependencies.DocumentHandler.ParseVersion)
 		knowledgeRoutes.GET("/document-versions/:versionId/blocks", dependencies.DocumentHandler.ParsedStructure)
+		knowledgeRoutes.POST("/document-versions/:versionId/chunk", dependencies.DocumentHandler.ChunkVersion)
+		knowledgeRoutes.GET("/document-versions/:versionId/chunks", dependencies.DocumentHandler.VersionChunks)
 		if dependencies.RAGHandler != nil {
 			knowledgeRoutes.POST("/ask", dependencies.RAGHandler.Ask)
 		}

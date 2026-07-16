@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,6 +12,11 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func contentSHA256(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
 
 type DocumentRepository interface {
 	CreateDocument(ctx context.Context, document *model.KBDocument) error
@@ -20,6 +27,11 @@ type DocumentRepository interface {
 	FindLatestDocumentVersion(ctx context.Context, documentID int64) (*model.KBDocumentVersion, error)
 	RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, documentSchema, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error)
 	ListDocumentVersionBlocks(ctx context.Context, versionID int64) ([]model.KBDocumentBlock, error)
+	CreateChunkStrategy(ctx context.Context, strategy *model.KBChunkStrategy) error
+	ListChunkStrategies(ctx context.Context, enabledOnly bool) ([]model.KBChunkStrategy, error)
+	FindChunkStrategy(ctx context.Context, id int64) (*model.KBChunkStrategy, error)
+	CreateDocumentVersionChunks(ctx context.Context, versionID, strategyID int64, chunks []model.KBChunk) error
+	ListDocumentVersionChunks(ctx context.Context, versionID int64, strategyID *int64) ([]model.KBChunk, error)
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
@@ -173,17 +185,101 @@ func (r *GORMUserRepository) ListDocumentVersionBlocks(ctx context.Context, vers
 
 func (r *GORMUserRepository) ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("document_id = ?", documentID).Delete(&model.KBChunk{}).Error; err != nil {
+		var version model.KBDocumentVersion
+		if err := tx.Where("document_id = ?", documentID).Order("created_at DESC, id DESC").First(&version).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		var strategy model.KBChunkStrategy
+		if err := tx.Where("name = ? AND version = ?", "semantic-ops", "1.0").First(&strategy).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		if err := tx.Where("document_id = ? AND chunk_type = ?", documentID, "fixed_window").Delete(&model.KBChunk{}).Error; err != nil {
 			return fmt.Errorf("delete old kb chunks: %w", err)
 		}
 		if len(chunks) == 0 {
 			return nil
+		}
+		for index := range chunks {
+			chunks[index].DocumentVersionID = version.ID
+			chunks[index].StrategyID = strategy.ID
+			chunks[index].ChunkType = "fixed_window"
+			chunks[index].SourceBlockIDs = json.RawMessage("[]")
+			if chunks[index].ContentHash == "" {
+				chunks[index].ContentHash = contentSHA256(chunks[index].Content)
+			}
 		}
 		if err := tx.Create(&chunks).Error; err != nil {
 			return fmt.Errorf("create kb chunks: %w", err)
 		}
 		return nil
 	})
+}
+
+func (r *GORMUserRepository) CreateChunkStrategy(ctx context.Context, strategy *model.KBChunkStrategy) error {
+	if err := r.db.WithContext(ctx).Create(strategy).Error; err != nil {
+		return fmt.Errorf("create chunk strategy: %w", err)
+	}
+	return nil
+}
+
+func (r *GORMUserRepository) ListChunkStrategies(ctx context.Context, enabledOnly bool) ([]model.KBChunkStrategy, error) {
+	var strategies []model.KBChunkStrategy
+	query := r.db.WithContext(ctx).Order("name ASC, created_at DESC, id DESC")
+	if enabledOnly {
+		query = query.Where("enabled = true")
+	}
+	if err := query.Find(&strategies).Error; err != nil {
+		return nil, fmt.Errorf("list chunk strategies: %w", err)
+	}
+	return strategies, nil
+}
+
+func (r *GORMUserRepository) FindChunkStrategy(ctx context.Context, id int64) (*model.KBChunkStrategy, error) {
+	var strategy model.KBChunkStrategy
+	if err := r.db.WithContext(ctx).First(&strategy, id).Error; err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	return &strategy, nil
+}
+
+func (r *GORMUserRepository) CreateDocumentVersionChunks(ctx context.Context, versionID, strategyID int64, chunks []model.KBChunk) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.KBChunk{}).Where("document_version_id = ? AND strategy_id = ?", versionID, strategyID).Count(&count).Error; err != nil {
+			return fmt.Errorf("check chunk set: %w", err)
+		}
+		if count > 0 {
+			return ErrImmutable
+		}
+		idsByIndex := map[int]int64{}
+		for index := range chunks {
+			chunks[index].ID = 0
+			if chunks[index].ParentChunkIndex != nil {
+				parentID, ok := idsByIndex[*chunks[index].ParentChunkIndex]
+				if !ok {
+					return fmt.Errorf("create chunk %d: parent chunk index %d not found", index, *chunks[index].ParentChunkIndex)
+				}
+				chunks[index].ParentChunkID = &parentID
+			}
+			if err := tx.Create(&chunks[index]).Error; err != nil {
+				return fmt.Errorf("create chunk %d: %w", index, err)
+			}
+			idsByIndex[chunks[index].ChunkIndex] = chunks[index].ID
+		}
+		return nil
+	})
+}
+
+func (r *GORMUserRepository) ListDocumentVersionChunks(ctx context.Context, versionID int64, strategyID *int64) ([]model.KBChunk, error) {
+	var chunks []model.KBChunk
+	query := r.db.WithContext(ctx).Where("document_version_id = ?", versionID)
+	if strategyID != nil {
+		query = query.Where("strategy_id = ?", *strategyID)
+	}
+	if err := query.Order("strategy_id ASC, chunk_index ASC").Find(&chunks).Error; err != nil {
+		return nil, fmt.Errorf("list document version chunks: %w", err)
+	}
+	return chunks, nil
 }
 
 func (r *GORMUserRepository) ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error) {

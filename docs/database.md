@@ -19,6 +19,7 @@
 - `000037_quality_standard_import`
 - `000038_deterministic_quality_evaluation`
 - `000039_quality_evaluation_review`
+- `000040_chunk_strategy_center`
 
 `kb_document.file_path` 保存服务端随机生成后的本地文件路径；API 响应不暴露该字段。
 `kb_chunk` 保存解析切片结果，`chunk_index` 在同一文档内连续且唯一。
@@ -53,6 +54,7 @@
 - `000037`：创建评分标准导入审计表，保留原始 Word/Excel 文件哈希、解析器版本、Warning、Validation Error、Preview 和生成的 Draft 关联。
 - `000038`：创建质量评估及 Rule Result 表，保存确定性评分、Hard Gate、Block Evidence、扣分原因和建议。
 - `000039`：增加评分 Review 生命周期、发布不可变约束、重新评分历史指针与人工覆盖审计表。
+- `000040`：创建版本化 Chunk Strategy，并将 Chunk 绑定到 Document Version、Strategy、Parent Chunk 和来源 AST Block。
 
 ## Quality Standard 2.0
 
@@ -73,3 +75,11 @@
 - `source=hybrid` 保存确定性规则与通过 Evidence 校验的 LLM Rule 结果；`model_config_id` 固定本次模型配置，`result` 记录 Criterion 分数、Map 调用次数、校验 Warning 和降级组件。
 - `review_status=published` 的评估不可再覆盖；`kb_quality_evaluation_override` 保存人工修改前后值、理由、操作人和时间。
 - 重新评分创建新评估，并用 `supersedes_evaluation_id` 保留与旧评估的历史关系。
+
+## Chunk Strategy Center
+
+- `kb_chunk_strategy` 使用 `(name, version)` 唯一约束保存不可变策略版本和适用文档类型。
+- `kb_chunk` 使用 `(document_version_id, strategy_id, chunk_index)` 唯一标识 Chunk Set；新策略版本不会删除或覆盖旧集合。
+- Parent Chunk 保存完整章节，Child Chunk 保存可检索语义单元，并通过 `parent_chunk_id` 关联。
+- `source_block_ids`、页码范围及 `content_hash` 保留从 Chunk 到 AST Block 和原文件位置的追溯链。
+- 表格 Child 重复表头；命令 Child 同时携带前置条件、风险提示、所属步骤及验证/回滚上下文。

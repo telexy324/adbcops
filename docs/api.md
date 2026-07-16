@@ -1251,3 +1251,34 @@ LLM 评估按 Criterion 选择相关 Block，并按最多 12 个 Block/批次执
 人工覆盖请求包含 `ruleResultId`、`score`、`status` 和必填的 `comment`。覆盖会在同一事务中写入 Rule Result、重算 Criterion/总分/Gate，并新增不可变审计记录。Hard Gate 根据 finding status 独立计算，不能被高总分绕过。
 
 新评估的 `reviewStatus` 为 `draft`；管理员发布后变为 `published`，Rule 覆盖接口将拒绝修改。`rerun` 始终创建新的评估并通过 `supersedesEvaluationId` 指向原记录，不覆盖原评分或审计历史。
+
+## Chunk Strategy Center
+
+```http
+GET  /api/knowledge/chunk-strategies
+GET  /api/knowledge/chunk-strategies/{strategyId}
+POST /api/knowledge/chunk-strategies
+POST /api/knowledge/document-versions/{versionId}/chunk
+GET  /api/knowledge/document-versions/{versionId}/chunks?strategyId={strategyId}
+```
+
+管理员可创建新的 `(name, version)` 策略。当前正式模式为 `semantic_ops`，配置示例：
+
+```json
+{
+  "name": "semantic-ops",
+  "version": "2.0",
+  "applicableDocTypes": ["runbook", "change_plan"],
+  "config": {
+    "mode": "semantic_ops",
+    "maxChildChars": 1200,
+    "tableRowsPerChunk": 20,
+    "contextBlocks": 3,
+    "parentChild": true
+  }
+}
+```
+
+切片请求为 `{ "strategyId": 1 }`。Document Version 必须已成功解析；同一 Version 与 Strategy 组合只允许生成一次，重复请求返回 `40902`。更换 Strategy Version 会创建独立 Chunk Set，旧集合仍可按原 `strategyId` 查询。
+
+每个 Chunk 返回 `chunkType`、`parentChunkId`、`sectionPath`、`sourceBlockIds`、页码范围、上下文、`semanticUnit` 和 `contentHash`。表格 Chunk 的每个分片都包含 Header；`code_with_context` 将命令与前置条件、风险、步骤、验证和回滚信息组合保存。

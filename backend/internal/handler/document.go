@@ -100,6 +100,10 @@ type reviewDocumentRequest struct {
 	StandardIDs []int64         `json:"standardIds"`
 }
 
+type chunkDocumentVersionRequest struct {
+	StrategyID int64 `json:"strategyId"`
+}
+
 type knowledgeSearchRequest struct {
 	Query string `json:"query" binding:"required"`
 	Limit int    `json:"limit"`
@@ -279,6 +283,98 @@ func (h *DocumentHandler) ParsedStructure(c *gin.Context) {
 	success(c, toParsedStructureResponse(structure))
 }
 
+func (h *DocumentHandler) CreateChunkStrategy(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request documentsvc.CreateChunkStrategyInput
+	if c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	strategy, err := h.service.CreateChunkStrategy(c.Request.Context(), actor, request)
+	if handleDocumentError(c, err, "create chunk strategy failed") {
+		return
+	}
+	success(c, strategy)
+}
+
+func (h *DocumentHandler) ChunkStrategies(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	strategies, err := h.service.ListChunkStrategies(c.Request.Context(), actor)
+	if handleDocumentError(c, err, "list chunk strategies failed") {
+		return
+	}
+	success(c, gin.H{"items": strategies, "count": len(strategies)})
+}
+
+func (h *DocumentHandler) ChunkStrategy(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("strategyId"), 10, 64)
+	if err != nil || id <= 0 {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	strategy, err := h.service.GetChunkStrategy(c.Request.Context(), actor, id)
+	if handleDocumentError(c, err, "get chunk strategy failed") {
+		return
+	}
+	success(c, strategy)
+}
+
+func (h *DocumentHandler) ChunkVersion(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	var request chunkDocumentVersionRequest
+	if c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	chunks, err := h.service.ChunkDocumentVersion(c.Request.Context(), actor, versionID, request.StrategyID)
+	if handleDocumentError(c, err, "chunk document version failed") {
+		return
+	}
+	success(c, gin.H{"documentVersionId": versionID, "strategyId": request.StrategyID, "chunkCount": len(chunks), "chunks": chunks})
+}
+
+func (h *DocumentHandler) VersionChunks(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	versionID, ok := parseVersionID(c)
+	if !ok {
+		return
+	}
+	var strategyID *int64
+	if raw := c.Query("strategyId"); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			failure(c, http.StatusBadRequest, 40001, "invalid request")
+			return
+		}
+		strategyID = &value
+	}
+	chunks, err := h.service.ListDocumentVersionChunks(c.Request.Context(), actor, versionID, strategyID)
+	if handleDocumentError(c, err, "list document version chunks failed") {
+		return
+	}
+	success(c, gin.H{"documentVersionId": versionID, "chunkCount": len(chunks), "chunks": chunks})
+}
+
 func parseVersionID(c *gin.Context) (int64, bool) {
 	versionID, err := strconv.ParseInt(c.Param("versionId"), 10, 64)
 	if err != nil || versionID <= 0 {
@@ -427,6 +523,8 @@ func handleDocumentError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40006, "invalid review action")
 	case errors.Is(err, documentsvc.ErrCannotPublish):
 		failure(c, http.StatusConflict, 40901, "document cannot be published")
+	case errors.Is(err, documentsvc.ErrChunkSetExists):
+		failure(c, http.StatusConflict, 40902, err.Error())
 	case errors.Is(err, documentsvc.ErrAdminRequired):
 		failure(c, http.StatusForbidden, 40304, "admin role required")
 	case errors.Is(err, documentsvc.ErrForbidden):

@@ -50,6 +50,11 @@ type Repository interface {
 	FindLatestDocumentVersion(ctx context.Context, documentID int64) (*model.KBDocumentVersion, error)
 	RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, documentSchema, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error)
 	ListDocumentVersionBlocks(ctx context.Context, versionID int64) ([]model.KBDocumentBlock, error)
+	CreateChunkStrategy(ctx context.Context, strategy *model.KBChunkStrategy) error
+	ListChunkStrategies(ctx context.Context, enabledOnly bool) ([]model.KBChunkStrategy, error)
+	FindChunkStrategy(ctx context.Context, id int64) (*model.KBChunkStrategy, error)
+	CreateDocumentVersionChunks(ctx context.Context, versionID, strategyID int64, chunks []model.KBChunk) error
+	ListDocumentVersionChunks(ctx context.Context, versionID int64, strategyID *int64) ([]model.KBChunk, error)
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
