@@ -8,32 +8,33 @@ import (
 )
 
 type RouterDependencies struct {
-	AuditHandler        *AuditHandler
-	AuditRecorder       appmiddleware.AuditRecorder
-	AuthHandler         *AuthHandler
-	UserHandler         *UserHandler
-	ConversationHandler *ConversationHandler
-	LLMHandler          *LLMHandler
-	DocumentHandler     *DocumentHandler
-	RAGHandler          *RAGHandler
-	DataSourceHandler   *DataSourceHandler
-	AnalysisHandler     *AnalysisHandler
-	EventHandler        *EventHandler
-	EvidenceHandler     *EvidenceHandler
-	TopologyHandler     *TopologyHandler
-	TimelineHandler     *TimelineHandler
-	CorrelationHandler  *CorrelationHandler
-	IncidentHandler     *IncidentHandler
-	ToolHandler         *ToolHandler
-	SkillHandler        *SkillHandler
-	AgentHandler        *AgentHandler
-	WorkflowHandler     *WorkflowHandler
-	SFTPHandler         *SFTPHandler
-	K8sHandler          *K8sHandler
-	MetricsHandler      *MetricsHandler
-	ReadinessCheck      ReadinessChecker
-	Authenticate        gin.HandlerFunc
-	RequireAdmin        gin.HandlerFunc
+	AuditHandler           *AuditHandler
+	AuditRecorder          appmiddleware.AuditRecorder
+	AuthHandler            *AuthHandler
+	UserHandler            *UserHandler
+	ConversationHandler    *ConversationHandler
+	LLMHandler             *LLMHandler
+	DocumentHandler        *DocumentHandler
+	QualityStandardHandler *QualityStandardHandler
+	RAGHandler             *RAGHandler
+	DataSourceHandler      *DataSourceHandler
+	AnalysisHandler        *AnalysisHandler
+	EventHandler           *EventHandler
+	EvidenceHandler        *EvidenceHandler
+	TopologyHandler        *TopologyHandler
+	TimelineHandler        *TimelineHandler
+	CorrelationHandler     *CorrelationHandler
+	IncidentHandler        *IncidentHandler
+	ToolHandler            *ToolHandler
+	SkillHandler           *SkillHandler
+	AgentHandler           *AgentHandler
+	WorkflowHandler        *WorkflowHandler
+	SFTPHandler            *SFTPHandler
+	K8sHandler             *K8sHandler
+	MetricsHandler         *MetricsHandler
+	ReadinessCheck         ReadinessChecker
+	Authenticate           gin.HandlerFunc
+	RequireAdmin           gin.HandlerFunc
 }
 
 // NewRouter creates the HTTP router and installs the common middleware stack.
@@ -221,6 +222,21 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		if dependencies.RAGHandler != nil {
 			knowledgeRoutes.POST("/ask", dependencies.RAGHandler.Ask)
 		}
+	}
+	if dependencies.QualityStandardHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		qualityRoutes := router.Group("/api/knowledge")
+		qualityRoutes.Use(dependencies.Authenticate)
+		qualityRoutes.GET("/quality-standards", dependencies.QualityStandardHandler.List)
+		qualityRoutes.GET("/quality-standards/:id", dependencies.QualityStandardHandler.Get)
+		qualityRoutes.GET("/quality-profiles/:id", dependencies.QualityStandardHandler.GetProfile)
+		qualityRoutes.POST("/quality-standards", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Create)
+		qualityRoutes.PUT("/quality-standards/:id", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Update)
+		qualityRoutes.POST("/quality-standards/:id/validate", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Validate)
+		qualityRoutes.POST("/quality-standards/:id/publish", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Publish)
+		qualityRoutes.POST("/quality-standards/:id/deprecate", dependencies.RequireAdmin, dependencies.QualityStandardHandler.Deprecate)
+		qualityRoutes.POST("/quality-profiles", dependencies.RequireAdmin, dependencies.QualityStandardHandler.CreateProfile)
+		qualityRoutes.PUT("/quality-profiles/:id", dependencies.RequireAdmin, dependencies.QualityStandardHandler.UpdateProfile)
+		qualityRoutes.POST("/quality-profiles/:id/clone", dependencies.RequireAdmin, dependencies.QualityStandardHandler.CloneProfile)
 	}
 	if dependencies.DataSourceHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		dataSourceRoutes := router.Group("/api/data-sources")

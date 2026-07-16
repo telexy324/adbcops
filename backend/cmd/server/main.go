@@ -33,6 +33,7 @@ import (
 	appmiddleware "aiops-platform/backend/internal/middleware"
 	nacossvc "aiops-platform/backend/internal/nacos"
 	nginxsvc "aiops-platform/backend/internal/nginx"
+	qualitysvc "aiops-platform/backend/internal/qualitystandard"
 	ragsvc "aiops-platform/backend/internal/rag"
 	redissvc "aiops-platform/backend/internal/redis"
 	"aiops-platform/backend/internal/repository"
@@ -189,6 +190,7 @@ func run() error {
 	conversationHandler := handler.NewConversationHandler(conversationService)
 	llmHandler := handler.NewLLMHandler(llmService)
 	documentHandler := handler.NewDocumentHandler(documentService, cfg.FileStorage.MaxUploadBytes)
+	qualityStandardHandler := handler.NewQualityStandardHandler(qualitysvc.NewService(userRepository))
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
@@ -211,29 +213,30 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.Address(),
 		Handler: handler.NewRouter(logger, handler.RouterDependencies{
-			AuditHandler:        auditHandler,
-			AuditRecorder:       auditLogRepository,
-			AuthHandler:         authHandler,
-			UserHandler:         userHandler,
-			ConversationHandler: conversationHandler,
-			LLMHandler:          llmHandler,
-			DocumentHandler:     documentHandler,
-			RAGHandler:          ragHandler,
-			DataSourceHandler:   dataSourceHandler,
-			AnalysisHandler:     analysisHandler,
-			EventHandler:        eventHandler,
-			EvidenceHandler:     evidenceHandler,
-			TopologyHandler:     topologyHandler,
-			TimelineHandler:     timelineHandler,
-			CorrelationHandler:  correlationHandler,
-			IncidentHandler:     incidentHandler,
-			ToolHandler:         toolHandler,
-			SkillHandler:        skillHandler,
-			AgentHandler:        agentHandler,
-			WorkflowHandler:     workflowHandler,
-			SFTPHandler:         sftpHandler,
-			K8sHandler:          k8sHandler,
-			MetricsHandler:      metricsHandler,
+			AuditHandler:           auditHandler,
+			AuditRecorder:          auditLogRepository,
+			AuthHandler:            authHandler,
+			UserHandler:            userHandler,
+			ConversationHandler:    conversationHandler,
+			LLMHandler:             llmHandler,
+			DocumentHandler:        documentHandler,
+			QualityStandardHandler: qualityStandardHandler,
+			RAGHandler:             ragHandler,
+			DataSourceHandler:      dataSourceHandler,
+			AnalysisHandler:        analysisHandler,
+			EventHandler:           eventHandler,
+			EvidenceHandler:        evidenceHandler,
+			TopologyHandler:        topologyHandler,
+			TimelineHandler:        timelineHandler,
+			CorrelationHandler:     correlationHandler,
+			IncidentHandler:        incidentHandler,
+			ToolHandler:            toolHandler,
+			SkillHandler:           skillHandler,
+			AgentHandler:           agentHandler,
+			WorkflowHandler:        workflowHandler,
+			SFTPHandler:            sftpHandler,
+			K8sHandler:             k8sHandler,
+			MetricsHandler:         metricsHandler,
 			ReadinessCheck: func(ctx context.Context) error {
 				return databaseConnection.SQL.PingContext(ctx)
 			},

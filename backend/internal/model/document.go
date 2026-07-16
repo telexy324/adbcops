@@ -123,7 +123,7 @@ type KBQualityStandard struct {
 }
 
 func (KBQualityStandard) TableName() string {
-	return "kb_quality_standard"
+	return "kb_quality_standard_legacy"
 }
 
 type KBChunk struct {

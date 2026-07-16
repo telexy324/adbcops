@@ -1159,3 +1159,32 @@ POST /api/workflow-runs/{id}/cancel
 - `alert_diagnosis_workflow`：Alert Diagnosis。
 
 内置 Workflow 均通过同一套 DSL 校验，且只引用已注册 Agent / Skill。暂未落地的中间能力以 `condition` 控制节点表达，不会伪造新的外部数据访问能力。
+
+## Knowledge Quality Standards
+
+结构化评分标准 API 均要求登录，所有写操作要求管理员：
+
+```http
+GET    /api/knowledge/quality-standards
+POST   /api/knowledge/quality-standards
+GET    /api/knowledge/quality-standards/{id}
+PUT    /api/knowledge/quality-standards/{id}
+POST   /api/knowledge/quality-standards/{id}/validate
+POST   /api/knowledge/quality-standards/{id}/publish
+POST   /api/knowledge/quality-standards/{id}/deprecate
+POST   /api/knowledge/quality-profiles
+GET    /api/knowledge/quality-profiles/{id}
+PUT    /api/knowledge/quality-profiles/{id}
+POST   /api/knowledge/quality-profiles/{id}/clone
+```
+
+创建和更新 Standard 使用包含 `profiles[].criteria[].rules[]` 的嵌套 JSON。新建 Standard 强制为 `draft`；发布前再次执行完整校验。Profile clone 请求：
+
+```json
+{
+  "profileKey": "runbook_strict",
+  "name": "Runbook Strict"
+}
+```
+
+校验失败返回 `42221`；尝试更新 Published 标准返回 `40921`。旧接口 `/api/documents/quality-standards` 继续管理上传型评分参考文件，与 2.0 结构化标准隔离。

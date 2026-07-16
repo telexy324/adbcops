@@ -14,6 +14,7 @@ import (
 var (
 	ErrNotFound  = errors.New("record not found")
 	ErrLastAdmin = errors.New("cannot disable or demote the last enabled admin")
+	ErrImmutable = errors.New("record is immutable")
 )
 
 // UserRepository owns database access for users and login audits.
