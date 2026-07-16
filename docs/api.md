@@ -1229,6 +1229,17 @@ GET  /api/knowledge/evaluations/{id}/rule-results
 }
 ```
 
-当前阶段只接受 `deterministic`。Document Version 必须解析成功，Profile 及其 Standard 必须为 Published。`force=false` 会复用同版本、同 Profile 的最近一次完成结果；`force=true` 创建新的可审计评估。
+支持 `deterministic`、`hybrid` 和 `llm`。`hybrid/llm` 始终先执行确定性安全规则，再对待语义判断的 Rule 调用默认 Chat 模型，因此模型故障不会丢失确定性 Gate。Document Version 必须解析成功，Profile 及其 Standard 必须为 Published。`force=false` 会复用同版本、同 Profile 和同 source 的最近一次完成结果；`force=true` 创建新的可审计评估。
 
 确定性执行器支持 `field_presence`、`section_presence`、`pattern`、`metadata`、`freshness`、`safety`，并内置明文凭据、危险命令缺少 Warning、高风险操作缺少审批、生产/测试环境混淆等 Hard Gate。每条结果都返回 `evidence[].blockId`；凭据 Evidence 会脱敏。语义规则返回 `manual_confirmation_required` 且不生成虚假分数。
+
+LLM 评估按 Criterion 选择相关 Block，并按最多 12 个 Block/批次执行 Map；长文的一致性 Criterion 额外生成跨文档采样批次，本地 Reduce 合并 Rule Evidence。模型响应必须满足严格 JSON 结构，并通过以下本地校验：
+
+- Criterion/Rule key 必须来自请求 Profile；
+- Score 必须在 `[0, maxScore]`；
+- Finding status 和 confidence 必须合法；
+- 每个评分必须至少包含一个 Evidence；
+- Evidence blockId 必须属于当前 Map 批次；
+- Quote 必须真实包含于发送给模型的脱敏 Block 文本。
+
+不满足校验的结果会被丢弃，原 Rule 保持 `manual_confirmation_required`。响应 `result` 包含 `criterionScores`、`llmCalls`、`llmFailedCalls`、`validationWarnings` 和 `degradedComponents`。

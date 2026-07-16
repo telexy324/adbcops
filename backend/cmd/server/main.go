@@ -196,7 +196,7 @@ func run() error {
 		return fmt.Errorf("initialize quality standard importer: %w", err)
 	}
 	qualityStandardHandler := handler.NewQualityStandardHandler(qualityStandardService, cfg.FileStorage.MaxUploadBytes)
-	qualityEvaluationHandler := handler.NewQualityEvaluationHandler(qualityeval.NewService(userRepository))
+	qualityEvaluationHandler := handler.NewQualityEvaluationHandler(qualityeval.NewService(userRepository).WithLLM(credentialManager, llmClient))
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)

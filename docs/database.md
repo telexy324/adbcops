@@ -68,3 +68,4 @@
 - `kb_quality_rule_result` 每条结果保存 finding status、分数、置信度和 JSON Block Evidence；同一次评估内 `(criterion_key, rule_key)` 唯一。
 - 明文凭据的 Evidence 只保存脱敏占位符，不写入检测到的原始 Secret。
 - `source=deterministic` 不会为 semantic/LLM Rule 生成评分；此类结果标记为 `manual_confirmation_required`。
+- `source=hybrid` 保存确定性规则与通过 Evidence 校验的 LLM Rule 结果；`model_config_id` 固定本次模型配置，`result` 记录 Criterion 分数、Map 调用次数、校验 Warning 和降级组件。
