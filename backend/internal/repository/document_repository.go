@@ -18,7 +18,7 @@ type DocumentRepository interface {
 	FindDocumentByID(ctx context.Context, id int64) (*model.KBDocument, error)
 	FindDocumentVersionByID(ctx context.Context, id int64) (*model.KBDocumentVersion, error)
 	FindLatestDocumentVersion(ctx context.Context, documentID int64) (*model.KBDocumentVersion, error)
-	RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error)
+	RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, documentSchema, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error)
 	ListDocumentVersionBlocks(ctx context.Context, versionID int64) ([]model.KBDocumentBlock, error)
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
@@ -95,7 +95,7 @@ func (r *GORMUserRepository) FindLatestDocumentVersion(ctx context.Context, docu
 	return &version, nil
 }
 
-func (r *GORMUserRepository) RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error) {
+func (r *GORMUserRepository) RecordDocumentVersionParse(ctx context.Context, versionID int64, parserName, parserVersion, language string, metadata, documentSchema, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error) {
 	var saved model.KBDocumentVersion
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var base model.KBDocumentVersion
@@ -128,7 +128,7 @@ func (r *GORMUserRepository) RecordDocumentVersionParse(ctx context.Context, ver
 		}
 		updates := map[string]any{
 			"parser_name": parserName, "parser_version": parserVersion, "language": language,
-			"metadata": metadata, "parse_quality": parseQuality, "status": status, "updated_at": time.Now().UTC(),
+			"metadata": metadata, "document_schema": documentSchema, "parse_quality": parseQuality, "status": status, "updated_at": time.Now().UTC(),
 		}
 		if err := tx.Model(&model.KBDocumentVersion{}).Where("id = ?", target.ID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update document parse result: %w", err)

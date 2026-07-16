@@ -558,7 +558,7 @@ func (f *fakeRepository) FindLatestDocumentVersion(_ context.Context, documentID
 	return &copyVersion, nil
 }
 
-func (f *fakeRepository) RecordDocumentVersionParse(_ context.Context, versionID int64, parserName, parserVersion, language string, metadata, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error) {
+func (f *fakeRepository) RecordDocumentVersionParse(_ context.Context, versionID int64, parserName, parserVersion, language string, metadata, documentSchema, parseQuality []byte, status string, blocks []model.KBDocumentBlock) (*model.KBDocumentVersion, error) {
 	base, ok := f.versions[versionID]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -584,6 +584,7 @@ func (f *fakeRepository) RecordDocumentVersionParse(_ context.Context, versionID
 	target.ParserVersion = optionalTestString(parserVersion)
 	target.Language = optionalTestString(language)
 	target.Metadata = append([]byte(nil), metadata...)
+	target.DocumentSchema = append([]byte(nil), documentSchema...)
 	target.ParseQuality = append([]byte(nil), parseQuality...)
 	target.Status = status
 	target.UpdatedAt = time.Now().UTC()

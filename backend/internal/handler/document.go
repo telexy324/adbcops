@@ -64,29 +64,31 @@ type chunkResponse struct {
 }
 
 type documentVersionResponse struct {
-	ID            int64           `json:"id"`
-	DocumentID    int64           `json:"documentId"`
-	Version       string          `json:"version"`
-	RevisionNo    int             `json:"revisionNo"`
-	FileName      string          `json:"fileName"`
-	FileType      string          `json:"fileType"`
-	FileHash      string          `json:"fileHash"`
-	ParserName    *string         `json:"parserName,omitempty"`
-	ParserVersion *string         `json:"parserVersion,omitempty"`
-	Language      *string         `json:"language,omitempty"`
-	Status        string          `json:"status"`
-	Metadata      json.RawMessage `json:"metadata,omitempty"`
-	ParseQuality  json.RawMessage `json:"parseQuality,omitempty"`
-	CreatedBy     *int64          `json:"createdBy,omitempty"`
-	CreatedAt     string          `json:"createdAt"`
-	UpdatedAt     string          `json:"updatedAt"`
+	ID             int64           `json:"id"`
+	DocumentID     int64           `json:"documentId"`
+	Version        string          `json:"version"`
+	RevisionNo     int             `json:"revisionNo"`
+	FileName       string          `json:"fileName"`
+	FileType       string          `json:"fileType"`
+	FileHash       string          `json:"fileHash"`
+	ParserName     *string         `json:"parserName,omitempty"`
+	ParserVersion  *string         `json:"parserVersion,omitempty"`
+	Language       *string         `json:"language,omitempty"`
+	Status         string          `json:"status"`
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	ParseQuality   json.RawMessage `json:"parseQuality,omitempty"`
+	DocumentSchema json.RawMessage `json:"documentSchema,omitempty"`
+	CreatedBy      *int64          `json:"createdBy,omitempty"`
+	CreatedAt      string          `json:"createdAt"`
+	UpdatedAt      string          `json:"updatedAt"`
 }
 
 type parsedStructureResponse struct {
-	Version      documentVersionResponse     `json:"version"`
-	ParseQuality documentsvc.ParseQuality    `json:"parseQuality"`
-	Warnings     []documentsvc.ParseWarning  `json:"warnings"`
-	Blocks       []documentsvc.DocumentBlock `json:"blocks"`
+	Version        documentVersionResponse              `json:"version"`
+	ParseQuality   documentsvc.ParseQuality             `json:"parseQuality"`
+	DocumentSchema documentsvc.DocumentSchemaExtraction `json:"documentSchema"`
+	Warnings       []documentsvc.ParseWarning           `json:"warnings"`
+	Blocks         []documentsvc.DocumentBlock          `json:"blocks"`
 }
 
 type reviewDocumentRequest struct {
@@ -445,7 +447,7 @@ func toDocumentVersionResponse(version *model.KBDocumentVersion) documentVersion
 		ID: version.ID, DocumentID: version.DocumentID, Version: version.Version, RevisionNo: version.RevisionNo,
 		FileName: version.FileName, FileType: version.FileType, FileHash: version.FileHash,
 		ParserName: version.ParserName, ParserVersion: version.ParserVersion, Language: version.Language,
-		Status: version.Status, Metadata: json.RawMessage(version.Metadata), ParseQuality: json.RawMessage(version.ParseQuality),
+		Status: version.Status, Metadata: json.RawMessage(version.Metadata), ParseQuality: json.RawMessage(version.ParseQuality), DocumentSchema: json.RawMessage(version.DocumentSchema),
 		CreatedBy: version.CreatedBy, CreatedAt: version.CreatedAt.Format(time.RFC3339), UpdatedAt: version.UpdatedAt.Format(time.RFC3339),
 	}
 }
@@ -455,7 +457,7 @@ func toParsedStructureResponse(structure *documentsvc.ParsedStructure) parsedStr
 		return parsedStructureResponse{}
 	}
 	return parsedStructureResponse{
-		Version: toDocumentVersionResponse(&structure.Version), ParseQuality: structure.ParseQuality,
+		Version: toDocumentVersionResponse(&structure.Version), ParseQuality: structure.ParseQuality, DocumentSchema: structure.DocumentSchema,
 		Warnings: structure.Warnings, Blocks: structure.Blocks,
 	}
 }

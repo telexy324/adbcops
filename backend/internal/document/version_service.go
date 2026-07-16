@@ -13,10 +13,11 @@ import (
 )
 
 type ParsedStructure struct {
-	Version      model.KBDocumentVersion `json:"version"`
-	ParseQuality ParseQuality            `json:"parseQuality"`
-	Warnings     []ParseWarning          `json:"warnings"`
-	Blocks       []DocumentBlock         `json:"blocks"`
+	Version        model.KBDocumentVersion  `json:"version"`
+	ParseQuality   ParseQuality             `json:"parseQuality"`
+	DocumentSchema DocumentSchemaExtraction `json:"documentSchema"`
+	Warnings       []ParseWarning           `json:"warnings"`
+	Blocks         []DocumentBlock          `json:"blocks"`
 }
 
 func (s *Service) GetDocumentVersion(ctx context.Context, actor *model.AppUser, versionID int64) (*model.KBDocumentVersion, error) {
@@ -61,20 +62,24 @@ func (s *Service) ParseDocumentVersion(ctx context.Context, actor *model.AppUser
 	status := model.DocumentVersionStatusDraft
 	parserName, parserVersion, language := "", "", ""
 	metadata := []byte("{}")
+	documentSchema := []byte("{}")
+	schemaExtraction := DocumentSchemaExtraction{Fields: map[string]ExtractedField{}, MissingFields: []string{}, Entities: []DocumentEntity{}, Sections: []SectionClassification{}, Diagnostics: []SchemaDiagnostic{}}
 	var blocks []model.KBDocumentBlock
 	if ast != nil {
 		parserName, parserVersion, language = ast.ParserName, ast.ParserVersion, ast.Language
 		metadata, _ = json.Marshal(ast.Metadata)
+		schemaExtraction = ExtractDocumentSchema(document, ast)
+		documentSchema = schemaExtraction.JSON()
 		blocks = flattenASTBlocks(ast.Blocks)
 	}
 	if !quality.ParseSuccess {
 		status = model.DocumentVersionStatusFailed
 	}
-	saved, err := s.documents.RecordDocumentVersionParse(ctx, version.ID, parserName, parserVersion, language, metadata, quality.JSON(), status, blocks)
+	saved, err := s.documents.RecordDocumentVersionParse(ctx, version.ID, parserName, parserVersion, language, metadata, documentSchema, quality.JSON(), status, blocks)
 	if err != nil {
 		return nil, err
 	}
-	structure := &ParsedStructure{Version: *saved, ParseQuality: quality, Warnings: quality.Warnings}
+	structure := &ParsedStructure{Version: *saved, ParseQuality: quality, DocumentSchema: schemaExtraction, Warnings: quality.Warnings}
 	if ast != nil {
 		structure.Blocks = ast.Blocks
 	}
@@ -91,13 +96,19 @@ func (s *Service) GetParsedStructure(ctx context.Context, actor *model.AppUser, 
 		return nil, err
 	}
 	quality := ParseQuality{Level: ParseQualityFailed, Warnings: []ParseWarning{}}
+	schemaExtraction := DocumentSchemaExtraction{Fields: map[string]ExtractedField{}, MissingFields: []string{}, Entities: []DocumentEntity{}, Sections: []SectionClassification{}, Diagnostics: []SchemaDiagnostic{}}
 	if len(version.ParseQuality) > 0 {
 		if err := json.Unmarshal(version.ParseQuality, &quality); err != nil {
 			return nil, fmt.Errorf("decode parse quality: %w", err)
 		}
 	}
+	if len(version.DocumentSchema) > 0 {
+		if err := json.Unmarshal(version.DocumentSchema, &schemaExtraction); err != nil {
+			return nil, fmt.Errorf("decode document schema: %w", err)
+		}
+	}
 	return &ParsedStructure{
-		Version: *version, ParseQuality: quality, Warnings: quality.Warnings, Blocks: restoreASTBlocks(rows),
+		Version: *version, ParseQuality: quality, DocumentSchema: schemaExtraction, Warnings: quality.Warnings, Blocks: restoreASTBlocks(rows),
 	}, nil
 }
 

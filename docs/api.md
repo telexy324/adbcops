@@ -271,7 +271,9 @@ POST /api/knowledge/document-versions/{versionId}/parse
 GET  /api/knowledge/document-versions/{versionId}/blocks
 ```
 
-解析响应包含 `version`、独立的 `parseQuality`、`warnings` 和树形 `blocks`。Block 保留稳定的 key/order、父子关系、页码、section path、attributes 和内容哈希。首次解析写入 revision 1；再次解析已尝试过的版本会生成递增 revision，历史 AST 不会被覆盖。解析失败的版本状态为 `failed`，且正式评分接口返回 `42202`。
+解析响应包含 `version`、独立的 `parseQuality`、`documentSchema`、`warnings` 和树形 `blocks`。Block 保留稳定的 key/order、父子关系、页码、section path、attributes 和内容哈希。首次解析写入 revision 1；再次解析已尝试过的版本会生成递增 revision，历史 AST 不会被覆盖。解析失败的版本状态为 `failed`，且正式评分接口返回 `42202`。
+
+`documentSchema` 使用 `ops-schema-v1`，包含文档类型、字段、缺失字段、运维实体、章节分类、诊断项和总置信度。上传时明确提供的元数据标记为非推断；从原文标题、章节、表格或命令识别的内容均标记 `inferred=true`，并携带 block/page/原文证据。Schema Extractor 不修改 AST 或命令参数。
 
 ### 兼容切片接口
 
