@@ -27,6 +27,7 @@ const (
 	defaultParseMaxPages   = 1000
 	defaultParseMaxBlocks  = 50000
 	defaultParseTimeout    = 120
+	defaultWriteTimeout    = 300
 )
 
 var allowedSSLMode = map[string]struct{}{
@@ -80,6 +81,10 @@ type KnowledgeParseConfig struct {
 	Timeout   time.Duration
 }
 
+type HTTPServerConfig struct {
+	WriteTimeout time.Duration
+}
+
 // DSN returns a PostgreSQL URL. The returned value contains the database
 // password and must only be passed directly to database drivers.
 func (c DatabaseConfig) DSN() string {
@@ -106,6 +111,7 @@ type Config struct {
 	FileStorage    FileStorageConfig
 	RAG            RAGConfig
 	KnowledgeParse KnowledgeParseConfig
+	HTTPServer     HTTPServerConfig
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -143,6 +149,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	httpServer, err := loadHTTPServerConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment:    valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
@@ -154,7 +164,16 @@ func Load() (Config, error) {
 		FileStorage:    fileStorage,
 		RAG:            rag,
 		KnowledgeParse: knowledgeParse,
+		HTTPServer:     httpServer,
 	}, nil
+}
+
+func loadHTTPServerConfig() (HTTPServerConfig, error) {
+	writeTimeoutSeconds, err := loadPositiveInt("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", defaultWriteTimeout, 3600)
+	if err != nil {
+		return HTTPServerConfig{}, err
+	}
+	return HTTPServerConfig{WriteTimeout: time.Duration(writeTimeoutSeconds) * time.Second}, nil
 }
 
 func loadKnowledgeParseConfig() (KnowledgeParseConfig, error) {

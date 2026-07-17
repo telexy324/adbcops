@@ -4410,6 +4410,7 @@ Prompt 中必须显式声明：
 APP_ENV=dev
 APP_PORT=8080
 APP_TIMEZONE=Asia/Shanghai
+HTTP_SERVER_WRITE_TIMEOUT_SECONDS=300
 
 DB_HOST=127.0.0.1
 DB_PORT=5432
@@ -4880,6 +4881,7 @@ GET /api/health
 - Qwen3 Chat Completions 网关兼容：Bearer Token、`app_key`、`app_secret`、`stream=false`、`enable_thinking=false`；
 - Base URL 支持服务根路径、`/v1` 路径和完整模型接口路径，避免重复拼接 `/v1`；
 - LLM HTTP 调用默认超时 180 秒，支持 Qwen3 等长耗时模型返回完整结果；
+- HTTP Server 写超时通过 `HTTP_SERVER_WRITE_TIMEOUT_SECONDS` 配置，默认 300 秒、有效范围 1–3600 秒，避免长耗时 LLM 响应被固定 30 秒写超时截断；
 - Chat、Embedding、Rerank 调用统一打印结构化请求、响应和异常日志，包含 request ID、模型、接口、HTTP 状态和耗时；
 - 模型请求与响应正文写入日志，单个正文最多 64 KiB，超限明确标记截断；Bearer Token、API Key、App Key、App Secret 和 URL 查询参数必须脱敏；
 - Embedding API；

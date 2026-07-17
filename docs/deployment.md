@@ -21,6 +21,14 @@ docker compose up -d --build
 
 Compose 会启动 PostgreSQL、先运行一次 `migrate up`，再启动 API。API 健康检查使用 `/api/ready`。
 
+长耗时 LLM 请求可在 `.env` 中调整 HTTP Server 写超时，无需重新构建后端镜像：
+
+```dotenv
+HTTP_SERVER_WRITE_TIMEOUT_SECONDS=300
+```
+
+允许范围为 1–3600 秒，修改后需要重启 API 容器。前端及外层反向代理的读取超时也应不小于该请求实际耗时。
+
 ## Kubernetes
 
 原生 YAML 位于 `deploy/k8s/`：

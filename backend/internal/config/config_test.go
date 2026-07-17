@@ -10,6 +10,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
 	t.Setenv("APP_PORT", "")
 	t.Setenv("APP_TIMEZONE", "")
+	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "")
 	setDatabaseEnv(t)
 
 	cfg, err := Load()
@@ -37,6 +38,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.KnowledgeParse.MaxPages != defaultParseMaxPages || cfg.KnowledgeParse.MaxBlocks != defaultParseMaxBlocks || cfg.KnowledgeParse.Timeout != time.Duration(defaultParseTimeout)*time.Second {
 		t.Fatalf("KnowledgeParse = %+v", cfg.KnowledgeParse)
 	}
+	if cfg.HTTPServer.WriteTimeout != time.Duration(defaultWriteTimeout)*time.Second {
+		t.Fatalf("HTTPServer = %+v", cfg.HTTPServer)
+	}
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
@@ -56,6 +60,7 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("KNOWLEDGE_PARSE_MAX_PAGES", "200")
 	t.Setenv("KNOWLEDGE_PARSE_MAX_BLOCKS", "9000")
 	t.Setenv("KNOWLEDGE_PARSE_TIMEOUT_SECONDS", "30")
+	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "600")
 	setAuthEnv(t)
 	setCredentialEnv(t)
 
@@ -85,6 +90,17 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.KnowledgeParse.MaxPages != 200 || cfg.KnowledgeParse.MaxBlocks != 9000 || cfg.KnowledgeParse.Timeout != 30*time.Second {
 		t.Fatalf("KnowledgeParse = %+v", cfg.KnowledgeParse)
+	}
+	if cfg.HTTPServer.WriteTimeout != 600*time.Second {
+		t.Fatalf("HTTPServer = %+v", cfg.HTTPServer)
+	}
+}
+
+func TestLoadRejectsInvalidHTTPServerWriteTimeout(t *testing.T) {
+	setDatabaseEnv(t)
+	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "3601")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid HTTP_SERVER_WRITE_TIMEOUT_SECONDS error")
 	}
 }
 

@@ -55,7 +55,6 @@ import (
 const (
 	readHeaderTimeout = 5 * time.Second
 	readTimeout       = 30 * time.Second
-	writeTimeout      = 30 * time.Second
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	databaseTimeout   = 10 * time.Second
@@ -258,13 +257,13 @@ func run() error {
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
+		WriteTimeout:      cfg.HTTPServer.WriteTimeout,
 		IdleTimeout:       idleTimeout,
 	}
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		logger.Info("http server starting", "address", cfg.Address(), "environment", cfg.Environment)
+		logger.Info("http server starting", "address", cfg.Address(), "environment", cfg.Environment, "writeTimeout", cfg.HTTPServer.WriteTimeout)
 		serverErrors <- server.ListenAndServe()
 	}()
 
