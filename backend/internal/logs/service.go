@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	internalhttp "aiops-platform/backend/internal/httpclient"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/resourcelimit"
 )
@@ -75,20 +76,21 @@ type QueryResult struct {
 }
 
 type esConfig struct {
-	BaseURL        string `json:"baseUrl"`
-	Index          string `json:"index"`
-	TimeField      string `json:"timeField"`
-	LevelField     string `json:"levelField"`
-	MessageField   string `json:"messageField"`
-	SourceField    string `json:"sourceField"`
-	HostField      string `json:"hostField"`
-	ClusterField   string `json:"clusterField"`
-	NamespaceField string `json:"namespaceField"`
-	PodField       string `json:"podField"`
-	ContainerField string `json:"containerField"`
-	TraceIDField   string `json:"traceIdField"`
-	RequestIDField string `json:"requestIdField"`
-	ErrorCodeField string `json:"errorCodeField"`
+	BaseURL         string `json:"baseUrl"`
+	InsecureSkipTLS bool   `json:"insecureSkipTlsVerify"`
+	Index           string `json:"index"`
+	TimeField       string `json:"timeField"`
+	LevelField      string `json:"levelField"`
+	MessageField    string `json:"messageField"`
+	SourceField     string `json:"sourceField"`
+	HostField       string `json:"hostField"`
+	ClusterField    string `json:"clusterField"`
+	NamespaceField  string `json:"namespaceField"`
+	PodField        string `json:"podField"`
+	ContainerField  string `json:"containerField"`
+	TraceIDField    string `json:"traceIdField"`
+	RequestIDField  string `json:"requestIdField"`
+	ErrorCodeField  string `json:"errorCodeField"`
 }
 
 type credentialConfig struct {
@@ -163,7 +165,7 @@ func (s *Service) Query(ctx context.Context, actor *model.AppUser, input QueryIn
 	}
 	request.Header.Set("Content-Type", "application/json")
 	applyCredential(request, credential)
-	response, err := s.client.Do(request)
+	response, err := internalhttp.WithInsecureTLS(s.client, config.InsecureSkipTLS).Do(request)
 	if err != nil {
 		if isTimeout(err) || errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return nil, ErrLogQueryTimeout

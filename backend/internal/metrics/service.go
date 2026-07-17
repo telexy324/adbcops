@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	internalhttp "aiops-platform/backend/internal/httpclient"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/resourcelimit"
@@ -100,8 +101,9 @@ type TestResult struct {
 }
 
 type promConfig struct {
-	BaseURL   string `json:"baseUrl"`
-	TimeoutMs int    `json:"timeoutMs"`
+	BaseURL         string `json:"baseUrl"`
+	TimeoutMs       int    `json:"timeoutMs"`
+	InsecureSkipTLS bool   `json:"insecureSkipTlsVerify"`
 }
 
 type credentialConfig struct {
@@ -190,7 +192,7 @@ func (s *Service) Query(ctx context.Context, actor *model.AppUser, input QueryIn
 		return nil, fmt.Errorf("create prometheus request: %w", err)
 	}
 	applyCredential(request, credential)
-	response, err := s.client.Do(request)
+	response, err := internalhttp.WithInsecureTLS(s.client, config.InsecureSkipTLS).Do(request)
 	if err != nil {
 		if isTimeout(err) || errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return nil, ErrMetricsTimeout

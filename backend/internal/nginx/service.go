@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	internalhttp "aiops-platform/backend/internal/httpclient"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/resourcelimit"
 )
@@ -57,6 +58,7 @@ type Service struct {
 
 type Config struct {
 	BaseURL            string `json:"baseUrl"`
+	InsecureSkipTLS    bool   `json:"insecureSkipTlsVerify"`
 	AccessLogPath      string `json:"accessLogPath"`
 	ErrorLogPath       string `json:"errorLogPath"`
 	MetricsPath        string `json:"metricsPath"`
@@ -305,7 +307,7 @@ func (s *Service) fetch(ctx context.Context, dataSourceID int64, cfg Config, cre
 		return "", err
 	}
 	applyCredential(request, credential)
-	response, err := s.client.Do(request)
+	response, err := internalhttp.WithInsecureTLS(s.client, cfg.InsecureSkipTLS).Do(request)
 	if err != nil {
 		if errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return "", ErrNginxTimeout

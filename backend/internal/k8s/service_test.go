@@ -80,6 +80,33 @@ func TestEmptyAllowedNamespacesRejected(t *testing.T) {
 	}
 }
 
+func TestRestConfigSkipTLSAppliesToKubeconfig(t *testing.T) {
+	kubeconfig := `apiVersion: v1
+kind: Config
+clusters:
+- name: target
+  cluster:
+    server: https://kubernetes.example.test
+contexts:
+- name: target
+  context:
+    cluster: target
+    user: readonly
+current-context: target
+users:
+- name: readonly
+  user:
+    token: example-token
+`
+	restConfig, err := restConfigFor(Config{InsecureSkipTLS: true}, Credential{Kubeconfig: kubeconfig})
+	if err != nil {
+		t.Fatalf("build rest config: %v", err)
+	}
+	if !restConfig.TLSClientConfig.Insecure {
+		t.Fatal("kubeconfig path did not apply insecureSkipTlsVerify")
+	}
+}
+
 func TestDiagnosePodCollectsContextWithLimitedLogsAndNoSecret(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

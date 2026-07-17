@@ -1106,6 +1106,14 @@ func (clientPodLogReader) ReadPodLog(ctx context.Context, client kubernetes.Inte
 }
 
 func (realClientFactory) ClientFor(_ context.Context, _ *model.DataSource, config Config, credential Credential) (kubernetes.Interface, error) {
+	restConfig, err := restConfigFor(config, credential)
+	if err != nil {
+		return nil, err
+	}
+	return kubernetes.NewForConfig(restConfig)
+}
+
+func restConfigFor(config Config, credential Credential) (*rest.Config, error) {
 	var restConfig *rest.Config
 	var err error
 	if strings.TrimSpace(credential.Kubeconfig) != "" {
@@ -1118,13 +1126,16 @@ func (realClientFactory) ClientFor(_ context.Context, _ *model.DataSource, confi
 			return nil, ErrInvalidInput
 		}
 		restConfig = &rest.Config{Host: strings.TrimSpace(config.APIServer), BearerToken: strings.TrimSpace(credential.BearerToken)}
-		if config.InsecureSkipTLS {
-			restConfig.TLSClientConfig.Insecure = true
-		}
 		if strings.TrimSpace(credential.CAData) != "" {
 			restConfig.TLSClientConfig.CAData = []byte(strings.TrimSpace(credential.CAData))
 		}
 	}
+	// Apply this after both construction paths so kubeconfig-based credentials
+	// honor the explicit data-source override too.
+	if config.InsecureSkipTLS {
+		restConfig.TLSClientConfig.Insecure = true
+		restConfig.TLSClientConfig.CAData = nil
+	}
 	restConfig.Timeout = time.Duration(config.TimeoutMs) * time.Millisecond
-	return kubernetes.NewForConfig(restConfig)
+	return restConfig, nil
 }

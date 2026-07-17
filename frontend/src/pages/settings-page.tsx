@@ -55,7 +55,11 @@ const dataSourceKinds: Array<{
     title: "日志数据源",
     description: "Elasticsearch / OpenSearch 兼容日志查询入口。",
     icon: DatabaseZap,
-    config: { baseUrl: "https://es.example.com", index: "logs-*" },
+    config: {
+      baseUrl: "https://es.example.com",
+      index: "logs-*",
+      insecureSkipTlsVerify: false,
+    },
     credential: { username: "elastic", password: "replace-me" },
   },
   {
@@ -66,6 +70,7 @@ const dataSourceKinds: Array<{
     config: {
       apiServer: "https://kubernetes.example.com",
       allowedNamespaces: ["default", "prod"],
+      insecureSkipTlsVerify: false,
     },
     credential: { bearerToken: "replace-me" },
   },
@@ -74,7 +79,10 @@ const dataSourceKinds: Array<{
     title: "Prometheus 数据源",
     description: "Prometheus HTTP API，用于 instant/range 指标查询。",
     icon: ServerCog,
-    config: { baseUrl: "https://prometheus.example.com" },
+    config: {
+      baseUrl: "https://prometheus.example.com",
+      insecureSkipTlsVerify: false,
+    },
     credential: { bearerToken: "replace-me" },
   },
   {
@@ -90,6 +98,7 @@ const dataSourceKinds: Array<{
       allowedNamespaces: ["prod"],
       allowedGroups: ["DEFAULT_GROUP"],
       allowConfigContent: false,
+      insecureSkipTlsVerify: false,
     },
     credential: { username: "readonly", password: "replace-me" },
   },
@@ -133,6 +142,7 @@ const dataSourceKinds: Array<{
       maskClientIp: true,
       configContentEnabled: false,
       logIndex: "nginx-*",
+      insecureSkipTlsVerify: false,
     },
     credential: { bearerToken: "replace-me" },
   },
@@ -368,6 +378,18 @@ export function SettingsPage() {
       setTestNotification({ success: false, message });
       return;
     }
+    if (!isJSONObject(config.value)) {
+      const message = "Config JSON 必须是对象。";
+      setError(message);
+      setTestNotification({ success: false, message });
+      return;
+    }
+    const configValue = {
+      ...config.value,
+      ...(supportsHTTPSConfig(selectedType)
+        ? { insecureSkipTlsVerify: sourceForm.insecureSkipTLS }
+        : {}),
+    };
     setError(null);
     sourceMutation.mutate({
       id: editingDataSourceId,
@@ -377,7 +399,7 @@ export function SettingsPage() {
         environment: sourceForm.environment,
         systemName: sourceForm.systemName,
         componentName: sourceForm.componentName,
-        config: config.value,
+        config: configValue,
         credential: credential.value,
         enabled: sourceForm.enabled,
         readOnly: true,
@@ -426,6 +448,7 @@ export function SettingsPage() {
       configJSON: JSON.stringify(item.config ?? {}, null, 2),
       credentialJSON: "",
       enabled: item.enabled,
+      insecureSkipTLS: readInsecureSkipTLS(item.config),
     });
     setNotice(`正在编辑数据源 ${item.name}。凭据不回显，留空表示不修改。`);
     setError(null);
@@ -857,6 +880,21 @@ export function SettingsPage() {
                   />
                   启用数据源
                 </label>
+                {supportsHTTPSConfig(selectedType) && (
+                  <label className="inline-flex items-center gap-2 text-sm font-medium text-amber-700">
+                    <input
+                      type="checkbox"
+                      checked={sourceForm.insecureSkipTLS}
+                      onChange={(event) =>
+                        setSourceForm((current) => ({
+                          ...current,
+                          insecureSkipTLS: event.target.checked,
+                        }))
+                      }
+                    />
+                    跳过 TLS 证书校验
+                  </label>
+                )}
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
                   强制只读
                 </span>
@@ -1041,6 +1079,11 @@ function DataSourceRow({
             <Badge active={item.credentialConfigured}>
               credential configured
             </Badge>
+            {supportsHTTPSConfig(item.sourceType) && (
+              <Badge active={readInsecureSkipTLS(item.config)}>
+                skip tls verify
+              </Badge>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1143,7 +1186,28 @@ function sourceDefaults(template: (typeof dataSourceKinds)[number]) {
     configJSON: JSON.stringify(template.config, null, 2),
     credentialJSON: JSON.stringify(template.credential, null, 2),
     enabled: true,
+    insecureSkipTLS: readInsecureSkipTLS(template.config),
   };
+}
+
+function supportsHTTPSConfig(value: string) {
+  return [
+    "elasticsearch",
+    "opensearch",
+    "kubernetes",
+    "prometheus",
+    "http",
+    "nacos",
+    "nginx",
+  ].includes(value);
+}
+
+function isJSONObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readInsecureSkipTLS(config: unknown) {
+  return isJSONObject(config) && config.insecureSkipTlsVerify === true;
 }
 
 function parseJSON(value: string, label: string) {

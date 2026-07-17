@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	internalhttp "aiops-platform/backend/internal/httpclient"
 	k8ssvc "aiops-platform/backend/internal/k8s"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
@@ -2616,7 +2617,7 @@ func (r httpTraceGraphReader) ReadTraceServiceGraph(ctx context.Context, _ *mode
 	if dataSource.SourceType != model.DataSourceTypeHTTP && dataSource.SourceType != model.DataSourceTypePrometheus {
 		return nil, ErrUnsupportedSource
 	}
-	endpoint, err := traceGraphEndpoint(dataSource.Config, input.Path)
+	endpoint, insecureSkipTLS, err := traceGraphEndpoint(dataSource.Config, input.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -2624,7 +2625,7 @@ func (r httpTraceGraphReader) ReadTraceServiceGraph(ctx context.Context, _ *mode
 	if err != nil {
 		return nil, ErrInvalidInput
 	}
-	response, err := r.client.Do(request)
+	response, err := internalhttp.WithInsecureTLS(r.client, insecureSkipTLS).Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -2639,21 +2640,22 @@ func (r httpTraceGraphReader) ReadTraceServiceGraph(ctx context.Context, _ *mode
 	return decodeTraceServiceGraph(body)
 }
 
-func traceGraphEndpoint(raw []byte, overridePath string) (string, error) {
+func traceGraphEndpoint(raw []byte, overridePath string) (string, bool, error) {
 	var config struct {
 		BaseURL          string `json:"baseUrl"`
 		ServiceGraphPath string `json:"serviceGraphPath"`
+		InsecureSkipTLS  bool   `json:"insecureSkipTlsVerify"`
 	}
 	if err := json.Unmarshal(raw, &config); err != nil {
-		return "", ErrInvalidInput
+		return "", false, ErrInvalidInput
 	}
 	baseURL := strings.TrimSpace(config.BaseURL)
 	if baseURL == "" {
-		return "", ErrInvalidInput
+		return "", false, ErrInvalidInput
 	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", ErrInvalidInput
+		return "", false, ErrInvalidInput
 	}
 	path := strings.TrimSpace(overridePath)
 	if path == "" {
@@ -2664,9 +2666,9 @@ func traceGraphEndpoint(raw []byte, overridePath string) (string, error) {
 	}
 	relative, err := url.Parse(path)
 	if err != nil {
-		return "", ErrInvalidInput
+		return "", false, ErrInvalidInput
 	}
-	return parsed.ResolveReference(relative).String(), nil
+	return parsed.ResolveReference(relative).String(), config.InsecureSkipTLS, nil
 }
 
 func decodeTraceServiceGraph(raw []byte) (*TraceServiceGraph, error) {

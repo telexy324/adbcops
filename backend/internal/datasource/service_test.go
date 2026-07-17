@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,6 +98,37 @@ func TestCreateAcceptsKubernetesPrivateIPAddress(t *testing.T) {
 				t.Fatalf("Create() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestTLSVerificationSkipMustBeBooleanAndHTTPS(t *testing.T) {
+	service := NewService(newFakeRepository(), &fakeSecrets{}, "v1")
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	for _, config := range []json.RawMessage{
+		json.RawMessage(`{"baseUrl":"https://prom.example","insecureSkipTlsVerify":"true"}`),
+		json.RawMessage(`{"baseUrl":"http://prom.example","insecureSkipTlsVerify":true}`),
+	} {
+		_, err := service.Create(context.Background(), admin, SaveInput{
+			Name:       "invalid-tls-option",
+			SourceType: model.DataSourceTypePrometheus,
+			Config:     config,
+			Enabled:    true,
+			ReadOnly:   true,
+		})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("Create(%s) error = %v, want ErrInvalidInput", config, err)
+		}
+	}
+
+	_, err := service.Create(context.Background(), admin, SaveInput{
+		Name:       "self-signed-prometheus",
+		SourceType: model.DataSourceTypePrometheus,
+		Config:     json.RawMessage(`{"baseUrl":"https://prom.example","insecureSkipTlsVerify":true}`),
+		Enabled:    true,
+		ReadOnly:   true,
+	})
+	if err != nil {
+		t.Fatalf("Create(https insecure skip) error = %v", err)
 	}
 }
 

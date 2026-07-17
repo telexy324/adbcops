@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	internalhttp "aiops-platform/backend/internal/httpclient"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/resourcelimit"
 )
@@ -60,6 +61,7 @@ type Service struct {
 
 type Config struct {
 	BaseURL               string   `json:"baseUrl"`
+	InsecureSkipTLS       bool     `json:"insecureSkipTlsVerify"`
 	Namespace             string   `json:"namespace"`
 	DefaultGroup          string   `json:"defaultGroup"`
 	AllowedNamespaces     []string `json:"allowedNamespaces"`
@@ -589,7 +591,7 @@ func (s *Service) getJSON(ctx context.Context, dataSourceID int64, cfg Config, c
 		return fmt.Errorf("create nacos request: %w", err)
 	}
 	applyCredential(request, credential)
-	response, err := s.client.Do(request)
+	response, err := internalhttp.WithInsecureTLS(s.client, cfg.InsecureSkipTLS).Do(request)
 	if err != nil {
 		if errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return ErrNacosTimeout

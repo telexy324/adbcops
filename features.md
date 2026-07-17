@@ -4529,6 +4529,7 @@ NGINX_CONFIG_CONTENT_ENABLED=false
 - 所有外部 endpoint 必须来源于数据源配置，不接受用户临时输入任意地址；
 - 所有查询必须有超时、行数、字节数和时间窗口限制；
 - 所有凭据必须加密保存，调用日志不得包含 token、密码、accessToken；
+- HTTPS 外部连接默认校验证书；仅管理员在具体数据源上显式启用 `insecureSkipTlsVerify` 时跳过校验，不允许修改全局 TLS 行为；
 - Nacos 限制 Namespace / Group allowlist；
 - Redis 严格命令白名单，不读取业务 Value；
 - TiDB SQL 必须 AST 只读校验，并拒绝多语句和危险语句；
@@ -5034,12 +5035,14 @@ GET /api/health
 - data_source；
 - CRUD；
 - Test；
-- admin only 配置。
+- admin only 配置；
+- Kubernetes、Elasticsearch/OpenSearch、Prometheus、Generic HTTP、Nacos、Nginx 等 HTTPS 数据源显式支持 `insecureSkipTlsVerify`，默认关闭且按数据源隔离生效。
 
 验收：
 
 - config 无明文凭据；
 - 已有数据源可在配置中心编辑；
+- HTTPS 数据源可在配置中心显式选择“跳过 TLS 证书校验”，编辑时正确回显；
 - user 只能查看脱敏后的启用数据源。
 
 ### Task 2.2：Elasticsearch Tool
@@ -5114,6 +5117,7 @@ GET /api/health
 - 认证；
 - allowed namespaces；
 - `apiServer` 支持以 HTTP/HTTPS URL 配置纯 IPv4/IPv6 地址，并允许集群私网 IP；
+- API Server 使用自签名证书时可显式启用 `insecureSkipTlsVerify`；该设置对 Bearer Token 和 kubeconfig 两种认证方式均生效；
 - K8s 私网 IP 放行仅作用于 Kubernetes 数据源，loopback、unspecified、link-local 和 multicast 地址仍拒绝；
 - Test；
 - 只读资源 API。

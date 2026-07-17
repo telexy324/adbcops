@@ -906,6 +906,9 @@ describe("SettingsPage", () => {
     await user.click(
       within(k8sSourceRow as HTMLElement).getByRole("button", { name: "编辑" }),
     );
+    await user.click(
+      screen.getByRole("checkbox", { name: "跳过 TLS 证书校验" }),
+    );
     await user.click(screen.getByRole("button", { name: "更新数据源" }));
 
     expect(updateDataSource).toHaveBeenCalledWith({
@@ -915,6 +918,7 @@ describe("SettingsPage", () => {
         credential: undefined,
         config: expect.objectContaining({
           apiServer: "https://10.20.30.40:6443",
+          insecureSkipTlsVerify: true,
         }),
       }),
     });

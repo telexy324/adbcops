@@ -381,13 +381,24 @@ func validateConfigByType(sourceType string, raw []byte) error {
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return ErrInvalidInput
 	}
+	if value, exists := config["insecureSkipTlsVerify"]; exists {
+		if _, ok := value.(bool); !ok {
+			return ErrInvalidInput
+		}
+	}
 	switch sourceType {
 	case model.DataSourceTypeElasticsearch, model.DataSourceTypeOpenSearch, model.DataSourceTypePrometheus, model.DataSourceTypeHTTP, model.DataSourceTypeNacos, model.DataSourceTypeNginx:
 		if endpoint, ok := config["baseUrl"].(string); ok && strings.TrimSpace(endpoint) != "" {
+			if tlsSkipEnabled(config) && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://") {
+				return ErrInvalidInput
+			}
 			return validateEndpoint(endpoint)
 		}
 	case model.DataSourceTypeKubernetes:
 		if endpoint, ok := config["apiServer"].(string); ok && strings.TrimSpace(endpoint) != "" {
+			if tlsSkipEnabled(config) && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://") {
+				return ErrInvalidInput
+			}
 			return validateKubernetesEndpoint(endpoint)
 		}
 	case model.DataSourceTypeSSH:
@@ -408,6 +419,11 @@ func validateConfigByType(sourceType string, raw []byte) error {
 		}
 	}
 	return nil
+}
+
+func tlsSkipEnabled(config map[string]any) bool {
+	enabled, _ := config["insecureSkipTlsVerify"].(bool)
+	return enabled
 }
 
 // validateKubernetesEndpoint permits private IP API servers because production
