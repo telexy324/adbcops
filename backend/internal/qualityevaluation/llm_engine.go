@@ -270,14 +270,6 @@ func selectRelevantBlocks(criterion model.KBQualityCriterion, rules []model.KBQu
 			ranked = append(ranked, scored{block: block, score: score})
 		}
 	}
-	if len(ranked) == 0 {
-		for index, block := range blocks {
-			if index >= maxBlocksPerLLMBatch {
-				break
-			}
-			ranked = append(ranked, scored{block: block, score: 1})
-		}
-	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		if ranked[i].score == ranked[j].score {
 			return ranked[i].block.OrderNo < ranked[j].block.OrderNo
@@ -285,8 +277,16 @@ func selectRelevantBlocks(criterion model.KBQualityCriterion, rules []model.KBQu
 		return ranked[i].score > ranked[j].score
 	})
 	result := make([]model.KBDocumentBlock, 0, len(ranked))
+	selected := make(map[string]struct{}, len(ranked))
 	for _, item := range ranked {
 		result = append(result, item.block)
+		selected[item.block.BlockKey] = struct{}{}
+	}
+	for _, block := range sortedBlocks(blocks) {
+		if _, ok := selected[block.BlockKey]; ok {
+			continue
+		}
+		result = append(result, block)
 	}
 	return result
 }

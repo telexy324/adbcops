@@ -2,9 +2,11 @@ package qualityevaluation
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -100,19 +102,6 @@ func (s *Service) create(ctx context.Context, actor *model.AppUser, input Create
 	if profile.Status != model.QualityStandardPublished || standard.Status != model.QualityStandardPublished {
 		return nil, ErrProfileNotPublished
 	}
-	source := "deterministic"
-	if mode != "deterministic" {
-		source = "hybrid"
-	}
-	if !input.Force {
-		cached, cacheErr := s.repository.FindLatestQualityEvaluation(ctx, version.ID, profile.ID, source)
-		if cacheErr == nil {
-			return cached, nil
-		}
-		if !errors.Is(cacheErr, repository.ErrNotFound) {
-			return nil, cacheErr
-		}
-	}
 	selected, available := map[string]struct{}{}, map[string]struct{}{}
 	for _, criterion := range profile.Criteria {
 		available[criterion.CriterionKey] = struct{}{}
@@ -123,6 +112,17 @@ func (s *Service) create(ctx context.Context, actor *model.AppUser, input Create
 			return nil, fmt.Errorf("%w: unknown criterion %q", ErrInvalidEvaluation, key)
 		}
 		selected[key] = struct{}{}
+	}
+	selectedValues := sortedSelectedCriteria(selected)
+	fingerprint := evaluationFingerprint(mode, selectedValues)
+	if !input.Force {
+		cached, cacheErr := s.repository.FindLatestQualityEvaluation(ctx, version.ID, profile.ID, fingerprint)
+		if cacheErr == nil {
+			return cached, nil
+		}
+		if !errors.Is(cacheErr, repository.ErrNotFound) {
+			return nil, cacheErr
+		}
 	}
 	blocks, err := s.repository.ListDocumentVersionBlocks(ctx, version.ID)
 	if err != nil {
@@ -142,6 +142,9 @@ func (s *Service) create(ctx context.Context, actor *model.AppUser, input Create
 	llmCalls, llmFailedCalls := 0, 0
 	if mode != "deterministic" {
 		pending := pendingRuleKeys(output.Results)
+		if mode == "llm" {
+			pending = llmRuleKeys(profile, selected)
+		}
 		config, configErr := s.repository.FindDefaultEnabledLLMConfigByPurpose(ctx, model.LLMPurposeChat)
 		if configErr != nil || s.llmClient == nil || s.secrets == nil {
 			degraded = append(degraded, "llm")
@@ -161,14 +164,15 @@ func (s *Service) create(ctx context.Context, actor *model.AppUser, input Create
 				if llmOutput.FailedCalls > 0 || len(llmOutput.Results) == 0 && len(pending) > 0 {
 					degraded = append(degraded, "llm")
 				}
-				output, criterionScores = mergeLLMResults(profile, output, llmOutput.Results)
+				output, criterionScores = mergeLLMResults(profile, output, llmOutput.Results, mode == "llm")
 			}
 		}
 	}
 	parseScore, totalScore, level, now := parseQualityScore(parseQuality), output.ContentScore, output.Level, s.now()
-	summary := fmt.Sprintf("%s evaluation assessed %d rules; %d rules await semantic or human evaluation; %d hard-gate violations.", source, output.AssessedRuleCount, output.PendingRuleCount, len(output.HardGateViolations))
+	summary := fmt.Sprintf("%s evaluation assessed %d rules; %d rules await semantic or human evaluation; %d hard-gate violations.", mode, output.AssessedRuleCount, output.PendingRuleCount, len(output.HardGateViolations))
 	result := marshal(map[string]any{"hardGateViolations": output.HardGateViolations, "assessedRuleCount": output.AssessedRuleCount, "pendingRuleCount": output.PendingRuleCount, "criterionScores": criterionScores, "degradedComponents": degraded, "validationWarnings": validationWarnings, "llmCalls": llmCalls, "llmFailedCalls": llmFailedCalls, "documentId": documentRow.ID})
-	evaluation := &model.KBQualityEvaluation{DocumentVersionID: version.ID, QualityProfileID: profile.ID, QualityProfileVersion: standard.Version, ParseScore: &parseScore, ContentScore: &output.ContentScore, TotalScore: &totalScore, GateStatus: output.GateStatus, Level: &level, Source: source, ModelConfigID: modelConfigID, Summary: &summary, Result: result, Status: "completed", ReviewStatus: "draft", SupersedesEvaluationID: supersedes, CompletedAt: &now, RuleResults: output.Results}
+	selectedJSON := marshal(selectedValues)
+	evaluation := &model.KBQualityEvaluation{DocumentVersionID: version.ID, QualityProfileID: profile.ID, QualityProfileVersion: standard.Version, Mode: mode, SelectedCriteria: selectedJSON, RequestFingerprint: &fingerprint, ParseScore: &parseScore, ContentScore: &output.ContentScore, TotalScore: &totalScore, GateStatus: output.GateStatus, Level: &level, Source: mode, ModelConfigID: modelConfigID, Summary: &summary, Result: result, Status: "completed", ReviewStatus: "draft", SupersedesEvaluationID: supersedes, CompletedAt: &now, RuleResults: output.Results}
 	if err := s.repository.CreateQualityEvaluation(ctx, evaluation); err != nil {
 		return nil, err
 	}
@@ -202,31 +206,48 @@ func (s *Service) llmRunConfig(config *model.LLMConfig) (LLMRunConfig, error) {
 func pendingRuleKeys(results []model.KBQualityRuleResult) map[string]struct{} {
 	values := map[string]struct{}{}
 	for _, result := range results {
-		if result.Score == nil {
+		if result.Score == nil && result.FindingStatus != nil && *result.FindingStatus == FindingManualConfirmationRequired {
 			values[result.CriterionKey+"\x00"+result.RuleKey] = struct{}{}
 		}
 	}
 	return values
 }
 
-func mergeLLMResults(profile *model.KBQualityProfile, deterministic EngineOutput, llmResults []model.KBQualityRuleResult) (EngineOutput, map[string]CriterionScore) {
-	byKey := map[string]model.KBQualityRuleResult{}
-	for _, result := range deterministic.Results {
-		byKey[result.CriterionKey+"\x00"+result.RuleKey] = result
-	}
-	for _, result := range llmResults {
-		key := result.CriterionKey + "\x00" + result.RuleKey
-		if existing, ok := byKey[key]; ok && existing.Score == nil {
-			byKey[key] = result
+func llmRuleKeys(profile *model.KBQualityProfile, selected map[string]struct{}) map[string]struct{} {
+	values := map[string]struct{}{}
+	for _, criterion := range profile.Criteria {
+		if len(selected) > 0 {
+			if _, ok := selected[criterion.CriterionKey]; !ok {
+				continue
+			}
+		}
+		for _, rule := range criterion.Rules {
+			if rule.RuleType != "manual" && !rule.HardGate {
+				values[criterion.CriterionKey+"\x00"+rule.RuleKey] = struct{}{}
+			}
 		}
 	}
-	merged := EngineOutput{Results: []model.KBQualityRuleResult{}, HardGateViolations: append([]string(nil), deterministic.HardGateViolations...)}
+	return values
+}
+
+func mergeLLMResults(profile *model.KBQualityProfile, deterministic EngineOutput, llmResults []model.KBQualityRuleResult, replaceAssessed bool) (EngineOutput, map[string]CriterionScore) {
 	hardGates := map[string]bool{}
 	for _, criterion := range profile.Criteria {
 		for _, rule := range criterion.Rules {
 			hardGates[criterion.CriterionKey+"\x00"+rule.RuleKey] = rule.HardGate
 		}
 	}
+	byKey := map[string]model.KBQualityRuleResult{}
+	for _, result := range deterministic.Results {
+		byKey[result.CriterionKey+"\x00"+result.RuleKey] = result
+	}
+	for _, result := range llmResults {
+		key := result.CriterionKey + "\x00" + result.RuleKey
+		if existing, ok := byKey[key]; ok && !hardGates[key] && (existing.Score == nil || replaceAssessed) {
+			byKey[key] = result
+		}
+	}
+	merged := EngineOutput{Results: []model.KBQualityRuleResult{}, HardGateViolations: append([]string(nil), deterministic.HardGateViolations...)}
 	earned, maxScore := 0.0, 0.0
 	for _, criterion := range profile.Criteria {
 		for _, rule := range criterion.Rules {
@@ -237,7 +258,12 @@ func mergeLLMResults(profile *model.KBQualityProfile, deterministic EngineOutput
 			}
 			merged.Results = append(merged.Results, result)
 			if result.Score == nil {
-				merged.PendingRuleCount++
+				if result.FindingStatus == nil || *result.FindingStatus != FindingNotApplicable {
+					merged.PendingRuleCount++
+					if hardGates[key] && !containsStringValue(merged.HardGateViolations, result.RuleKey) {
+						merged.HardGateViolations = append(merged.HardGateViolations, result.RuleKey)
+					}
+				}
 				continue
 			}
 			merged.AssessedRuleCount++
@@ -256,7 +282,7 @@ func mergeLLMResults(profile *model.KBQualityProfile, deterministic EngineOutput
 	switch {
 	case len(merged.HardGateViolations) > 0 || merged.ContentScore < profile.WarningScore:
 		merged.GateStatus, merged.Level = "blocked", "blocked"
-	case merged.ContentScore < profile.PassScore:
+	case merged.PendingRuleCount > 0 || merged.ContentScore < profile.PassScore:
 		merged.GateStatus, merged.Level = "warning", "warning"
 	default:
 		merged.GateStatus, merged.Level = "pass", "pass"
@@ -406,11 +432,16 @@ func (s *Service) Rerun(ctx context.Context, actor *model.AppUser, id int64) (*m
 	if err != nil {
 		return nil, err
 	}
-	mode := "deterministic"
-	if original.Source != "deterministic" {
-		mode = "hybrid"
+	mode := original.Mode
+	if mode == "" {
+		mode = original.Source
+		if mode != "deterministic" && mode != "hybrid" && mode != "llm" {
+			mode = "hybrid"
+		}
 	}
-	return s.create(ctx, actor, CreateInput{DocumentVersionID: original.DocumentVersionID, QualityProfileID: original.QualityProfileID, Mode: mode, Force: true}, &original.ID)
+	selected := []string{}
+	_ = json.Unmarshal(original.SelectedCriteria, &selected)
+	return s.create(ctx, actor, CreateInput{DocumentVersionID: original.DocumentVersionID, QualityProfileID: original.QualityProfileID, Mode: mode, SelectedCriteria: selected, Force: true}, &original.ID)
 }
 
 func (s *Service) Overrides(ctx context.Context, actor *model.AppUser, id int64) ([]model.KBQualityEvaluationOverride, error) {
@@ -431,7 +462,12 @@ func aggregateResults(profile *model.KBQualityProfile, results []model.KBQuality
 	earned, maxScore := 0.0, 0.0
 	for _, result := range results {
 		if result.Score == nil {
-			output.PendingRuleCount++
+			if result.FindingStatus == nil || *result.FindingStatus != FindingNotApplicable {
+				output.PendingRuleCount++
+				if hardGates[result.CriterionKey+"\x00"+result.RuleKey] {
+					output.HardGateViolations = append(output.HardGateViolations, result.RuleKey)
+				}
+			}
 			continue
 		}
 		output.AssessedRuleCount++
@@ -449,12 +485,27 @@ func aggregateResults(profile *model.KBQualityProfile, results []model.KBQuality
 	switch {
 	case len(output.HardGateViolations) > 0 || output.ContentScore < profile.WarningScore:
 		output.GateStatus, output.Level = "blocked", "blocked"
-	case output.ContentScore < profile.PassScore:
+	case output.PendingRuleCount > 0 || output.ContentScore < profile.PassScore:
 		output.GateStatus, output.Level = "warning", "warning"
 	default:
 		output.GateStatus, output.Level = "pass", "pass"
 	}
 	return output
+}
+
+func sortedSelectedCriteria(selected map[string]struct{}) []string {
+	values := make([]string, 0, len(selected))
+	for key := range selected {
+		values = append(values, key)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func evaluationFingerprint(mode string, selected []string) string {
+	payload, _ := json.Marshal(map[string]any{"mode": mode, "selectedCriteria": selected})
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", digest[:])
 }
 
 func validFindingStatus(status string) bool {

@@ -7858,6 +7858,9 @@ CREATE TABLE kb_quality_evaluation (
         REFERENCES kb_document_version(id) ON DELETE CASCADE,
     quality_profile_id BIGINT NOT NULL REFERENCES kb_quality_profile(id),
     quality_profile_version VARCHAR(50) NOT NULL,
+    mode VARCHAR(30) NOT NULL,
+    selected_criteria JSONB NOT NULL DEFAULT '[]'::jsonb,
+    request_fingerprint VARCHAR(64),
     parse_score NUMERIC(8,2),
     content_score NUMERIC(8,2),
     retrieval_score NUMERIC(8,2),
@@ -8361,6 +8364,8 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - 高风险命令；
 - 硬门禁；
 - Rule Evidence。
+- pending 或无法完成判断的 Hard Gate 保持 blocked，不能依靠其他规则高分绕过；
+- 明文凭据覆盖键值、Bearer、连接串和常见 CLI 参数格式；
 
 验收：
 
@@ -8380,6 +8385,8 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - evidence validation；
 - cross-section consistency；
 - fallback。
+- 长文相关性排序不丢弃未命中 Block，所有 Block 必须进入 Map 批次；
+- `llm` 模式由 LLM 评分全部非 Hard Gate 规则，确定性 Hard Gate 始终保留；
 
 验收：
 
@@ -8399,6 +8406,8 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - 人工覆盖；
 - 审计；
 - Review UI。
+- Evaluation 持久化 mode、selected criteria 和请求指纹，缓存与重新评分复用原始范围；
+- 同一文档版本仅允许一个 Published Evaluation，新发布结果原子 supersede 旧结果；
 
 验收：
 

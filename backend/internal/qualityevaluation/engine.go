@@ -62,12 +62,19 @@ type ruleOutcome struct {
 }
 
 var (
-	credentialPattern = regexp.MustCompile(`(?i)(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key)\s*[:=]\s*([^\s,;]+)|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`)
-	dangerousPattern  = regexp.MustCompile(`(?i)\b(rm\s+-rf|kubectl\s+delete|drop\s+(?:table|database)|truncate\s+table|redis-cli\s+flushall|shutdown|reboot|mkfs(?:\.[a-z0-9]+)?|dd\s+if=)\b`)
-	warningPattern    = regexp.MustCompile(`(?i)(warning|caution|danger|risk|approval|change ticket|警告|注意|危险|风险|审批|工单)`)
-	approvalPattern   = regexp.MustCompile(`(?i)(approval|approved|change ticket|four-eyes|审批|批准|工单|双人复核)`)
-	prodPattern       = regexp.MustCompile(`(?i)(\bprod(?:uction)?\b|生产环境)`)
-	testPattern       = regexp.MustCompile(`(?i)(\btest(?:ing)?\b|测试环境)`)
+	credentialPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:password|passwd|pwd|token|api[_-]?key|secret|access[_-]?key)\s*[:=]\s*([^\s,;]+)`),
+		regexp.MustCompile(`(?i)(?:authorization\s*:\s*)?bearer\s+([a-z0-9._~+/=-]{8,})`),
+		regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:([^\s/@]+)@`),
+		regexp.MustCompile(`(?i)(?:^|\s)(?:-a|--password(?:=|\s+))\s*([^\s,;]+)`),
+		regexp.MustCompile(`(?i)(?:^|\s)-u\s+[^\s:]+:([^\s,;]+)`),
+		regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`),
+	}
+	dangerousPattern = regexp.MustCompile(`(?i)\b(rm\s+-rf|kubectl\s+delete|drop\s+(?:table|database)|truncate\s+table|redis-cli\s+flushall|shutdown|reboot|mkfs(?:\.[a-z0-9]+)?|dd\s+if=)\b`)
+	warningPattern   = regexp.MustCompile(`(?i)(warning|caution|danger|risk|approval|change ticket|警告|注意|危险|风险|审批|工单)`)
+	approvalPattern  = regexp.MustCompile(`(?i)(approval|approved|change ticket|four-eyes|审批|批准|工单|双人复核)`)
+	prodPattern      = regexp.MustCompile(`(?i)(\bprod(?:uction)?\b|生产环境)`)
+	testPattern      = regexp.MustCompile(`(?i)(\btest(?:ing)?\b|测试环境)`)
 )
 
 func EvaluateDeterministic(input EngineInput) EngineOutput {
@@ -101,7 +108,12 @@ func EvaluateDeterministic(input EngineInput) EngineOutput {
 					output.HardGateViolations = append(output.HardGateViolations, rule.RuleKey)
 				}
 			} else {
-				output.PendingRuleCount++
+				if outcome.status != FindingNotApplicable {
+					output.PendingRuleCount++
+					if rule.HardGate {
+						output.HardGateViolations = append(output.HardGateViolations, rule.RuleKey)
+					}
+				}
 			}
 		}
 	}
@@ -111,7 +123,7 @@ func EvaluateDeterministic(input EngineInput) EngineOutput {
 	switch {
 	case len(output.HardGateViolations) > 0 || output.ContentScore < input.Profile.WarningScore:
 		output.GateStatus, output.Level = "blocked", "blocked"
-	case output.ContentScore < input.Profile.PassScore:
+	case output.PendingRuleCount > 0 || output.ContentScore < input.Profile.PassScore:
 		output.GateStatus, output.Level = "warning", "warning"
 	default:
 		output.GateStatus, output.Level = "pass", "pass"
@@ -133,6 +145,14 @@ func evaluateRule(rule model.KBQualityRule, input EngineInput, blocks []model.KB
 		return evaluateFreshness(rule, input, blocks)
 	case "safety":
 		return evaluateSafety(rule, blocks)
+	case "manual":
+		if rule.RuleKey == "parse_failed" {
+			evidence := []Evidence{fallbackEvidence(blocks, "Document parse quality was checked.")}
+			if input.ParseQuality.ParseSuccess {
+				return pass(evidence)
+			}
+			return fail(FindingUnsafe, 1, evidence, "Document parsing failed.", "Fix parsing errors before quality review.")
+		}
 	case "consistency":
 		if rule.RuleKey == "production_test_environment_confusion" {
 			return evaluateEnvironmentConfusion(blocks)
@@ -440,15 +460,23 @@ func unsafeCommandWithoutContext(blocks []model.KBDocumentBlock, requireApproval
 	return nil
 }
 func containsCredential(block model.KBDocumentBlock) bool {
-	match := credentialPattern.FindStringSubmatch(block.TextContent)
-	if len(match) == 0 {
-		return false
+	for _, pattern := range credentialPatterns {
+		match := pattern.FindStringSubmatch(block.TextContent)
+		if len(match) == 0 {
+			continue
+		}
+		if strings.Contains(strings.ToUpper(match[0]), "PRIVATE KEY") {
+			return true
+		}
+		value := strings.ToLower(strings.Join(match[1:], ""))
+		if value != "" && !credentialPlaceholder(value) {
+			return true
+		}
 	}
-	if strings.Contains(strings.ToUpper(match[0]), "PRIVATE KEY") {
-		return true
-	}
-	value := strings.ToLower(strings.Join(match[1:], ""))
-	return value != "" && !strings.Contains(value, "${") && !strings.Contains(value, "{{") && !strings.Contains(value, "<") && !strings.Contains(value, "***") && !strings.Contains(value, "replace-with") && !strings.Contains(value, "example")
+	return false
+}
+func credentialPlaceholder(value string) bool {
+	return strings.Contains(value, "${") || strings.Contains(value, "{{") || strings.Contains(value, "<") || strings.Contains(value, "***") || strings.Contains(value, "replace-with") || strings.Contains(value, "example")
 }
 func blockEvidence(block model.KBDocumentBlock, reason string) Evidence {
 	var path []string

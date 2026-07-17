@@ -16,9 +16,9 @@ type QualityEvaluationReviewUpdate struct {
 	Audit      *model.KBQualityEvaluationOverride
 }
 
-func (r *GORMUserRepository) FindLatestQualityEvaluation(ctx context.Context, versionID, profileID int64, source string) (*model.KBQualityEvaluation, error) {
+func (r *GORMUserRepository) FindLatestQualityEvaluation(ctx context.Context, versionID, profileID int64, fingerprint string) (*model.KBQualityEvaluation, error) {
 	var evaluation model.KBQualityEvaluation
-	err := r.db.WithContext(ctx).Where("document_version_id = ? AND quality_profile_id = ? AND source = ? AND status = 'completed'", versionID, profileID, source).Order("created_at DESC, id DESC").First(&evaluation).Error
+	err := r.db.WithContext(ctx).Where("document_version_id = ? AND quality_profile_id = ? AND request_fingerprint = ? AND status = 'completed'", versionID, profileID, fingerprint).Order("created_at DESC, id DESC").First(&evaluation).Error
 	if err != nil {
 		return nil, mapRepositoryError(err)
 	}
@@ -111,7 +111,24 @@ func (r *GORMUserRepository) PublishQualityEvaluation(ctx context.Context, evalu
 		if evaluation.ReviewStatus != "draft" {
 			return ErrImmutable
 		}
-		if err := tx.Model(&evaluation).Updates(map[string]any{"review_status": "published", "published_by": actorID, "published_at": publishedAt}).Error; err != nil {
+		var previous model.KBQualityEvaluation
+		previousErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("document_version_id = ? AND review_status = 'published' AND id <> ?", evaluation.DocumentVersionID, evaluation.ID).
+			Order("published_at DESC NULLS LAST, id DESC").First(&previous).Error
+		if previousErr != nil && previousErr != gorm.ErrRecordNotFound {
+			return fmt.Errorf("find published quality evaluation: %w", previousErr)
+		}
+		if previousErr == nil {
+			if err := tx.Model(&model.KBQualityEvaluation{}).
+				Where("document_version_id = ? AND review_status = 'published' AND id <> ?", evaluation.DocumentVersionID, evaluation.ID).
+				Update("review_status", "superseded").Error; err != nil {
+				return fmt.Errorf("supersede published quality evaluation: %w", err)
+			}
+			if evaluation.SupersedesEvaluationID == nil {
+				evaluation.SupersedesEvaluationID = &previous.ID
+			}
+		}
+		if err := tx.Model(&evaluation).Updates(map[string]any{"review_status": "published", "published_by": actorID, "published_at": publishedAt, "supersedes_evaluation_id": evaluation.SupersedesEvaluationID}).Error; err != nil {
 			return fmt.Errorf("publish quality evaluation: %w", err)
 		}
 		evaluation.ReviewStatus, evaluation.PublishedBy, evaluation.PublishedAt = "published", &actorID, &publishedAt

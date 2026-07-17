@@ -62,7 +62,7 @@ func TestLLMFailurePreservesDeterministicResults(t *testing.T) {
 	deterministic := EvaluateDeterministic(EngineInput{Profile: profile, Version: version(), Blocks: llmBlocks(1)})
 	client := &scriptedLLMClient{respond: func(llmsvc.ChatRequest, int) (string, error) { return "", errors.New("model unavailable") }}
 	llmOutput := EvaluateWithLLM(context.Background(), client, LLMRunConfig{Model: "test"}, profile, llmBlocks(1), pendingRuleKeys(deterministic.Results))
-	merged, _ := mergeLLMResults(profile, deterministic, llmOutput.Results)
+	merged, _ := mergeLLMResults(profile, deterministic, llmOutput.Results, false)
 	if llmOutput.FailedCalls != 1 || len(merged.Results) != len(deterministic.Results) {
 		t.Fatalf("deterministic fallback lost results: llm=%+v merged=%+v", llmOutput, merged)
 	}
@@ -81,6 +81,46 @@ func TestPromptRedactsCredentialBlocks(t *testing.T) {
 		return `{"criterionKey":"accuracy","ruleResults":[]}`, nil
 	}}
 	EvaluateWithLLM(context.Background(), client, LLMRunConfig{Model: "test"}, profile, blocks, pendingFor(profile))
+}
+
+func TestLongDocumentWithoutKeywordMatchesStillMapsEveryBlock(t *testing.T) {
+	profile := &model.KBQualityProfile{ID: 1, TotalScore: 10, PassScore: 8, WarningScore: 7, Criteria: []model.KBQualityCriterion{{
+		CriterionKey: "clarity", Name: "Clarity", ScoringMethod: "hybrid", MaxScore: 10,
+		Rules: []model.KBQualityRule{{RuleKey: "semantic_quality", Name: "Semantic quality", RuleType: "semantic", MaxScore: 10}},
+	}}}
+	blocks := make([]model.KBDocumentBlock, 0, 25)
+	seen := map[string]struct{}{}
+	for index := 0; index < 25; index++ {
+		blocks = append(blocks, block(fmt.Sprintf("opaque-%02d", index+1), index+1, fmt.Sprintf("正文段落编号 %d", index+1)))
+	}
+	client := &scriptedLLMClient{respond: func(request llmsvc.ChatRequest, _ int) (string, error) {
+		var payload struct {
+			Blocks []struct {
+				BlockID string `json:"blockId"`
+				Text    string `json:"text"`
+			} `json:"blocks"`
+		}
+		if err := json.Unmarshal([]byte(request.Messages[1].Content), &payload); err != nil || len(payload.Blocks) == 0 {
+			return "", fmt.Errorf("decode prompt: %w", err)
+		}
+		for _, item := range payload.Blocks {
+			seen[item.BlockID] = struct{}{}
+		}
+		item := payload.Blocks[0]
+		response := map[string]any{"criterionKey": "clarity", "ruleResults": []any{map[string]any{
+			"ruleKey": "semantic_quality", "score": 8, "maxScore": 10, "status": "partial", "confidence": .9,
+			"evidence": []any{map[string]any{"blockId": item.BlockID, "quote": item.Text, "reason": "batch evidence"}},
+		}}}
+		encoded, _ := json.Marshal(response)
+		return string(encoded), nil
+	}}
+	output := EvaluateWithLLM(context.Background(), client, LLMRunConfig{Model: "test"}, profile, blocks, pendingFor(profile))
+	if output.Calls != 3 || len(seen) != len(blocks) {
+		t.Fatalf("calls=%d seen=%d want blocks=%d", output.Calls, len(seen), len(blocks))
+	}
+	if _, ok := seen["opaque-25"]; !ok {
+		t.Fatal("last block was omitted from map batches")
+	}
 }
 
 func validBatchResponse(request llmsvc.ChatRequest, _ int) (string, error) {

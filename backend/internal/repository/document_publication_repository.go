@@ -42,8 +42,8 @@ func (r *GORMUserRepository) CreateDocumentVersion(ctx context.Context, version 
 
 func (r *GORMUserRepository) FindPublicationQualityEvaluation(ctx context.Context, versionID int64) (*model.KBQualityEvaluation, error) {
 	var evaluation model.KBQualityEvaluation
-	if err := r.db.WithContext(ctx).Where("document_version_id = ? AND status = 'completed'", versionID).
-		Order("completed_at DESC NULLS LAST, id DESC").First(&evaluation).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("document_version_id = ? AND status = 'completed' AND review_status = 'published'", versionID).
+		Order("published_at DESC NULLS LAST, id DESC").First(&evaluation).Error; err != nil {
 		return nil, mapRepositoryError(err)
 	}
 	return &evaluation, nil

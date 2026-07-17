@@ -10,6 +10,9 @@ type KBQualityEvaluation struct {
 	DocumentVersionID      int64                 `gorm:"column:document_version_id;not null" json:"documentVersionId"`
 	QualityProfileID       int64                 `gorm:"column:quality_profile_id;not null" json:"qualityProfileId"`
 	QualityProfileVersion  string                `gorm:"column:quality_profile_version;size:50;not null" json:"qualityProfileVersion"`
+	Mode                   string                `gorm:"column:mode;size:30;not null" json:"mode"`
+	SelectedCriteria       json.RawMessage       `gorm:"column:selected_criteria;type:jsonb;not null" json:"selectedCriteria"`
+	RequestFingerprint     *string               `gorm:"column:request_fingerprint;size:64" json:"-"`
 	ParseScore             *float64              `gorm:"column:parse_score;type:numeric(8,2)" json:"parseScore,omitempty"`
 	ContentScore           *float64              `gorm:"column:content_score;type:numeric(8,2)" json:"contentScore,omitempty"`
 	RetrievalScore         *float64              `gorm:"column:retrieval_score;type:numeric(8,2)" json:"retrievalScore,omitempty"`

@@ -96,6 +96,41 @@ func TestCredentialPlaceholderIsAllowed(t *testing.T) {
 	}
 }
 
+func TestCommonPlaintextCredentialFormatsAreBlocked(t *testing.T) {
+	values := []string{
+		"redis-cli -a RealPassword123",
+		"Authorization: Bearer abcdefghijklmnop",
+		"postgres://ops:RealPassword123@db.internal/app",
+		"curl -u ops:RealPassword123 https://service.internal",
+	}
+	profile := profileWithRules(model.KBQualityRule{RuleKey: "sensitive_credential_exposed", Name: "Secrets", RuleType: "safety", MaxScore: 10, HardGate: true})
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			output := EvaluateDeterministic(EngineInput{Profile: profile, Version: version(), ParseQuality: document.ParseQuality{ParseSuccess: true}, Blocks: []model.KBDocumentBlock{block("secret", 1, value)}})
+			if output.GateStatus != "blocked" || status(output.Results[0]) != FindingUnsafe {
+				t.Fatalf("credential format passed: %+v", output)
+			}
+		})
+	}
+}
+
+func TestPendingSemanticHardGateRemainsBlocked(t *testing.T) {
+	profile := profileWithRules(model.KBQualityRule{RuleKey: "semantic_gate", Name: "Semantic Gate", RuleType: "semantic", MaxScore: 10, HardGate: true})
+	output := EvaluateDeterministic(EngineInput{Profile: profile, Version: version(), ParseQuality: document.ParseQuality{ParseSuccess: true}, Blocks: []model.KBDocumentBlock{block("b-1", 1, "content")}})
+	if output.GateStatus != "blocked" || len(output.HardGateViolations) != 1 || output.PendingRuleCount != 1 {
+		t.Fatalf("pending hard gate was bypassed: %+v", output)
+	}
+}
+
+func TestParseFailedGateUsesParseQuality(t *testing.T) {
+	profile := profileWithRules(model.KBQualityRule{RuleKey: "parse_failed", Name: "Parse", RuleType: "manual", MaxScore: 0, HardGate: true})
+	profile.TotalScore, profile.PassScore, profile.WarningScore = 0, 0, 0
+	passed := EvaluateDeterministic(EngineInput{Profile: profile, Version: version(), ParseQuality: document.ParseQuality{ParseSuccess: true}, Blocks: []model.KBDocumentBlock{block("b-1", 1, "content")}})
+	if passed.GateStatus == "blocked" || len(passed.HardGateViolations) != 0 {
+		t.Fatalf("successful parse was blocked: %+v", passed)
+	}
+}
+
 func profileWithRules(rules ...model.KBQualityRule) *model.KBQualityProfile {
 	for index := range rules {
 		rules[index].OrderNo = index + 1

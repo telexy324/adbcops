@@ -59,3 +59,37 @@ func TestPublishedEvaluationIsImmutable(t *testing.T) {
 		t.Fatalf("expected immutable error, got %v", err)
 	}
 }
+
+func TestAggregateResultsPendingHardGateIsBlocked(t *testing.T) {
+	status := FindingManualConfirmationRequired
+	profile := &model.KBQualityProfile{TotalScore: 100, PassScore: 80, WarningScore: 60, Criteria: []model.KBQualityCriterion{{CriterionKey: "safety", Rules: []model.KBQualityRule{{RuleKey: "semantic_gate", HardGate: true}}}}}
+	output := aggregateResults(profile, []model.KBQualityRuleResult{{CriterionKey: "safety", RuleKey: "semantic_gate", FindingStatus: &status}})
+	if output.GateStatus != "blocked" || len(output.HardGateViolations) != 1 {
+		t.Fatalf("pending hard gate was bypassed: %+v", output)
+	}
+}
+
+func TestEvaluationFingerprintIncludesModeAndCriteria(t *testing.T) {
+	first := evaluationFingerprint("hybrid", []string{"accuracy"})
+	if first == evaluationFingerprint("llm", []string{"accuracy"}) || first == evaluationFingerprint("hybrid", []string{"safety"}) {
+		t.Fatal("evaluation cache fingerprint ignored mode or criteria")
+	}
+	selected := map[string]struct{}{"safety": {}, "accuracy": {}}
+	ordered := sortedSelectedCriteria(selected)
+	if len(ordered) != 2 || ordered[0] != "accuracy" || ordered[1] != "safety" {
+		t.Fatalf("selected criteria are not stable: %#v", ordered)
+	}
+}
+
+func TestNotApplicableRuleIsNotPendingForLLM(t *testing.T) {
+	status := FindingNotApplicable
+	results := []model.KBQualityRuleResult{{CriterionKey: "optional", RuleKey: "optional_rule", FindingStatus: &status}}
+	if keys := pendingRuleKeys(results); len(keys) != 0 {
+		t.Fatalf("not-applicable rule was queued for LLM: %#v", keys)
+	}
+	profile := &model.KBQualityProfile{TotalScore: 10, PassScore: 8, WarningScore: 7}
+	output := aggregateResults(profile, results)
+	if output.PendingRuleCount != 0 {
+		t.Fatalf("not-applicable rule counted as pending: %+v", output)
+	}
+}

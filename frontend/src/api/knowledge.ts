@@ -233,6 +233,8 @@ export type QualityEvaluation = {
   documentVersionId: number;
   qualityProfileId: number;
   qualityProfileVersion: string;
+  mode: "deterministic" | "hybrid" | "llm";
+  selectedCriteria: string[];
   parseScore?: number;
   contentScore?: number;
   retrievalScore?: number;
@@ -657,6 +659,7 @@ export async function createQualityEvaluation(input: {
   documentVersionId: number;
   qualityProfileId: number;
   mode: "deterministic" | "hybrid" | "llm";
+  selectedCriteria?: string[];
   force?: boolean;
 }) {
   const response = await apiClient.post<ApiEnvelope<QualityEvaluation>>(
