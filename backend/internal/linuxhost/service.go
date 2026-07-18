@@ -40,6 +40,8 @@ type Repository interface {
 	CreateCredentialGroup(ctx context.Context, group *model.CredentialGroup, credential *model.CredentialSecret) error
 	UpdateCredentialGroup(ctx context.Context, id int64, updates repository.CredentialGroupUpdates, credential *model.CredentialSecret) (*model.CredentialGroup, error)
 	DeleteCredentialGroup(ctx context.Context, id int64) error
+	ListLinuxHostGroups(ctx context.Context) ([]model.LinuxHostGroup, error)
+	ListLinuxHostProfiles(ctx context.Context, enabledOnly bool) ([]model.LinuxHostProfile, error)
 }
 
 type SecretManager interface {
@@ -436,6 +438,20 @@ func (s *Service) DeleteCredentialGroup(ctx context.Context, actor *model.AppUse
 		return err
 	}
 	return nil
+}
+
+func (s *Service) ListHostGroups(ctx context.Context, actor *model.AppUser) ([]model.LinuxHostGroup, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	return s.repository.ListLinuxHostGroups(ctx)
+}
+
+func (s *Service) ListHostProfiles(ctx context.Context, actor *model.AppUser) ([]model.LinuxHostProfile, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	return s.repository.ListLinuxHostProfiles(ctx, true)
 }
 
 func (s *Service) normalizeHostInput(ctx context.Context, actor *model.AppUser, input HostInput) (HostInput, *model.CredentialSecret, error) {

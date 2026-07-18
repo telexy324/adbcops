@@ -329,6 +329,9 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		credentialGroupRoutes.GET("/:id", dependencies.LinuxHostHandler.GetCredentialGroup)
 		credentialGroupRoutes.PUT("/:id", dependencies.LinuxHostHandler.UpdateCredentialGroup)
 		credentialGroupRoutes.DELETE("/:id", dependencies.LinuxHostHandler.DeleteCredentialGroup)
+
+		linuxRoutes.GET("/host-groups", dependencies.LinuxHostHandler.ListHostGroups)
+		linuxRoutes.GET("/host-profiles", dependencies.LinuxHostHandler.ListHostProfiles)
 	}
 	if dependencies.ToolHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		toolRoutes := router.Group("/api/tools")

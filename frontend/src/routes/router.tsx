@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
+import { LinuxHostsPage } from "@/pages/linux-hosts-page";
 import { LoginPage } from "@/pages/login-page";
 import { NotFoundPage } from "@/pages/not-found-page";
 import { OperationsPage } from "@/pages/operations-page";
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
         element: <TopologyConfigurationPage />,
       },
       { path: "/operations", element: <OperationsPage /> },
+      { path: "/linux-hosts", element: <LinuxHostsPage /> },
       { path: "/settings", element: <SettingsPage /> },
     ],
   },

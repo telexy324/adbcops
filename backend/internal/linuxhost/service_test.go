@@ -245,6 +245,13 @@ type fakeRepository struct {
 	nextSecret int64
 }
 
+func (f *fakeRepository) ListLinuxHostGroups(context.Context) ([]model.LinuxHostGroup, error) {
+	return []model.LinuxHostGroup{}, nil
+}
+func (f *fakeRepository) ListLinuxHostProfiles(context.Context, bool) ([]model.LinuxHostProfile, error) {
+	return []model.LinuxHostProfile{}, nil
+}
+
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
 		hosts: map[int64]*model.LinuxHost{}, groups: map[int64]*model.CredentialGroup{},

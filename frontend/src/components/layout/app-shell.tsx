@@ -9,6 +9,7 @@ import {
   Menu,
   Network,
   Search,
+  Server,
   Settings,
   ShieldCheck,
   Siren,
@@ -28,6 +29,7 @@ const navigation = [
   { label: "工作流", icon: Workflow, to: "/workflows", enabled: true },
   { label: "拓扑视图", icon: Network, to: "/topology", enabled: true },
   { label: "故障中心", icon: Siren, to: "/operations", enabled: true },
+  { label: "Linux 主机", icon: Server, to: "/linux-hosts", enabled: true },
   { label: "配置中心", icon: Settings, to: "/settings", enabled: true },
 ];
 

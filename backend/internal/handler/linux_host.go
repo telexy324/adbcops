@@ -409,6 +409,30 @@ func (h *LinuxHostHandler) ListCredentialGroups(c *gin.Context) {
 	success(c, groups)
 }
 
+func (h *LinuxHostHandler) ListHostGroups(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListHostGroups(c.Request.Context(), actor)
+	if handleLinuxHostError(c, err, "list linux host groups failed") {
+		return
+	}
+	success(c, items)
+}
+
+func (h *LinuxHostHandler) ListHostProfiles(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListHostProfiles(c.Request.Context(), actor)
+	if handleLinuxHostError(c, err, "list linux host profiles failed") {
+		return
+	}
+	success(c, items)
+}
+
 func (h *LinuxHostHandler) GetCredentialGroup(c *gin.Context) {
 	actor, id, ok := currentUserAndLinuxID(c)
 	if !ok {
