@@ -24,7 +24,7 @@ var allowedReadOnlyExecutables = map[string]struct{}{
 	"cat": {}, "chronyc": {}, "df": {}, "dmesg": {}, "findmnt": {}, "free": {},
 	"hostnamectl": {}, "iostat": {}, "ip": {}, "journalctl": {}, "lscpu": {}, "lsblk": {},
 	"nproc": {}, "ntpq": {}, "ps": {}, "ss": {}, "swapon": {}, "systemctl": {},
-	"timedatectl": {}, "uname": {}, "uptime": {}, "who": {},
+	"timedatectl": {}, "uname": {}, "uptime": {}, "which": {}, "who": {},
 }
 
 type LinuxCommandDefinition struct {
@@ -199,6 +199,7 @@ func BuiltinCommandDefinitions() []LinuxCommandDefinition {
 	serviceParameters := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["service"],"properties":{"service":{"type":"string","pattern":"^[a-zA-Z0-9_.@:-]+$","maxLength":120}}}`)
 	sinceParameters := json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"sinceHours":{"type":"integer","minimum":1,"maximum":168,"default":24}}}`)
 	serviceSinceParameters := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["service"],"properties":{"service":{"type":"string","pattern":"^[a-zA-Z0-9_.@:-]+$","maxLength":120},"sinceHours":{"type":"integer","minimum":1,"maximum":168,"default":24}}}`)
+	commandParameters := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string","enum":["cat","chronyc","df","dmesg","findmnt","free","hostnamectl","iostat","ip","journalctl","lscpu","lsblk","nproc","ntpq","ps","ss","swapon","systemctl","timedatectl","uname","uptime","which","who"]}}}`)
 
 	definition := func(key, description, executable string, args []string, parameters json.RawMessage, risk string, timeout int, maxBytes int64, maxRows int) LinuxCommandDefinition {
 		return LinuxCommandDefinition{
@@ -209,6 +210,7 @@ func BuiltinCommandDefinitions() []LinuxCommandDefinition {
 		}
 	}
 	return []LinuxCommandDefinition{
+		definition("platform.which", "Detect one catalog executable without invoking a shell.", "which", []string{"${command}"}, commandParameters, RiskSafeRead, 3, 8*1024, 20),
 		definition("system.uname", "Read kernel and architecture summary.", "uname", []string{"-a"}, noParameters, RiskSafeRead, 5, 32*1024, 100),
 		definition("system.hostname", "Read static hostname.", "hostnamectl", []string{"--static"}, noParameters, RiskSafeRead, 5, 8*1024, 20),
 		definition("system.os_release", "Read operating system release metadata.", "cat", []string{"/etc/os-release"}, noParameters, RiskSafeRead, 5, 32*1024, 100),

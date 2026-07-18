@@ -78,6 +78,17 @@ func BuiltinTools() []Tool {
 			Capabilities: []string{"test", "read_file", "tail", "path_allowlist"},
 		}),
 		NewReadOnlyTool(ToolDefinition{
+			Name:        "linux_server",
+			Type:        "linux_server",
+			Description: "Test Linux SSH connections, detect platforms and collect versioned read-only command catalog data.",
+			ReadOnly:    true,
+			Capabilities: []string{
+				"test_connection", "detect_platform", "collect_system_overview", "collect_cpu", "collect_memory",
+				"collect_filesystem", "collect_disk_io", "collect_network", "collect_processes", "collect_systemd",
+				"collect_time_sync", "collect_kernel_events", "collect_system_logs", "collect_security_summary",
+			},
+		}),
+		NewReadOnlyTool(ToolDefinition{
 			Name:         "kubernetes",
 			Type:         "kubernetes",
 			Description:  "Read Kubernetes resources, pod logs and diagnosis context inside allowed namespaces.",

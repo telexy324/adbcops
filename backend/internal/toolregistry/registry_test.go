@@ -62,6 +62,16 @@ func TestBuiltinRegistryIncludesComponentTools(t *testing.T) {
 	}
 }
 
+func TestBuiltinRegistryIncludesLinuxServerTool(t *testing.T) {
+	definition, err := NewBuiltinRegistry().Get("linux_server")
+	if err != nil {
+		t.Fatalf("get linux_server: %v", err)
+	}
+	if !definition.ReadOnly || definition.Type != "linux_server" || len(definition.Capabilities) != 14 {
+		t.Fatalf("linux server definition = %+v", definition)
+	}
+}
+
 func TestReadOnlyToolDoesNotExposeGenericInvoke(t *testing.T) {
 	registry := NewBuiltinRegistry()
 

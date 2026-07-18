@@ -70,6 +70,8 @@ func TestEveryBuiltinDefinitionCanBuildAPlan(t *testing.T) {
 			parameters = json.RawMessage(`{"service":"nginx.service"}`)
 		case "logs.service":
 			parameters = json.RawMessage(`{"service":"nginx.service","sinceHours":24}`)
+		case "platform.which":
+			parameters = json.RawMessage(`{"command":"uname"}`)
 		}
 		plan, err := catalog.Plan(definition.Key, parameters)
 		if err != nil {
