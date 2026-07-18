@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"aiops-platform/backend/internal/model"
 	linuxserver "aiops-platform/backend/internal/tool/linuxserver"
@@ -132,6 +134,33 @@ func TestLinuxMissingCommandBecomesMissingEvidence(t *testing.T) {
 	}
 }
 
+func TestLinuxBatchDiagnosisLimitsHostsAndConcurrency(t *testing.T) {
+	collector := &boundedLinuxCollector{delay: 10 * time.Millisecond}
+	skill := linuxSkillByName(t, collector, "batch_diagnose_linux_hosts")
+	hostIDs := make([]int64, 25)
+	for index := range hostIDs {
+		hostIDs[index] = int64(index + 1)
+	}
+	payload, _ := json.Marshal(map[string]any{"hostIds": hostIDs})
+	if _, err := skill.Execute(ContextWithActor(context.Background(), adminActor()), payload); err != nil {
+		t.Fatal(err)
+	}
+	collector.mu.Lock()
+	maxActive := collector.maxActive
+	collector.mu.Unlock()
+	if maxActive < 2 || maxActive > maxLinuxBatchSkillConcurrency {
+		t.Fatalf("batch max concurrency = %d, want 2..%d", maxActive, maxLinuxBatchSkillConcurrency)
+	}
+	tooMany := make([]int64, maxLinuxBatchSkillHosts+1)
+	for index := range tooMany {
+		tooMany[index] = int64(index + 1)
+	}
+	payload, _ = json.Marshal(map[string]any{"hostIds": tooMany})
+	if _, err := skill.Execute(ContextWithActor(context.Background(), adminActor()), payload); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("201-host batch error = %v, want invalid input", err)
+	}
+}
+
 func linuxSkillByName(t *testing.T, collector LinuxCollector, name string) Skill {
 	t.Helper()
 	for _, skill := range LinuxSkills(collector) {
@@ -144,12 +173,44 @@ func linuxSkillByName(t *testing.T, collector LinuxCollector, name string) Skill
 }
 
 type fakeLinuxCollector struct {
+	mu             sync.Mutex
 	result         *linuxserver.LinuxCollectResult
 	collectErr     error
 	testResult     *linuxserver.LinuxConnectionTestResult
 	testErr        error
 	lastCollector  string
 	lastParameters json.RawMessage
+}
+
+type boundedLinuxCollector struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	delay     time.Duration
+}
+
+func (c *boundedLinuxCollector) TestConnection(context.Context, *model.AppUser, int64) (*linuxserver.LinuxConnectionTestResult, error) {
+	return &linuxserver.LinuxConnectionTestResult{Status: linuxserver.CommandStatusSuccess}, nil
+}
+
+func (c *boundedLinuxCollector) Collect(ctx context.Context, _ *model.AppUser, _ int64, collector string, _ json.RawMessage) (*linuxserver.LinuxCollectResult, error) {
+	c.mu.Lock()
+	c.active++
+	if c.active > c.maxActive {
+		c.maxActive = c.active
+	}
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.active--
+		c.mu.Unlock()
+	}()
+	select {
+	case <-time.After(c.delay):
+		return &linuxserver.LinuxCollectResult{Collector: collector, Status: linuxserver.CommandStatusSuccess, Data: json.RawMessage(`{}`)}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (f *fakeLinuxCollector) TestConnection(context.Context, *model.AppUser, int64) (*linuxserver.LinuxConnectionTestResult, error) {
@@ -160,8 +221,10 @@ func (f *fakeLinuxCollector) TestConnection(context.Context, *model.AppUser, int
 }
 
 func (f *fakeLinuxCollector) Collect(_ context.Context, _ *model.AppUser, _ int64, collector string, parameters json.RawMessage) (*linuxserver.LinuxCollectResult, error) {
+	f.mu.Lock()
 	f.lastCollector = collector
 	f.lastParameters = append(json.RawMessage(nil), parameters...)
+	f.mu.Unlock()
 	if f.collectErr != nil {
 		return nil, f.collectErr
 	}

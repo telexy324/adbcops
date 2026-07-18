@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"aiops-platform/backend/internal/model"
 	linuxserver "aiops-platform/backend/internal/tool/linuxserver"
 )
 
-const maxLinuxBatchSkillHosts = 100
+const (
+	maxLinuxBatchSkillHosts       = 200
+	maxLinuxBatchSkillConcurrency = 10
+)
 
 type LinuxCollector interface {
 	TestConnection(context.Context, *model.AppUser, int64) (*linuxserver.LinuxConnectionTestResult, error)
@@ -188,15 +192,44 @@ func (s LinuxSkill) batchDiagnose(ctx context.Context, request linuxSkillRequest
 		return nil, ErrInvalidInput
 	}
 	seen := map[int64]bool{}
-	facts := []map[string]any{}
-	missing := []string{}
-	status := "healthy"
 	for _, hostID := range request.HostIDs {
 		if hostID <= 0 || seen[hostID] {
 			return nil, ErrInvalidInput
 		}
 		seen[hostID] = true
-		result, err := s.collector.Collect(ctx, ActorFromContext(ctx), hostID, linuxserver.CollectorSystemOverview, linuxParameters(request, linuxserver.CollectorSystemOverview))
+	}
+	type batchCollection struct {
+		result *linuxserver.LinuxCollectResult
+		err    error
+	}
+	collections := make([]batchCollection, len(request.HostIDs))
+	semaphore := make(chan struct{}, maxLinuxBatchSkillConcurrency)
+	var wait sync.WaitGroup
+	actor := ActorFromContext(ctx)
+	parameters := linuxParameters(request, linuxserver.CollectorSystemOverview)
+	for index, hostID := range request.HostIDs {
+		wait.Add(1)
+		go func(index int, hostID int64) {
+			defer wait.Done()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				collections[index].err = ctx.Err()
+				return
+			}
+			collections[index].result, collections[index].err = s.collector.Collect(ctx, actor, hostID, linuxserver.CollectorSystemOverview, parameters)
+		}(index, hostID)
+	}
+	wait.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	facts := []map[string]any{}
+	missing := []string{}
+	status := "healthy"
+	for index, hostID := range request.HostIDs {
+		result, err := collections[index].result, collections[index].err
 		if err != nil {
 			status = "unknown"
 			missing = append(missing, fmt.Sprintf("host %d connection: %s", hostID, safeLinuxSkillError(err)))

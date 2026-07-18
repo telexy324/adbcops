@@ -272,7 +272,13 @@ func (h *WorkflowHandler) CancelRun(c *gin.Context) {
 	if !ok {
 		return
 	}
-	run, err := h.repository.CancelWorkflowRun(c.Request.Context(), id, nowUTC())
+	var run *model.WorkflowRun
+	var err error
+	if h.executor != nil {
+		run, err = h.executor.Cancel(c.Request.Context(), id)
+	} else {
+		run, err = h.repository.CancelWorkflowRun(c.Request.Context(), id, nowUTC())
+	}
 	if handleWorkflowError(c, err, "cancel workflow run failed") {
 		return
 	}

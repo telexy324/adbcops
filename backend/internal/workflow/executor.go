@@ -22,6 +22,7 @@ const defaultWorkflowTimeout = 180 * time.Second
 
 var ErrWorkflowCancelled = errors.New("workflow cancelled")
 var ErrWorkflowLimited = errors.New("workflow concurrency limit exceeded")
+var ErrWorkflowPartial = errors.New("workflow completed with partial results")
 
 type DefinitionRepository interface {
 	FindWorkflowDefinitionByID(ctx context.Context, id int64) (*model.WorkflowDefinition, error)
@@ -35,6 +36,10 @@ type RunRepository interface {
 	UpdateWorkflowNodeRun(ctx context.Context, id int64, updates repository.WorkflowNodeRunUpdates) (*model.WorkflowNodeRun, error)
 }
 
+type CancellationRepository interface {
+	CancelWorkflowRun(ctx context.Context, id int64, finishedAt time.Time) (*model.WorkflowRun, error)
+}
+
 type AgentRunner interface {
 	Run(ctx context.Context, input agentruntime.RunInput) (*agentruntime.RunOutput, error)
 }
@@ -44,15 +49,18 @@ type SkillRunner interface {
 }
 
 type Executor struct {
-	definitions  DefinitionRepository
-	runs         RunRepository
-	agents       AgentRunner
-	skills       SkillRunner
-	agentCatalog AgentCatalog
-	skillCatalog SkillCatalog
-	timeout      time.Duration
-	limiter      *resourcelimit.Limiter
-	now          func() time.Time
+	definitions   DefinitionRepository
+	runs          RunRepository
+	agents        AgentRunner
+	skills        SkillRunner
+	agentCatalog  AgentCatalog
+	skillCatalog  SkillCatalog
+	timeout       time.Duration
+	limiter       *resourcelimit.Limiter
+	now           func() time.Time
+	cancellations CancellationRepository
+	activeMu      sync.Mutex
+	active        map[int64]context.CancelFunc
 }
 
 type ExecutorInput struct {
@@ -77,7 +85,7 @@ func NewExecutor(repository interface {
 	if timeout <= 0 {
 		timeout = defaultWorkflowTimeout
 	}
-	return &Executor{
+	executor := &Executor{
 		definitions:  repository,
 		runs:         repository,
 		agents:       agents,
@@ -87,7 +95,10 @@ func NewExecutor(repository interface {
 		timeout:      timeout,
 		limiter:      resourcelimit.NewLimiter(8),
 		now:          func() time.Time { return time.Now().UTC() },
+		active:       map[int64]context.CancelFunc{},
 	}
+	executor.cancellations, _ = any(repository).(CancellationRepository)
+	return executor
 }
 
 func (e *Executor) SetLimiter(limiter *resourcelimit.Limiter) {
@@ -144,12 +155,22 @@ func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.Workflo
 	if err := e.runs.CreateWorkflowRun(ctx, run); err != nil {
 		return nil, err
 	}
+	e.activeMu.Lock()
+	e.active[run.ID] = cancel
+	e.activeMu.Unlock()
+	defer func() {
+		e.activeMu.Lock()
+		delete(e.active, run.ID)
+		e.activeMu.Unlock()
+	}()
 	output, executeErr := e.execute(runCtx, run.ID, input.Actor, definition, normalizedJSON(input.Input))
 	finishedAt := e.now()
 	status := model.WorkflowRunStatusSuccess
 	var message *string
 	if executeErr != nil {
-		if errors.Is(executeErr, context.DeadlineExceeded) || errors.Is(executeErr, context.Canceled) {
+		if errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, ErrWorkflowCancelled) {
+			status = model.WorkflowRunStatusCancelled
+		} else if errors.Is(executeErr, context.DeadlineExceeded) {
 			status = model.WorkflowRunStatusFailed
 		} else {
 			status = model.WorkflowRunStatusPartialSuccess
@@ -175,6 +196,19 @@ func (e *Executor) Run(ctx context.Context, input ExecutorInput) (*model.Workflo
 	return updated, nil
 }
 
+func (e *Executor) Cancel(ctx context.Context, runID int64) (*model.WorkflowRun, error) {
+	if runID <= 0 || e.cancellations == nil {
+		return nil, ErrInvalidDefinition
+	}
+	e.activeMu.Lock()
+	cancel := e.active[runID]
+	e.activeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return e.cancellations.CancelWorkflowRun(ctx, runID, e.now())
+}
+
 func stringPtrOrNil(value string) *string {
 	if value == "" {
 		return nil
@@ -188,6 +222,7 @@ func (e *Executor) execute(ctx context.Context, workflowRunID int64, actor *mode
 	failed := map[string]bool{}
 	outputs := map[string]json.RawMessage{}
 	var firstErr error
+	partial := false
 	for len(completed)+len(failed) < len(graph.nodes) {
 		if err := ctx.Err(); err != nil {
 			return map[string]any{"nodes": outputs}, err
@@ -206,6 +241,7 @@ func (e *Executor) execute(ctx context.Context, workflowRunID int64, actor *mode
 				continue
 			}
 			completed[result.node.ID] = true
+			partial = partial || result.partial
 			if len(result.output) > 0 {
 				outputs[result.node.ID] = result.output
 			}
@@ -214,13 +250,17 @@ func (e *Executor) execute(ctx context.Context, workflowRunID int64, actor *mode
 			return map[string]any{"nodes": outputs}, firstErr
 		}
 	}
+	if partial {
+		return map[string]any{"nodes": outputs}, ErrWorkflowPartial
+	}
 	return map[string]any{"nodes": outputs}, nil
 }
 
 type nodeResult struct {
-	node   Node
-	output json.RawMessage
-	err    error
+	node    Node
+	output  json.RawMessage
+	err     error
+	partial bool
 }
 
 func (e *Executor) executeBatch(ctx context.Context, workflowRunID int64, actor *model.AppUser, nodes []Node, input json.RawMessage, previous map[string]json.RawMessage) []nodeResult {
@@ -231,7 +271,7 @@ func (e *Executor) executeBatch(ctx context.Context, workflowRunID int64, actor 
 		go func(index int, node Node) {
 			defer wg.Done()
 			output, err := e.executeNode(ctx, workflowRunID, actor, node, input, previous)
-			results[index] = nodeResult{node: node, output: output, err: err}
+			results[index] = nodeResult{node: node, output: output, err: err, partial: err == nil && isPartialWorkflowOutput(output)}
 		}(index, node)
 	}
 	wg.Wait()
@@ -258,9 +298,15 @@ func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *
 	status := model.WorkflowRunStatusSuccess
 	var message *string
 	if executeErr != nil {
-		status = model.WorkflowRunStatusFailed
+		if errors.Is(executeErr, context.Canceled) {
+			status = model.WorkflowRunStatusCancelled
+		} else {
+			status = model.WorkflowRunStatusFailed
+		}
 		text := executeErr.Error()
 		message = &text
+	} else if isPartialWorkflowOutput(output) {
+		status = model.WorkflowRunStatusPartialSuccess
 	}
 	if _, err := e.runs.UpdateWorkflowNodeRun(ctx, nodeRun.ID, repository.WorkflowNodeRunUpdates{
 		Status:       status,
@@ -271,6 +317,13 @@ func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *
 		return nil, err
 	}
 	return output, executeErr
+}
+
+func isPartialWorkflowOutput(output json.RawMessage) bool {
+	var body struct {
+		Partial bool `json:"partial"`
+	}
+	return len(output) > 0 && json.Unmarshal(output, &body) == nil && body.Partial
 }
 
 func (e *Executor) dispatchNode(ctx context.Context, workflowRunID, nodeRunID int64, actor *model.AppUser, node Node, input json.RawMessage) (json.RawMessage, error) {
@@ -386,16 +439,40 @@ func skillPayload(input json.RawMessage) json.RawMessage {
 func agentContext(actor *model.AppUser, input json.RawMessage) agentruntime.AgentContext {
 	var body map[string]any
 	_ = json.Unmarshal(input, &body)
+	if workflowInput, ok := body["workflowInput"].(map[string]any); ok {
+		body = workflowInput
+	}
 	query := ""
 	if value, ok := body["query"].(string); ok {
 		query = value
 	}
 	scope, _ := body["scope"].(map[string]any)
 	variables, _ := body["variables"].(map[string]any)
+	if variables == nil {
+		variables = map[string]any{}
+		for key, value := range body {
+			if key != "query" && key != "scope" && key != "evidence" {
+				variables[key] = value
+			}
+		}
+	}
+	evidence := []agentruntime.Evidence{}
+	if rawEvidence, ok := body["evidence"].([]any); ok {
+		for _, item := range rawEvidence {
+			object, _ := item.(map[string]any)
+			key, _ := object["key"].(string)
+			summary, _ := object["summary"].(string)
+			source, _ := object["source"].(string)
+			if key != "" {
+				evidence = append(evidence, agentruntime.Evidence{Key: key, Summary: summary, Source: source})
+			}
+		}
+	}
 	return agentruntime.AgentContext{
 		UserID:    actor.ID,
 		Query:     query,
 		Scope:     scope,
 		Variables: variables,
+		Evidence:  evidence,
 	}
 }

@@ -15,8 +15,8 @@ import (
 
 func TestBuiltinDefinitionsValidate(t *testing.T) {
 	definitions := BuiltinDefinitions()
-	if len(definitions) != 23 {
-		t.Fatalf("builtin workflow count = %d, want 23", len(definitions))
+	if len(definitions) != 29 {
+		t.Fatalf("builtin workflow count = %d, want 29", len(definitions))
 	}
 	assertBuiltinWorkflowNames(t, definitions, []string{
 		"nacos_diagnosis_workflow",
@@ -37,6 +37,12 @@ func TestBuiltinDefinitionsValidate(t *testing.T) {
 		"nginx_502_diagnosis_workflow",
 		"nginx_503_diagnosis_workflow",
 		"nginx_504_diagnosis_workflow",
+		"linux_basic_host_diagnosis_workflow",
+		"linux_cpu_diagnosis_workflow",
+		"linux_memory_diagnosis_workflow",
+		"linux_disk_diagnosis_workflow",
+		"linux_network_diagnosis_workflow",
+		"linux_batch_health_workflow",
 	})
 	agents := builtinTestAgents{}
 	skills := builtinTestSkills{}
@@ -64,6 +70,7 @@ func assertBuiltinWorkflowNames(t *testing.T, definitions []Definition, expected
 func TestBuiltinDefinitionsValidateAgainstRegisteredCatalogs(t *testing.T) {
 	skills := append(skillframework.BuiltinSkills(), skillframework.LogAndKnowledgeSkills(nil, nil)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(nil, nil)...)
+	skills = append(skills, skillframework.LinuxSkills(nil)...)
 	skillRegistry, err := skillframework.NewRegistry(toolregistry.NewBuiltinRegistry(), nil, skills...)
 	if err != nil {
 		t.Fatalf("skill registry: %v", err)
@@ -107,7 +114,7 @@ type builtinTestAgents struct{}
 
 func (builtinTestAgents) Get(name string) (agentruntime.AgentDefinition, error) {
 	switch name {
-	case "coordinator_agent", "knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "echo_agent":
+	case "coordinator_agent", "knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "echo_agent", "linux_server_agent":
 		return agentruntime.AgentDefinition{Name: name, Enabled: true}, nil
 	default:
 		return agentruntime.AgentDefinition{}, errors.New("agent not found")
@@ -134,6 +141,11 @@ func (builtinTestSkills) Get(name string) (skillframework.SkillDefinition, error
 		"echo_safe":
 		return skillframework.SkillDefinition{Name: name, Enabled: true}, nil
 	default:
+		for _, skill := range skillframework.LinuxSkills(nil) {
+			if skill.Definition().Name == name {
+				return skillframework.SkillDefinition{Name: name, Enabled: true}, nil
+			}
+		}
 		for _, skill := range skillframework.ComponentDiagnosisSkills() {
 			if skill.Definition().Name == name {
 				return skillframework.SkillDefinition{Name: name, Enabled: true}, nil

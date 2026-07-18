@@ -42,6 +42,12 @@ func BuiltinDefinitions() []Definition {
 		nginxStatusDiagnosisWorkflow("nginx_502_diagnosis_workflow", "Nginx 502 Diagnosis", "Diagnose upstream failure Nginx 502 responses.", "diagnose_nginx_502"),
 		nginxStatusDiagnosisWorkflow("nginx_503_diagnosis_workflow", "Nginx 503 Diagnosis", "Diagnose unavailable or overloaded upstream Nginx 503 responses.", "diagnose_nginx_503"),
 		nginxStatusDiagnosisWorkflow("nginx_504_diagnosis_workflow", "Nginx 504 Diagnosis", "Diagnose upstream timeout Nginx 504 responses.", "diagnose_nginx_504"),
+		linuxBasicHostDiagnosisWorkflow(),
+		linuxCPUWorkflow(),
+		linuxMemoryWorkflow(),
+		linuxDiskWorkflow(),
+		linuxNetworkWorkflow(),
+		linuxBatchHealthWorkflow(),
 	}
 }
 
