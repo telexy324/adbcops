@@ -42,6 +42,7 @@ type LinuxHost struct {
 	CredentialID              *int64            `gorm:"column:credential_id" json:"-"`
 	Credential                *CredentialSecret `gorm:"foreignKey:CredentialID" json:"-"`
 	CredentialGroupID         *int64            `gorm:"column:credential_group_id" json:"credentialGroupId,omitempty"`
+	CredentialGroup           *CredentialGroup  `gorm:"foreignKey:CredentialGroupID" json:"-"`
 	HostKeyPolicy             string            `gorm:"column:host_key_policy;size:50;not null" json:"hostKeyPolicy"`
 	HostKeyAlgorithm          *string           `gorm:"column:host_key_algorithm;size:100" json:"hostKeyAlgorithm,omitempty"`
 	HostKeyFingerprint        *string           `gorm:"column:host_key_fingerprint;size:255" json:"hostKeyFingerprint,omitempty"`

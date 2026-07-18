@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	linuxhostsvc "aiops-platform/backend/internal/linuxhost"
 	"aiops-platform/backend/internal/model"
@@ -13,8 +14,104 @@ import (
 )
 
 type LinuxHostHandler struct {
-	service  *linuxhostsvc.Service
-	importer *linuxhostsvc.BatchImporter
+	service    *linuxhostsvc.Service
+	importer   *linuxhostsvc.BatchImporter
+	batchTests *linuxhostsvc.BatchTestManager
+}
+
+func (h *LinuxHostHandler) WithBatchTests(manager *linuxhostsvc.BatchTestManager) *LinuxHostHandler {
+	h.batchTests = manager
+	return h
+}
+
+func (h *LinuxHostHandler) StartBatchTest(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.batchTests == nil {
+		failure(c, http.StatusServiceUnavailable, 50322, "batch test service is unavailable")
+		return
+	}
+	var request linuxhostsvc.BatchTestSelection
+	if c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	job, err := h.batchTests.Start(c.Request.Context(), actor, request)
+	if handleLinuxBatchError(c, err) {
+		return
+	}
+	success(c, job)
+}
+func (h *LinuxHostHandler) GetBatchTest(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.batchTests == nil {
+		failure(c, http.StatusServiceUnavailable, 50322, "batch test service is unavailable")
+		return
+	}
+	job, err := h.batchTests.Get(actor, c.Param("jobId"))
+	if handleLinuxBatchError(c, err) {
+		return
+	}
+	success(c, job)
+}
+func (h *LinuxHostHandler) CancelBatchTest(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.batchTests == nil {
+		failure(c, http.StatusServiceUnavailable, 50322, "batch test service is unavailable")
+		return
+	}
+	job, err := h.batchTests.Cancel(c.Request.Context(), actor, c.Param("jobId"))
+	if handleLinuxBatchError(c, err) {
+		return
+	}
+	success(c, job)
+}
+func (h *LinuxHostHandler) DownloadBatchTest(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.batchTests == nil {
+		failure(c, http.StatusServiceUnavailable, 50322, "batch test service is unavailable")
+		return
+	}
+	payload, contentType, err := h.batchTests.Export(actor, c.Param("jobId"), c.Query("format"))
+	if handleLinuxBatchError(c, err) {
+		return
+	}
+	extension := "json"
+	if strings.HasPrefix(contentType, "text/csv") {
+		extension = "csv"
+	}
+	c.Header("Content-Disposition", `attachment; filename="linux-batch-test-`+c.Param("jobId")+`.`+extension+`"`)
+	c.Data(http.StatusOK, contentType, payload)
+}
+func handleLinuxBatchError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	recordFailureError(c, err, "linux batch test failed")
+	switch {
+	case errors.Is(err, linuxhostsvc.ErrBatchTooManyHosts):
+		failure(c, http.StatusBadRequest, 40001, err.Error())
+	case errors.Is(err, linuxhostsvc.ErrBatchEmpty), errors.Is(err, linuxhostsvc.ErrInvalidInput):
+		failure(c, http.StatusBadRequest, 40001, err.Error())
+	case errors.Is(err, linuxhostsvc.ErrBatchNotFound):
+		failure(c, http.StatusNotFound, 40401, err.Error())
+	case errors.Is(err, linuxhostsvc.ErrBatchRunning):
+		failure(c, http.StatusConflict, 40922, err.Error())
+	default:
+		failure(c, http.StatusInternalServerError, 50097, "linux batch test failed")
+	}
+	return true
 }
 
 func (h *LinuxHostHandler) WithBatchImporter(importer *linuxhostsvc.BatchImporter) *LinuxHostHandler {

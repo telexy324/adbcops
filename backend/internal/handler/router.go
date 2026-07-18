@@ -317,6 +317,10 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		hostRoutes.POST("/:id/host-key/confirm", dependencies.RequireAdmin, dependencies.LinuxHostHandler.ConfirmHostKey)
 		hostRoutes.POST("/import/preview", dependencies.RequireAdmin, dependencies.LinuxHostHandler.PreviewImport)
 		hostRoutes.POST("/import/confirm", dependencies.RequireAdmin, dependencies.LinuxHostHandler.ConfirmImport)
+		hostRoutes.POST("/batch-test", dependencies.RequireAdmin, dependencies.LinuxHostHandler.StartBatchTest)
+		hostRoutes.GET("/batch-test/:jobId", dependencies.RequireAdmin, dependencies.LinuxHostHandler.GetBatchTest)
+		hostRoutes.POST("/batch-test/:jobId/cancel", dependencies.RequireAdmin, dependencies.LinuxHostHandler.CancelBatchTest)
+		hostRoutes.GET("/batch-test/:jobId/download", dependencies.RequireAdmin, dependencies.LinuxHostHandler.DownloadBatchTest)
 
 		credentialGroupRoutes := linuxRoutes.Group("/credential-groups")
 		credentialGroupRoutes.Use(dependencies.RequireAdmin)

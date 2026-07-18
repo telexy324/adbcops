@@ -39,6 +39,47 @@ type LinuxHostRepository interface {
 	RemoveLinuxHostGroupMember(ctx context.Context, groupID, hostID int64) error
 	ListLinuxHostProfiles(ctx context.Context, enabledOnly bool) ([]model.LinuxHostProfile, error)
 	FindLinuxHostProfileByID(ctx context.Context, id int64) (*model.LinuxHostProfile, error)
+	FindLinuxHostWithCredential(ctx context.Context, id int64) (*model.LinuxHost, error)
+	ListLinuxHostIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error)
+	RecordLinuxHostConnectionTest(ctx context.Context, id int64, status string, errorCode, message *string, testedAt time.Time) error
+}
+
+func (r *GORMLinuxHostRepository) RecordLinuxHostConnectionTest(ctx context.Context, id int64, status string, errorCode, message *string, testedAt time.Time) error {
+	values := map[string]any{"connection_status": status, "last_test_at": testedAt.UTC(), "last_error_code": errorCode, "last_error_message": message, "updated_at": testedAt.UTC()}
+	if status == "success" {
+		values["last_success_at"] = testedAt.UTC()
+	}
+	result := r.db.WithContext(ctx).Model(&model.LinuxHost{}).Where("id = ? AND deleted_at IS NULL", id).Updates(values)
+	if result.Error != nil {
+		return fmt.Errorf("record linux host connection test: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *GORMLinuxHostRepository) FindLinuxHostWithCredential(ctx context.Context, id int64) (*model.LinuxHost, error) {
+	var host model.LinuxHost
+	err := r.db.WithContext(ctx).Preload("Credential").Preload("CredentialGroup").Preload("CredentialGroup.Credential").
+		Where("deleted_at IS NULL").First(&host, id).Error
+	if err != nil {
+		return nil, mapRepositoryError(err)
+	}
+	return &host, nil
+}
+
+func (r *GORMLinuxHostRepository) ListLinuxHostIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error) {
+	if len(groupIDs) == 0 {
+		return []int64{}, nil
+	}
+	var ids []int64
+	err := r.db.WithContext(ctx).Model(&model.LinuxHostGroupMember{}).Distinct().
+		Where("group_id IN ?", groupIDs).Order("host_id ASC").Pluck("host_id", &ids).Error
+	if err != nil {
+		return nil, fmt.Errorf("list linux host group members: %w", err)
+	}
+	return ids, nil
 }
 
 type LinuxHostUpdates struct {

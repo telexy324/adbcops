@@ -45,6 +45,7 @@ import (
 	sshsftpsvc "aiops-platform/backend/internal/sshsftp"
 	tidbsvc "aiops-platform/backend/internal/tidb"
 	timelinesvc "aiops-platform/backend/internal/timeline"
+	linuxservertool "aiops-platform/backend/internal/tool/linuxserver"
 	"aiops-platform/backend/internal/toolregistry"
 	topologysvc "aiops-platform/backend/internal/topology"
 	usersvc "aiops-platform/backend/internal/user"
@@ -210,7 +211,13 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize linux host importer: %w", err)
 	}
-	linuxHostHandler := handler.NewLinuxHostHandler(linuxHostService).WithBatchImporter(linuxImporter)
+	linuxTool := linuxservertool.NewDefaultTool()
+	defer linuxTool.Close()
+	linuxBatchTests, err := linuxhostsvc.NewBatchTestManager(linuxHostService, linuxTool, linuxhostsvc.DefaultBatchTestConcurrency, linuxhostsvc.DefaultBatchTestTimeout)
+	if err != nil {
+		return fmt.Errorf("initialize linux batch tests: %w", err)
+	}
+	linuxHostHandler := handler.NewLinuxHostHandler(linuxHostService).WithBatchImporter(linuxImporter).WithBatchTests(linuxBatchTests)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
