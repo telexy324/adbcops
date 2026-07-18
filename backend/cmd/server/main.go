@@ -125,7 +125,8 @@ func run() error {
 	llmService := llmsvc.NewService(llmRepository, credentialManager, llmClient)
 	ragService := ragsvc.NewService(ragRepository, credentialManager, llmClient)
 	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
-	linuxHostService := linuxhostsvc.NewService(linuxHostRepository, credentialManager, cfg.Credential.KeyVersion)
+	linuxHostService := linuxhostsvc.NewService(linuxHostRepository, credentialManager, cfg.Credential.KeyVersion).
+		WithHostKeySecurityRecorders(eventRepository, auditLogRepository)
 	logsService := logssvc.NewService(dataSourceRepository, credentialManager, nil)
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)

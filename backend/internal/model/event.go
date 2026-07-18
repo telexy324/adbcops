@@ -13,6 +13,9 @@ const (
 	EventSourceGitChange     = "git_change"
 	EventSourceDBChange      = "database_change"
 	EventSourceManualNote    = "manual_note"
+	EventSourceLinuxSSH      = "linux_ssh"
+
+	EventTypeLinuxSSHHostKeyChanged = "linux_ssh_host_key_changed"
 
 	EventStatusFiring   = "firing"
 	EventStatusResolved = "resolved"

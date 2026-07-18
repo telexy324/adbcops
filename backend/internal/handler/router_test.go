@@ -218,7 +218,7 @@ func TestUserCannotConfigureLinuxCredentials(t *testing.T) {
 		Authenticate:     appmiddleware.Authenticate(&routerFakeAuthenticator{user: normalUser}),
 		RequireAdmin:     appmiddleware.RequireAdmin(),
 	})
-	for _, path := range []string{"/api/linux/hosts", "/api/linux/credential-groups"} {
+	for _, path := range []string{"/api/linux/hosts", "/api/linux/credential-groups", "/api/linux/hosts/1/host-key/confirm"} {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"password":"plain-secret"}`))
 		request.Header.Set("Authorization", "Bearer valid-token")
 		request.Header.Set("Content-Type", "application/json")

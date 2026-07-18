@@ -16,42 +16,56 @@ const (
 	LinuxHostKeyPolicyInsecure        = "insecure_skip_verify"
 
 	LinuxConnectionStatusUnknown = "unknown"
+
+	LinuxHostKeyStatusUnverified = "unverified"
+	LinuxHostKeyStatusPending    = "pending"
+	LinuxHostKeyStatusTrusted    = "trusted"
+	LinuxHostKeyStatusMismatch   = "mismatch"
+
+	LinuxConnectionStatusHostKeyMismatch = "host_key_mismatch"
+	LinuxHostKeyMismatchErrorCode        = "HOST_KEY_MISMATCH"
 )
 
 var ErrInvalidCredentialGroupScope = errors.New("invalid credential group scope")
 
 type LinuxHost struct {
-	ID                  int64             `gorm:"column:id;primaryKey" json:"id"`
-	DataSourceID        *int64            `gorm:"column:data_source_id" json:"dataSourceId,omitempty"`
-	Name                string            `gorm:"column:name;size:120;not null" json:"name"`
-	Host                string            `gorm:"column:host;size:255;not null" json:"host"`
-	Port                int               `gorm:"column:port;not null" json:"port"`
-	Environment         *string           `gorm:"column:environment;size:50" json:"environment,omitempty"`
-	SystemName          *string           `gorm:"column:system_name;size:100" json:"systemName,omitempty"`
-	ComponentName       *string           `gorm:"column:component_name;size:100" json:"componentName,omitempty"`
-	Username            *string           `gorm:"column:username;size:255" json:"username,omitempty"`
-	AuthType            string            `gorm:"column:auth_type;size:50;not null" json:"authType"`
-	CredentialID        *int64            `gorm:"column:credential_id" json:"-"`
-	Credential          *CredentialSecret `gorm:"foreignKey:CredentialID" json:"-"`
-	CredentialGroupID   *int64            `gorm:"column:credential_group_id" json:"credentialGroupId,omitempty"`
-	HostKeyPolicy       string            `gorm:"column:host_key_policy;size:50;not null" json:"hostKeyPolicy"`
-	HostKeyAlgorithm    *string           `gorm:"column:host_key_algorithm;size:100" json:"hostKeyAlgorithm,omitempty"`
-	HostKeyFingerprint  *string           `gorm:"column:host_key_fingerprint;size:255" json:"hostKeyFingerprint,omitempty"`
-	ProfileID           *int64            `gorm:"column:profile_id" json:"profileId,omitempty"`
-	Tags                json.RawMessage   `gorm:"column:tags;type:jsonb" json:"tags,omitempty"`
-	Attributes          json.RawMessage   `gorm:"column:attributes;type:jsonb" json:"attributes,omitempty"`
-	Enabled             bool              `gorm:"column:enabled;not null" json:"enabled"`
-	ConnectionStatus    string            `gorm:"column:connection_status;size:30" json:"connectionStatus"`
-	LastTestAt          *time.Time        `gorm:"column:last_test_at" json:"lastTestAt,omitempty"`
-	LastSuccessAt       *time.Time        `gorm:"column:last_success_at" json:"lastSuccessAt,omitempty"`
-	LastErrorCode       *string           `gorm:"column:last_error_code;size:80" json:"lastErrorCode,omitempty"`
-	LastErrorMessage    *string           `gorm:"column:last_error_message" json:"lastErrorMessage,omitempty"`
-	MachineIdentityHash *string           `gorm:"column:machine_identity_hash;size:255" json:"machineIdentityHash,omitempty"`
-	DetectedPlatform    json.RawMessage   `gorm:"column:detected_platform;type:jsonb" json:"detectedPlatform,omitempty"`
-	CreatedBy           *int64            `gorm:"column:created_by" json:"createdBy,omitempty"`
-	CreatedAt           time.Time         `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
-	UpdatedAt           time.Time         `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
-	DeletedAt           *time.Time        `gorm:"column:deleted_at" json:"deletedAt,omitempty"`
+	ID                        int64             `gorm:"column:id;primaryKey" json:"id"`
+	DataSourceID              *int64            `gorm:"column:data_source_id" json:"dataSourceId,omitempty"`
+	Name                      string            `gorm:"column:name;size:120;not null" json:"name"`
+	Host                      string            `gorm:"column:host;size:255;not null" json:"host"`
+	Port                      int               `gorm:"column:port;not null" json:"port"`
+	Environment               *string           `gorm:"column:environment;size:50" json:"environment,omitempty"`
+	SystemName                *string           `gorm:"column:system_name;size:100" json:"systemName,omitempty"`
+	ComponentName             *string           `gorm:"column:component_name;size:100" json:"componentName,omitempty"`
+	Username                  *string           `gorm:"column:username;size:255" json:"username,omitempty"`
+	AuthType                  string            `gorm:"column:auth_type;size:50;not null" json:"authType"`
+	CredentialID              *int64            `gorm:"column:credential_id" json:"-"`
+	Credential                *CredentialSecret `gorm:"foreignKey:CredentialID" json:"-"`
+	CredentialGroupID         *int64            `gorm:"column:credential_group_id" json:"credentialGroupId,omitempty"`
+	HostKeyPolicy             string            `gorm:"column:host_key_policy;size:50;not null" json:"hostKeyPolicy"`
+	HostKeyAlgorithm          *string           `gorm:"column:host_key_algorithm;size:100" json:"hostKeyAlgorithm,omitempty"`
+	HostKeyFingerprint        *string           `gorm:"column:host_key_fingerprint;size:255" json:"hostKeyFingerprint,omitempty"`
+	HostKeyStatus             string            `gorm:"column:host_key_status;size:30;not null" json:"hostKeyStatus"`
+	PendingHostKeyAlgorithm   *string           `gorm:"column:pending_host_key_algorithm;size:100" json:"pendingHostKeyAlgorithm,omitempty"`
+	PendingHostKeyFingerprint *string           `gorm:"column:pending_host_key_fingerprint;size:255" json:"pendingHostKeyFingerprint,omitempty"`
+	HostKeyObservedAt         *time.Time        `gorm:"column:host_key_observed_at" json:"hostKeyObservedAt,omitempty"`
+	HostKeyConfirmedAt        *time.Time        `gorm:"column:host_key_confirmed_at" json:"hostKeyConfirmedAt,omitempty"`
+	HostKeyConfirmedBy        *int64            `gorm:"column:host_key_confirmed_by" json:"hostKeyConfirmedBy,omitempty"`
+	ProfileID                 *int64            `gorm:"column:profile_id" json:"profileId,omitempty"`
+	Tags                      json.RawMessage   `gorm:"column:tags;type:jsonb" json:"tags,omitempty"`
+	Attributes                json.RawMessage   `gorm:"column:attributes;type:jsonb" json:"attributes,omitempty"`
+	Enabled                   bool              `gorm:"column:enabled;not null" json:"enabled"`
+	ConnectionStatus          string            `gorm:"column:connection_status;size:30" json:"connectionStatus"`
+	LastTestAt                *time.Time        `gorm:"column:last_test_at" json:"lastTestAt,omitempty"`
+	LastSuccessAt             *time.Time        `gorm:"column:last_success_at" json:"lastSuccessAt,omitempty"`
+	LastErrorCode             *string           `gorm:"column:last_error_code;size:80" json:"lastErrorCode,omitempty"`
+	LastErrorMessage          *string           `gorm:"column:last_error_message" json:"lastErrorMessage,omitempty"`
+	MachineIdentityHash       *string           `gorm:"column:machine_identity_hash;size:255" json:"machineIdentityHash,omitempty"`
+	DetectedPlatform          json.RawMessage   `gorm:"column:detected_platform;type:jsonb" json:"detectedPlatform,omitempty"`
+	CreatedBy                 *int64            `gorm:"column:created_by" json:"createdBy,omitempty"`
+	CreatedAt                 time.Time         `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
+	UpdatedAt                 time.Time         `gorm:"column:updated_at;autoUpdateTime" json:"updatedAt"`
+	DeletedAt                 *time.Time        `gorm:"column:deleted_at" json:"deletedAt,omitempty"`
 }
 
 func (LinuxHost) TableName() string { return "linux_host" }

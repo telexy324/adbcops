@@ -5,6 +5,7 @@ import "time"
 const (
 	AuditActionAPI        = "api"
 	AuditActionManagement = "management"
+	AuditActionSecurity   = "security"
 )
 
 type AuditLog struct {

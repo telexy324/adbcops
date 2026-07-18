@@ -32,6 +32,9 @@ type Repository interface {
 	UpdateLinuxHost(ctx context.Context, id int64, updates repository.LinuxHostUpdates, credential *model.CredentialSecret) (*model.LinuxHost, error)
 	SetLinuxHostEnabled(ctx context.Context, id int64, enabled bool) (*model.LinuxHost, error)
 	SoftDeleteLinuxHost(ctx context.Context, id int64) error
+	RecordLinuxHostKeyCandidate(ctx context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error)
+	RecordLinuxHostKeyMismatch(ctx context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error)
+	ConfirmLinuxHostKey(ctx context.Context, id int64, algorithm, fingerprint string, actorID int64, confirmedAt time.Time) (*model.LinuxHost, error)
 	ListCredentialGroups(ctx context.Context, enabledOnly bool) ([]model.CredentialGroup, error)
 	FindCredentialGroupByID(ctx context.Context, id int64) (*model.CredentialGroup, error)
 	CreateCredentialGroup(ctx context.Context, group *model.CredentialGroup, credential *model.CredentialSecret) error
@@ -47,6 +50,8 @@ type Service struct {
 	repository Repository
 	secrets    SecretManager
 	keyVersion string
+	events     HostKeyEventRecorder
+	audits     HostKeyAuditRecorder
 }
 
 type HostInput struct {
@@ -63,6 +68,7 @@ type HostInput struct {
 	PrivateKeyPassphrase *string
 	CredentialGroupID    *int64
 	HostKeyPolicy        string
+	HostKeyAlgorithm     *string
 	HostKeyFingerprint   *string
 	ProfileID            *int64
 	Tags                 json.RawMessage
@@ -89,6 +95,8 @@ type HostUpdateInput struct {
 	CredentialGroupID     *int64
 	CredentialGroupIDSet  bool
 	HostKeyPolicy         *string
+	HostKeyAlgorithm      *string
+	HostKeyAlgorithmSet   bool
 	HostKeyFingerprint    *string
 	HostKeyFingerprintSet bool
 	ProfileID             *int64
@@ -124,35 +132,41 @@ type CredentialGroupUpdateInput struct {
 }
 
 type HostView struct {
-	ID                   int64           `json:"id"`
-	DataSourceID         *int64          `json:"dataSourceId,omitempty"`
-	Name                 string          `json:"name"`
-	Host                 string          `json:"host"`
-	Port                 int             `json:"port"`
-	Environment          *string         `json:"environment,omitempty"`
-	SystemName           *string         `json:"systemName,omitempty"`
-	ComponentName        *string         `json:"componentName,omitempty"`
-	Username             *string         `json:"username,omitempty"`
-	AuthType             string          `json:"authType"`
-	CredentialGroupID    *int64          `json:"credentialGroupId,omitempty"`
-	CredentialConfigured bool            `json:"credentialConfigured"`
-	HostKeyPolicy        string          `json:"hostKeyPolicy"`
-	HostKeyAlgorithm     *string         `json:"hostKeyAlgorithm,omitempty"`
-	HostKeyFingerprint   *string         `json:"hostKeyFingerprint,omitempty"`
-	ProfileID            *int64          `json:"profileId,omitempty"`
-	Tags                 json.RawMessage `json:"tags,omitempty"`
-	Attributes           json.RawMessage `json:"attributes,omitempty"`
-	Enabled              bool            `json:"enabled"`
-	ConnectionStatus     string          `json:"connectionStatus"`
-	LastTestAt           *time.Time      `json:"lastTestAt,omitempty"`
-	LastSuccessAt        *time.Time      `json:"lastSuccessAt,omitempty"`
-	LastErrorCode        *string         `json:"lastErrorCode,omitempty"`
-	LastErrorMessage     *string         `json:"lastErrorMessage,omitempty"`
-	MachineIdentityHash  *string         `json:"machineIdentityHash,omitempty"`
-	DetectedPlatform     json.RawMessage `json:"detectedPlatform,omitempty"`
-	CreatedBy            *int64          `json:"createdBy,omitempty"`
-	CreatedAt            time.Time       `json:"createdAt"`
-	UpdatedAt            time.Time       `json:"updatedAt"`
+	ID                        int64           `json:"id"`
+	DataSourceID              *int64          `json:"dataSourceId,omitempty"`
+	Name                      string          `json:"name"`
+	Host                      string          `json:"host"`
+	Port                      int             `json:"port"`
+	Environment               *string         `json:"environment,omitempty"`
+	SystemName                *string         `json:"systemName,omitempty"`
+	ComponentName             *string         `json:"componentName,omitempty"`
+	Username                  *string         `json:"username,omitempty"`
+	AuthType                  string          `json:"authType"`
+	CredentialGroupID         *int64          `json:"credentialGroupId,omitempty"`
+	CredentialConfigured      bool            `json:"credentialConfigured"`
+	HostKeyPolicy             string          `json:"hostKeyPolicy"`
+	HostKeyAlgorithm          *string         `json:"hostKeyAlgorithm,omitempty"`
+	HostKeyFingerprint        *string         `json:"hostKeyFingerprint,omitempty"`
+	HostKeyStatus             string          `json:"hostKeyStatus"`
+	PendingHostKeyAlgorithm   *string         `json:"pendingHostKeyAlgorithm,omitempty"`
+	PendingHostKeyFingerprint *string         `json:"pendingHostKeyFingerprint,omitempty"`
+	HostKeyObservedAt         *time.Time      `json:"hostKeyObservedAt,omitempty"`
+	HostKeyConfirmedAt        *time.Time      `json:"hostKeyConfirmedAt,omitempty"`
+	HostKeyConfirmedBy        *int64          `json:"hostKeyConfirmedBy,omitempty"`
+	ProfileID                 *int64          `json:"profileId,omitempty"`
+	Tags                      json.RawMessage `json:"tags,omitempty"`
+	Attributes                json.RawMessage `json:"attributes,omitempty"`
+	Enabled                   bool            `json:"enabled"`
+	ConnectionStatus          string          `json:"connectionStatus"`
+	LastTestAt                *time.Time      `json:"lastTestAt,omitempty"`
+	LastSuccessAt             *time.Time      `json:"lastSuccessAt,omitempty"`
+	LastErrorCode             *string         `json:"lastErrorCode,omitempty"`
+	LastErrorMessage          *string         `json:"lastErrorMessage,omitempty"`
+	MachineIdentityHash       *string         `json:"machineIdentityHash,omitempty"`
+	DetectedPlatform          json.RawMessage `json:"detectedPlatform,omitempty"`
+	CreatedBy                 *int64          `json:"createdBy,omitempty"`
+	CreatedAt                 time.Time       `json:"createdAt"`
+	UpdatedAt                 time.Time       `json:"updatedAt"`
 }
 
 type CredentialGroupView struct {
@@ -218,9 +232,16 @@ func (s *Service) CreateHost(ctx context.Context, actor *model.AppUser, input Ho
 		Name: normalized.Name, Host: normalized.Host, Port: normalized.Port,
 		Environment: normalized.Environment, SystemName: normalized.SystemName, ComponentName: normalized.ComponentName,
 		Username: normalized.Username, AuthType: normalized.AuthType, CredentialGroupID: normalized.CredentialGroupID,
-		HostKeyPolicy: normalized.HostKeyPolicy, HostKeyFingerprint: normalized.HostKeyFingerprint,
+		HostKeyPolicy: normalized.HostKeyPolicy, HostKeyAlgorithm: normalized.HostKeyAlgorithm,
+		HostKeyFingerprint: normalized.HostKeyFingerprint, HostKeyStatus: model.LinuxHostKeyStatusUnverified,
 		ProfileID: normalized.ProfileID, Tags: normalized.Tags, Attributes: normalized.Attributes,
 		Enabled: normalized.Enabled, ConnectionStatus: model.LinuxConnectionStatusUnknown, CreatedBy: actorID(actor),
+	}
+	if host.HostKeyAlgorithm != nil && host.HostKeyFingerprint != nil {
+		now := time.Now().UTC()
+		host.HostKeyStatus = model.LinuxHostKeyStatusTrusted
+		host.HostKeyConfirmedAt = &now
+		host.HostKeyConfirmedBy = actorID(actor)
 	}
 	if err := s.repository.CreateLinuxHost(ctx, host, credential); err != nil {
 		return nil, err
@@ -451,6 +472,24 @@ func (s *Service) normalizeHostInput(ctx context.Context, actor *model.AppUser, 
 	if input.HostKeyFingerprint, err = normalizeOptional(input.HostKeyFingerprint, 255); err != nil {
 		return HostInput{}, nil, err
 	}
+	if input.HostKeyAlgorithm, err = normalizeOptional(input.HostKeyAlgorithm, 100); err != nil {
+		return HostInput{}, nil, err
+	}
+	if (input.HostKeyAlgorithm == nil) != (input.HostKeyFingerprint == nil) {
+		return HostInput{}, nil, ErrInvalidInput
+	}
+	if input.HostKeyAlgorithm != nil {
+		algorithm, err := normalizeHostKeyAlgorithm(*input.HostKeyAlgorithm)
+		if err != nil {
+			return HostInput{}, nil, err
+		}
+		input.HostKeyAlgorithm = &algorithm
+	}
+	if input.HostKeyFingerprint != nil {
+		if _, err := normalizeHostKeyFingerprint(*input.HostKeyFingerprint); err != nil {
+			return HostInput{}, nil, err
+		}
+	}
 	if input.ProfileID != nil && *input.ProfileID <= 0 {
 		return HostInput{}, nil, ErrInvalidInput
 	}
@@ -550,6 +589,9 @@ func (s *Service) normalizeHostUpdate(ctx context.Context, actor *model.AppUser,
 			return updates, nil, e
 		}
 		updates.HostKeyPolicy = &value
+	}
+	if input.HostKeyAlgorithmSet || input.HostKeyFingerprintSet {
+		return updates, nil, ErrInvalidInput
 	}
 	updates.HostKeyFingerprintSet = input.HostKeyFingerprintSet
 	if input.HostKeyFingerprintSet {
@@ -865,6 +907,9 @@ func hostToView(host *model.LinuxHost) HostView {
 		Username: host.Username, AuthType: host.AuthType, CredentialGroupID: host.CredentialGroupID,
 		CredentialConfigured: host.CredentialID != nil || host.CredentialGroupID != nil,
 		HostKeyPolicy:        host.HostKeyPolicy, HostKeyAlgorithm: host.HostKeyAlgorithm, HostKeyFingerprint: host.HostKeyFingerprint,
+		HostKeyStatus: host.HostKeyStatus, PendingHostKeyAlgorithm: host.PendingHostKeyAlgorithm,
+		PendingHostKeyFingerprint: host.PendingHostKeyFingerprint, HostKeyObservedAt: host.HostKeyObservedAt,
+		HostKeyConfirmedAt: host.HostKeyConfirmedAt, HostKeyConfirmedBy: host.HostKeyConfirmedBy,
 		ProfileID: host.ProfileID, Tags: host.Tags, Attributes: host.Attributes, Enabled: host.Enabled,
 		ConnectionStatus: host.ConnectionStatus, LastTestAt: host.LastTestAt, LastSuccessAt: host.LastSuccessAt,
 		LastErrorCode: host.LastErrorCode, LastErrorMessage: host.LastErrorMessage,

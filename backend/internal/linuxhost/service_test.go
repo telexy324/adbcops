@@ -351,6 +351,57 @@ func (f *fakeRepository) SoftDeleteLinuxHost(_ context.Context, id int64) error 
 	return nil
 }
 
+func (f *fakeRepository) RecordLinuxHostKeyCandidate(_ context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error) {
+	host, ok := f.hosts[id]
+	if !ok || host.DeletedAt != nil {
+		return nil, repository.ErrNotFound
+	}
+	host.HostKeyStatus = model.LinuxHostKeyStatusPending
+	host.PendingHostKeyAlgorithm = &algorithm
+	host.PendingHostKeyFingerprint = &fingerprint
+	host.HostKeyObservedAt = &observedAt
+	copy := *host
+	return &copy, nil
+}
+
+func (f *fakeRepository) RecordLinuxHostKeyMismatch(_ context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error) {
+	host, ok := f.hosts[id]
+	if !ok || host.DeletedAt != nil {
+		return nil, repository.ErrNotFound
+	}
+	errorCode := model.LinuxHostKeyMismatchErrorCode
+	errorMessage := "SSH host key changed; administrator confirmation is required"
+	host.HostKeyStatus = model.LinuxHostKeyStatusMismatch
+	host.PendingHostKeyAlgorithm = &algorithm
+	host.PendingHostKeyFingerprint = &fingerprint
+	host.HostKeyObservedAt = &observedAt
+	host.ConnectionStatus = model.LinuxConnectionStatusHostKeyMismatch
+	host.LastErrorCode = &errorCode
+	host.LastErrorMessage = &errorMessage
+	copy := *host
+	return &copy, nil
+}
+
+func (f *fakeRepository) ConfirmLinuxHostKey(_ context.Context, id int64, algorithm, fingerprint string, actorID int64, confirmedAt time.Time) (*model.LinuxHost, error) {
+	host, ok := f.hosts[id]
+	if !ok || host.DeletedAt != nil || host.PendingHostKeyAlgorithm == nil || host.PendingHostKeyFingerprint == nil ||
+		*host.PendingHostKeyAlgorithm != algorithm || *host.PendingHostKeyFingerprint != fingerprint {
+		return nil, repository.ErrNotFound
+	}
+	host.HostKeyAlgorithm = &algorithm
+	host.HostKeyFingerprint = &fingerprint
+	host.HostKeyStatus = model.LinuxHostKeyStatusTrusted
+	host.PendingHostKeyAlgorithm = nil
+	host.PendingHostKeyFingerprint = nil
+	host.HostKeyConfirmedAt = &confirmedAt
+	host.HostKeyConfirmedBy = &actorID
+	host.ConnectionStatus = model.LinuxConnectionStatusUnknown
+	host.LastErrorCode = nil
+	host.LastErrorMessage = nil
+	copy := *host
+	return &copy, nil
+}
+
 func (f *fakeRepository) ListCredentialGroups(_ context.Context, _ bool) ([]model.CredentialGroup, error) {
 	result := make([]model.CredentialGroup, 0, len(f.groups))
 	for _, group := range f.groups {

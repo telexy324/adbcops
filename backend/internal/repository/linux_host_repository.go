@@ -24,6 +24,9 @@ type LinuxHostRepository interface {
 	UpdateLinuxHost(ctx context.Context, id int64, updates LinuxHostUpdates, credential *model.CredentialSecret) (*model.LinuxHost, error)
 	SetLinuxHostEnabled(ctx context.Context, id int64, enabled bool) (*model.LinuxHost, error)
 	SoftDeleteLinuxHost(ctx context.Context, id int64) error
+	RecordLinuxHostKeyCandidate(ctx context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error)
+	RecordLinuxHostKeyMismatch(ctx context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error)
+	ConfirmLinuxHostKey(ctx context.Context, id int64, algorithm, fingerprint string, actorID int64, confirmedAt time.Time) (*model.LinuxHost, error)
 	ListCredentialGroups(ctx context.Context, enabledOnly bool) ([]model.CredentialGroup, error)
 	FindCredentialGroupByID(ctx context.Context, id int64) (*model.CredentialGroup, error)
 	CreateCredentialGroup(ctx context.Context, group *model.CredentialGroup, credential *model.CredentialSecret) error
@@ -216,6 +219,77 @@ func (r *GORMLinuxHostRepository) SoftDeleteLinuxHost(ctx context.Context, id in
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *GORMLinuxHostRepository) RecordLinuxHostKeyCandidate(ctx context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error) {
+	return r.updateLinuxHostKeyState(ctx, id, map[string]any{
+		"host_key_status":              model.LinuxHostKeyStatusPending,
+		"pending_host_key_algorithm":   algorithm,
+		"pending_host_key_fingerprint": fingerprint,
+		"host_key_observed_at":         observedAt.UTC(),
+		"updated_at":                   observedAt.UTC(),
+	})
+}
+
+func (r *GORMLinuxHostRepository) RecordLinuxHostKeyMismatch(ctx context.Context, id int64, algorithm, fingerprint string, observedAt time.Time) (*model.LinuxHost, error) {
+	message := "SSH host key changed; administrator confirmation is required"
+	return r.updateLinuxHostKeyState(ctx, id, map[string]any{
+		"host_key_status":              model.LinuxHostKeyStatusMismatch,
+		"pending_host_key_algorithm":   algorithm,
+		"pending_host_key_fingerprint": fingerprint,
+		"host_key_observed_at":         observedAt.UTC(),
+		"connection_status":            model.LinuxConnectionStatusHostKeyMismatch,
+		"last_error_code":              model.LinuxHostKeyMismatchErrorCode,
+		"last_error_message":           message,
+		"updated_at":                   observedAt.UTC(),
+	})
+}
+
+func (r *GORMLinuxHostRepository) ConfirmLinuxHostKey(ctx context.Context, id int64, algorithm, fingerprint string, actorID int64, confirmedAt time.Time) (*model.LinuxHost, error) {
+	var updated model.LinuxHost
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.LinuxHost{}).
+			Where("id = ? AND deleted_at IS NULL AND host_key_status IN ? AND pending_host_key_algorithm = ? AND pending_host_key_fingerprint = ?",
+				id, []string{model.LinuxHostKeyStatusPending, model.LinuxHostKeyStatusMismatch}, algorithm, fingerprint).
+			Updates(map[string]any{
+				"host_key_algorithm":           algorithm,
+				"host_key_fingerprint":         fingerprint,
+				"host_key_status":              model.LinuxHostKeyStatusTrusted,
+				"pending_host_key_algorithm":   nil,
+				"pending_host_key_fingerprint": nil,
+				"host_key_confirmed_at":        confirmedAt.UTC(),
+				"host_key_confirmed_by":        actorID,
+				"connection_status":            model.LinuxConnectionStatusUnknown,
+				"last_error_code":              nil,
+				"last_error_message":           nil,
+				"updated_at":                   confirmedAt.UTC(),
+			})
+		if result.Error != nil {
+			return fmt.Errorf("confirm linux host key: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return ErrNotFound
+		}
+		if err := tx.Where("deleted_at IS NULL").First(&updated, id).Error; err != nil {
+			return mapRepositoryError(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (r *GORMLinuxHostRepository) updateLinuxHostKeyState(ctx context.Context, id int64, values map[string]any) (*model.LinuxHost, error) {
+	result := r.db.WithContext(ctx).Model(&model.LinuxHost{}).Where("id = ? AND deleted_at IS NULL", id).Updates(values)
+	if result.Error != nil {
+		return nil, fmt.Errorf("update linux host key state: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return nil, ErrNotFound
+	}
+	return r.FindLinuxHostByID(ctx, id)
 }
 
 func (r *GORMLinuxHostRepository) ListCredentialGroups(ctx context.Context, enabledOnly bool) ([]model.CredentialGroup, error) {

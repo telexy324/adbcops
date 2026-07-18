@@ -34,6 +34,7 @@ type saveLinuxHostRequest struct {
 	PrivateKeyPassphrase *string         `json:"privateKeyPassphrase"`
 	CredentialGroupID    *int64          `json:"credentialGroupId"`
 	HostKeyPolicy        string          `json:"hostKeyPolicy"`
+	HostKeyAlgorithm     *string         `json:"hostKeyAlgorithm"`
 	HostKeyFingerprint   *string         `json:"hostKeyFingerprint"`
 	ProfileID            *int64          `json:"profileId"`
 	Tags                 json.RawMessage `json:"tags"`
@@ -55,6 +56,7 @@ type updateLinuxHostRequest struct {
 	PrivateKeyPassphrase *string         `json:"privateKeyPassphrase"`
 	CredentialGroupID    *int64          `json:"credentialGroupId"`
 	HostKeyPolicy        *string         `json:"hostKeyPolicy"`
+	HostKeyAlgorithm     *string         `json:"hostKeyAlgorithm"`
 	HostKeyFingerprint   *string         `json:"hostKeyFingerprint"`
 	ProfileID            *int64          `json:"profileId"`
 	Tags                 json.RawMessage `json:"tags"`
@@ -82,6 +84,11 @@ type updateCredentialGroupRequest struct {
 	PrivateKeyPassphrase *string         `json:"privateKeyPassphrase"`
 	Scope                json.RawMessage `json:"scope"`
 	Enabled              *bool           `json:"enabled"`
+}
+
+type confirmLinuxHostKeyRequest struct {
+	Algorithm   string `json:"algorithm" binding:"required"`
+	Fingerprint string `json:"fingerprint" binding:"required"`
 }
 
 func (h *LinuxHostHandler) ListHosts(c *gin.Context) {
@@ -127,7 +134,7 @@ func (h *LinuxHostHandler) CreateHost(c *gin.Context) {
 		Environment: request.Environment, SystemName: request.SystemName, ComponentName: request.ComponentName,
 		Username: request.Username, AuthType: request.AuthType, Password: request.Password,
 		PrivateKey: request.PrivateKey, PrivateKeyPassphrase: request.PrivateKeyPassphrase,
-		CredentialGroupID: request.CredentialGroupID, HostKeyPolicy: request.HostKeyPolicy,
+		CredentialGroupID: request.CredentialGroupID, HostKeyPolicy: request.HostKeyPolicy, HostKeyAlgorithm: request.HostKeyAlgorithm,
 		HostKeyFingerprint: request.HostKeyFingerprint, ProfileID: request.ProfileID,
 		Tags: request.Tags, Attributes: request.Attributes, Enabled: enabled,
 	})
@@ -154,7 +161,8 @@ func (h *LinuxHostHandler) UpdateHost(c *gin.Context) {
 		Username: request.Username, UsernameSet: hasKey(raw, "username"), AuthType: request.AuthType,
 		Password: request.Password, PrivateKey: request.PrivateKey, PrivateKeyPassphrase: request.PrivateKeyPassphrase,
 		CredentialGroupID: request.CredentialGroupID, CredentialGroupIDSet: hasKey(raw, "credentialGroupId"),
-		HostKeyPolicy: request.HostKeyPolicy, HostKeyFingerprint: request.HostKeyFingerprint,
+		HostKeyPolicy: request.HostKeyPolicy, HostKeyAlgorithm: request.HostKeyAlgorithm,
+		HostKeyAlgorithmSet: hasKey(raw, "hostKeyAlgorithm"), HostKeyFingerprint: request.HostKeyFingerprint,
 		HostKeyFingerprintSet: hasKey(raw, "hostKeyFingerprint"),
 		ProfileID:             request.ProfileID, ProfileIDSet: hasKey(raw, "profileId"),
 		Tags: request.Tags, TagsSet: hasKey(raw, "tags"), Attributes: request.Attributes,
@@ -179,6 +187,25 @@ func (h *LinuxHostHandler) DeleteHost(c *gin.Context) {
 
 func (h *LinuxHostHandler) EnableHost(c *gin.Context)  { h.setHostEnabled(c, true) }
 func (h *LinuxHostHandler) DisableHost(c *gin.Context) { h.setHostEnabled(c, false) }
+
+func (h *LinuxHostHandler) ConfirmHostKey(c *gin.Context) {
+	actor, id, ok := currentUserAndLinuxID(c)
+	if !ok {
+		return
+	}
+	var request confirmLinuxHostKeyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	host, err := h.service.ConfirmHostKey(c.Request.Context(), actor, id, linuxhostsvc.ConfirmHostKeyInput{
+		Algorithm: request.Algorithm, Fingerprint: request.Fingerprint,
+	})
+	if handleLinuxHostError(c, err, "confirm linux host key failed") {
+		return
+	}
+	success(c, host)
+}
 
 func (h *LinuxHostHandler) setHostEnabled(c *gin.Context, enabled bool) {
 	actor, id, ok := currentUserAndLinuxID(c)
@@ -330,6 +357,14 @@ func handleLinuxHostError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusConflict, 40903, "credential group is in use")
 	case errors.Is(err, linuxhostsvc.ErrCredentialGroupScope):
 		failure(c, http.StatusBadRequest, 40021, "credential group is outside host scope")
+	case errors.Is(err, linuxhostsvc.ErrHostKeyConfirmationRequired):
+		failure(c, http.StatusConflict, 40921, "SSH host key confirmation is required")
+	case errors.Is(err, linuxhostsvc.ErrHostKeyMismatch):
+		failure(c, http.StatusConflict, 40922, "SSH host key mismatch")
+	case errors.Is(err, linuxhostsvc.ErrInsecureHostKeyDisabled):
+		failure(c, http.StatusBadRequest, 40022, "insecure SSH host key policy is disabled")
+	case errors.Is(err, linuxhostsvc.ErrInvalidHostKey):
+		failure(c, http.StatusBadRequest, 40023, "invalid SSH host key")
 	case errors.Is(err, linuxhostsvc.ErrAdminRequired), errors.Is(err, linuxhostsvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40307, "linux host access forbidden")
 	case errors.Is(err, repository.ErrNotFound):
