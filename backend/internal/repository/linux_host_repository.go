@@ -59,6 +59,19 @@ func (r *GORMLinuxHostRepository) RecordLinuxHostConnectionTest(ctx context.Cont
 	return nil
 }
 
+func (r *GORMLinuxHostRepository) UpdateLinuxHostMachineIdentityHash(ctx context.Context, hostID int64, identityHash string) error {
+	result := r.db.WithContext(ctx).Model(&model.LinuxHost{}).
+		Where("id = ? AND deleted_at IS NULL", hostID).
+		Updates(map[string]any{"machine_identity_hash": identityHash, "updated_at": time.Now().UTC()})
+	if result.Error != nil {
+		return fmt.Errorf("update linux host machine identity hash: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *GORMLinuxHostRepository) FindLinuxHostWithCredential(ctx context.Context, id int64) (*model.LinuxHost, error) {
 	var host model.LinuxHost
 	err := r.db.WithContext(ctx).Preload("Credential").Preload("CredentialGroup").Preload("CredentialGroup.Credential").

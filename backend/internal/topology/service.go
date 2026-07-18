@@ -106,11 +106,19 @@ type ComponentTopologyReader interface {
 	ReadComponentTopology(ctx context.Context, actor *model.AppUser, input ComponentTopologyInput) (*ComponentTopologyFacts, error)
 }
 
+type LinuxTopologyReader interface {
+	ListLinuxHosts(ctx context.Context, includeDeleted bool) ([]model.LinuxHost, error)
+	ListLinuxHostGroups(ctx context.Context) ([]model.LinuxHostGroup, error)
+	ListLinuxHostIDsByGroupIDs(ctx context.Context, groupIDs []int64) ([]int64, error)
+	UpdateLinuxHostMachineIdentityHash(ctx context.Context, hostID int64, identityHash string) error
+}
+
 type Service struct {
 	repository              Repository
 	k8sReader               K8sReader
 	traceGraphReader        TraceGraphReader
 	componentTopologyReader ComponentTopologyReader
+	linuxTopologyReader     LinuxTopologyReader
 	syncMu                  sync.Mutex
 	runningSyncs            map[int64]struct{}
 }
@@ -509,6 +517,11 @@ func (s *Service) SetTraceGraphReader(reader TraceGraphReader) {
 
 func (s *Service) SetComponentTopologyReader(reader ComponentTopologyReader) {
 	s.componentTopologyReader = reader
+}
+
+func (s *Service) WithLinuxTopologyReader(reader LinuxTopologyReader) *Service {
+	s.linuxTopologyReader = reader
+	return s
 }
 
 func (s *Service) ListNodeTypes(ctx context.Context) ([]model.TopologyNodeType, error) {
@@ -3285,7 +3298,8 @@ func validSourceType(value string) bool {
 		model.TopologySourceTypeRedis,
 		model.TopologySourceTypeTiDB,
 		model.TopologySourceTypeNginx,
-		model.TopologySourceTypeGenericHTTP:
+		model.TopologySourceTypeGenericHTTP,
+		model.TopologySourceTypeLinuxServer:
 		return true
 	default:
 		return false
@@ -3312,6 +3326,8 @@ func defaultSourcePriority(sourceType string) int {
 		return 62
 	case model.TopologySourceTypeEdgeAgent:
 		return 60
+	case model.TopologySourceTypeLinuxServer:
+		return 65
 	default:
 		return 50
 	}

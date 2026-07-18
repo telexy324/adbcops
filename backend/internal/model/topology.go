@@ -10,6 +10,9 @@ const (
 	TopologyNodeKindK8sEndpoint   = "k8s_endpoint"
 	TopologyNodeKindK8sNode       = "k8s_node"
 	TopologyNodeKindK8sPVC        = "k8s_pvc"
+	TopologyNodeKindHost          = "host"
+	TopologyNodeKindHostGroup     = "host_group"
+	TopologyNodeKindProcess       = "process"
 	TopologyNodeKindManual        = "manual"
 
 	TopologyEdgeTypeOwns         = "owns"
@@ -41,6 +44,7 @@ const (
 	TopologySourceTypeTiDB              = "tidb"
 	TopologySourceTypeNginx             = "nginx"
 	TopologySourceTypeGenericHTTP       = "generic_http"
+	TopologySourceTypeLinuxServer       = "linux_server_source"
 )
 
 const (

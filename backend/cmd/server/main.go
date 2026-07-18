@@ -141,7 +141,7 @@ func run() error {
 	alertService := alertsvc.NewService(eventRepository)
 	evidenceService := evidencesvc.NewService(evidenceRepository)
 	linuxEventService := linuxeventsvc.NewService(eventRepository, evidenceRepository, incidentRepository)
-	topologyService := topologysvc.NewService(topologyRepository, k8sService)
+	topologyService := topologysvc.NewService(topologyRepository, k8sService).WithLinuxTopologyReader(linuxHostRepository)
 	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
 	correlationService := correlationsvc.NewService(eventRepository, topologyRepository)
 	incidentService := incidentsvc.NewService(incidentRepository, analysisRepository)

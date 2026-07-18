@@ -136,6 +136,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		topologyRoutes.PUT("/edges/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.UpdateEdge)
 		topologyRoutes.DELETE("/edges/:id", dependencies.RequireAdmin, dependencies.TopologyHandler.DeleteEdge)
 		topologyRoutes.POST("/sync/k8s", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncK8s)
+		topologyRoutes.POST("/sync/linux", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncLinux)
 		topologyRoutes.POST("/sync/trace", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncTrace)
 		topologyRoutes.POST("/sync/component", dependencies.RequireAdmin, dependencies.TopologyHandler.SyncComponent)
 	}

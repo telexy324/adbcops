@@ -702,6 +702,23 @@ func (h *TopologyHandler) SyncK8s(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *TopologyHandler) SyncLinux(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request topologysvc.SyncLinuxHostsInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.SyncLinuxHosts(c.Request.Context(), actor, request)
+	if handleTopologyError(c, err, "sync linux host topology failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *TopologyHandler) SyncTrace(c *gin.Context) {
 	actor, ok := currentUser(c)
 	if !ok {
