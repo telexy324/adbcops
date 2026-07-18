@@ -878,6 +878,12 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("default-embedding")).toBeInTheDocument();
     expect(await screen.findByText("default-rerank")).toBeInTheDocument();
     expect(await screen.findByText("prod-logs")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "导入拓扑" }),
+    ).toHaveAttribute(
+      "href",
+      "/topology/configuration?dataSourceId=2#k8s-import",
+    );
   });
 
   it("updates an existing K8s data source and keeps empty credentials omitted", async () => {

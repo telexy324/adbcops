@@ -226,7 +226,9 @@ export function TopologyPage() {
   const selectedEdge = useMemo(
     () =>
       activeGraph.edges.find(
-        (edge) => edgeKeyOf(edge) === selectedEdgeKey || edge.edgeKey === selectedEdgeKey,
+        (edge) =>
+          edgeKeyOf(edge) === selectedEdgeKey ||
+          edge.edgeKey === selectedEdgeKey,
       ),
     [activeGraph.edges, selectedEdgeKey],
   );
@@ -500,16 +502,16 @@ export function TopologyPage() {
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
             支持筛选、方向/深度控制、Only
-            Propagating、节点抽屉、展开、影响面和保存视图。当前使用 React
-            Flow 承载 200 节点内交互，支持缩放、拖拽、MiniMap 和 Fit View。
+            Propagating、节点抽屉、展开、影响面和保存视图。当前使用 React Flow
+            承载 200 节点内交互，支持缩放、拖拽、MiniMap 和 Fit View。
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <Link
             className={cn(buttonVariants({ variant: "outline" }))}
-            to="/topology/configuration"
+            to="/topology/configuration#k8s-import"
           >
-            拓扑配置
+            数据源导入 / 拓扑配置
           </Link>
           <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-center shadow-sm">
             <Metric label="节点" value={activeGraph.nodes.length} />
@@ -966,7 +968,9 @@ function ManualDrawCard({
           <Field label="Name">
             <Input
               value={nodeForm.name}
-              onChange={(event) => onNodeFormChange({ name: event.target.value })}
+              onChange={(event) =>
+                onNodeFormChange({ name: event.target.value })
+              }
               placeholder="payment-api"
             />
           </Field>
@@ -1184,7 +1188,14 @@ function TopologyCanvasCard({
   onConnect: (connection: Connection) => void;
 }) {
   const { nodes, edges } = useMemo(
-    () => buildFlowElements(graph, rootKey, paths, selectedNodeKey, selectedEdgeKey),
+    () =>
+      buildFlowElements(
+        graph,
+        rootKey,
+        paths,
+        selectedNodeKey,
+        selectedEdgeKey,
+      ),
     [graph, paths, rootKey, selectedNodeKey, selectedEdgeKey],
   );
 
@@ -1199,7 +1210,8 @@ function TopologyCanvasCard({
             <div>
               <CardTitle>Topology Map</CardTitle>
               <CardDescription>
-                React Flow 画布，点击节点打开 Drawer；关系箭头表示依赖/调用方向。
+                React Flow 画布，点击节点打开
+                Drawer；关系箭头表示依赖/调用方向。
               </CardDescription>
             </div>
           </div>
@@ -1215,7 +1227,18 @@ function TopologyCanvasCard({
         <div className="h-[720px] bg-slate-50">
           {graph.nodes.length === 0 ? (
             <div className="grid h-full place-items-center p-8 text-center text-sm text-slate-500">
-              暂无拓扑数据，可先同步 K8s / Trace / 组件数据源，或在配置中心手工维护节点和关系。
+              <div className="space-y-4">
+                <p>
+                  暂无拓扑数据，可从已保存的 K8s
+                  数据源导入，或手工维护节点和关系。
+                </p>
+                <Link
+                  to="/topology/configuration#k8s-import"
+                  className={cn(buttonVariants({ variant: "default" }))}
+                >
+                  导入 K8s 拓扑
+                </Link>
+              </div>
             </div>
           ) : (
             <ReactFlow
@@ -1780,8 +1803,7 @@ function directionValue(
 
 function edgeKeyOf(edge: TopologyEdge) {
   return (
-    edge.edgeKey ||
-    `${edge.fromNodeKey}->${edge.toNodeKey}:${edge.edgeType}`
+    edge.edgeKey || `${edge.fromNodeKey}->${edge.toNodeKey}:${edge.edgeType}`
   ).toLowerCase();
 }
 

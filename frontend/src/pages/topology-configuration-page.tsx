@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -86,6 +86,8 @@ const sampleData = {
 
 export function TopologyConfigurationPage() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const requestedDataSourceId = Number(searchParams.get("dataSourceId"));
   const [selectedSourceId, setSelectedSourceId] = useState<number | null>(null);
   const [mappingText, setMappingText] = useState(
     JSON.stringify(sampleMapping, null, 2),
@@ -163,7 +165,9 @@ export function TopologyConfigurationPage() {
     if (k8sImportForm.dataSourceId || k8sDataSources.length === 0) {
       return;
     }
-    const source = k8sDataSources[0];
+    const source =
+      k8sDataSources.find((item) => item.id === requestedDataSourceId) ??
+      k8sDataSources[0];
     const namespace = allowedNamespaces(source)[0] ?? "default";
     setK8sImportForm((current) => ({
       ...current,
@@ -173,7 +177,7 @@ export function TopologyConfigurationPage() {
       cluster: source.name,
       namespace,
     }));
-  }, [k8sDataSources, k8sImportForm.dataSourceId]);
+  }, [k8sDataSources, k8sImportForm.dataSourceId, requestedDataSourceId]);
 
   const selectedSource = useMemo(
     () => sourcesQuery.data?.find((source) => source.id === selectedSourceId),
@@ -563,7 +567,10 @@ function K8sImportCard({
   );
   const namespaces = selected ? allowedNamespaces(selected) : [];
   return (
-    <Card>
+    <Card
+      id="k8s-import"
+      className="scroll-mt-6 ring-offset-4 target:ring-2 target:ring-cyan-400"
+    >
       <CardHeader>
         <div className="flex items-center gap-3">
           <div className="grid size-10 place-items-center rounded-xl bg-blue-50 text-blue-700">

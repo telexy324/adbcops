@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   CheckCircle2,
   DatabaseZap,
@@ -30,7 +31,7 @@ import {
   type SaveDataSourceInput,
   type SaveLLMConfigInput,
 } from "@/api/config";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -1087,6 +1088,15 @@ function DataSourceRow({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {item.sourceType === "kubernetes" && item.enabled && (
+            <Link
+              to={`/topology/configuration?dataSourceId=${item.id}#k8s-import`}
+              className={buttonVariants({ variant: "default", size: "sm" })}
+            >
+              <Network className="size-4" />
+              导入拓扑
+            </Link>
+          )}
           <Button type="button" variant="outline" size="sm" onClick={onEdit}>
             <Pencil className="size-4" />
             编辑
