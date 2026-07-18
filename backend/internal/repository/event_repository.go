@@ -40,16 +40,32 @@ func NewEventRepository(db *gorm.DB) *GORMEventRepository {
 
 func (r *GORMEventRepository) UpsertOpsEvent(ctx context.Context, event *model.OpsEvent) (*model.OpsEvent, error) {
 	now := time.Now().UTC()
-	if event.FirstSeenAt.IsZero() {
-		event.FirstSeenAt = now
+	if event.EventTime.IsZero() {
+		event.EventTime = now
+	} else {
+		event.EventTime = event.EventTime.UTC()
 	}
-	event.LastSeenAt = now
+	if event.FirstSeenAt.IsZero() {
+		event.FirstSeenAt = event.EventTime
+	} else {
+		event.FirstSeenAt = event.FirstSeenAt.UTC()
+	}
+	if event.LastSeenAt.IsZero() {
+		event.LastSeenAt = event.EventTime
+	} else {
+		event.LastSeenAt = event.LastSeenAt.UTC()
+	}
 	event.UpdatedAt = now
 	if event.OccurrenceCount <= 0 {
 		event.OccurrenceCount = 1
 	}
+	if event.ResolvedAt != nil {
+		resolved := event.ResolvedAt.UTC()
+		event.ResolvedAt = &resolved
+	}
 	if event.Status == model.EventStatusResolved && event.ResolvedAt == nil {
-		event.ResolvedAt = &now
+		resolved := event.EventTime
+		event.ResolvedAt = &resolved
 	}
 	if event.Fingerprint == nil || *event.Fingerprint == "" {
 		if err := r.db.WithContext(ctx).Create(event).Error; err != nil {
@@ -58,7 +74,7 @@ func (r *GORMEventRepository) UpsertOpsEvent(ctx context.Context, event *model.O
 		return event, nil
 	}
 	assignments := clause.Assignments(map[string]any{
-		"event_time":       event.EventTime,
+		"event_time":       gorm.Expr("GREATEST(ops_event.event_time, ?)", event.EventTime),
 		"source_type":      event.SourceType,
 		"source_id":        event.SourceID,
 		"event_type":       event.EventType,
@@ -75,7 +91,7 @@ func (r *GORMEventRepository) UpsertOpsEvent(ctx context.Context, event *model.O
 		"trace_id":         event.TraceID,
 		"summary":          event.Summary,
 		"payload":          event.Payload,
-		"last_seen_at":     now,
+		"last_seen_at":     gorm.Expr("GREATEST(ops_event.last_seen_at, ?)", event.LastSeenAt),
 		"updated_at":       now,
 		"occurrence_count": gorm.Expr("ops_event.occurrence_count + 1"),
 	})

@@ -7,16 +7,23 @@ import (
 	"time"
 
 	alertsvc "aiops-platform/backend/internal/alert"
+	linuxeventsvc "aiops-platform/backend/internal/linuxevent"
 	"aiops-platform/backend/internal/repository"
 	"github.com/gin-gonic/gin"
 )
 
 type EventHandler struct {
 	alertService *alertsvc.Service
+	linuxService *linuxeventsvc.Service
 }
 
 func NewEventHandler(alertService *alertsvc.Service) *EventHandler {
 	return &EventHandler{alertService: alertService}
+}
+
+func (h *EventHandler) WithLinuxEvents(service *linuxeventsvc.Service) *EventHandler {
+	h.linuxService = service
+	return h
 }
 
 func (h *EventHandler) Alertmanager(c *gin.Context) {
@@ -48,6 +55,28 @@ func (h *EventHandler) Manual(c *gin.Context) {
 		return
 	}
 	success(c, event)
+}
+
+func (h *EventHandler) Linux(c *gin.Context) {
+	if h.linuxService == nil {
+		failure(c, http.StatusServiceUnavailable, 50301, "linux event service unavailable")
+		return
+	}
+	var request linuxeventsvc.RecordInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.linuxService.Record(c.Request.Context(), request)
+	if err != nil {
+		if errors.Is(err, linuxeventsvc.ErrInvalidInput) {
+			failure(c, http.StatusBadRequest, 40001, "invalid request")
+			return
+		}
+		failure(c, http.StatusInternalServerError, 50092, "record linux event failed")
+		return
+	}
+	success(c, result)
 }
 
 func (h *EventHandler) List(c *gin.Context) {

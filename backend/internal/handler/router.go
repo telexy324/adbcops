@@ -70,6 +70,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 			protectedEventRoutes := eventRoutes.Group("")
 			protectedEventRoutes.Use(dependencies.Authenticate)
 			protectedEventRoutes.POST("/manual", dependencies.EventHandler.Manual)
+			protectedEventRoutes.POST("/linux", dependencies.EventHandler.Linux)
 			protectedEventRoutes.GET("", dependencies.EventHandler.List)
 			protectedEventRoutes.GET("/:id", dependencies.EventHandler.Get)
 		}

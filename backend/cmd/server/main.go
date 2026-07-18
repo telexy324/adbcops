@@ -28,6 +28,7 @@ import (
 	"aiops-platform/backend/internal/handler"
 	incidentsvc "aiops-platform/backend/internal/incident"
 	k8ssvc "aiops-platform/backend/internal/k8s"
+	linuxeventsvc "aiops-platform/backend/internal/linuxevent"
 	linuxhostsvc "aiops-platform/backend/internal/linuxhost"
 	llmsvc "aiops-platform/backend/internal/llm"
 	logssvc "aiops-platform/backend/internal/logs"
@@ -139,6 +140,7 @@ func run() error {
 	changeService := changesvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
 	evidenceService := evidencesvc.NewService(evidenceRepository)
+	linuxEventService := linuxeventsvc.NewService(eventRepository, evidenceRepository, incidentRepository)
 	topologyService := topologysvc.NewService(topologyRepository, k8sService)
 	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
 	correlationService := correlationsvc.NewService(eventRepository, topologyRepository)
@@ -224,7 +226,7 @@ func run() error {
 	}
 	linuxHostHandler := handler.NewLinuxHostHandler(linuxHostService).WithBatchImporter(linuxImporter).WithBatchTests(linuxBatchTests)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
-	eventHandler := handler.NewEventHandler(alertService)
+	eventHandler := handler.NewEventHandler(alertService).WithLinuxEvents(linuxEventService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
 	topologyHandler := handler.NewTopologyHandler(topologyService)
 	timelineHandler := handler.NewTimelineHandler(timelineService)
