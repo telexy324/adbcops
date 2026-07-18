@@ -5,6 +5,7 @@ import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
 import { LinuxHostsPage } from "@/pages/linux-hosts-page";
+import { LinuxAnalysisPage } from "@/pages/linux-analysis-page";
 import { LoginPage } from "@/pages/login-page";
 import { NotFoundPage } from "@/pages/not-found-page";
 import { OperationsPage } from "@/pages/operations-page";
@@ -41,6 +42,8 @@ export const router = createBrowserRouter([
       },
       { path: "/operations", element: <OperationsPage /> },
       { path: "/linux-hosts", element: <LinuxHostsPage /> },
+      { path: "/linux-analysis", element: <LinuxAnalysisPage /> },
+      { path: "/linux-analysis/:hostId", element: <LinuxAnalysisPage /> },
       { path: "/settings", element: <SettingsPage /> },
     ],
   },

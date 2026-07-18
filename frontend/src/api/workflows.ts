@@ -126,4 +126,18 @@ export async function listWorkflowRuns() {
   return response.data.data;
 }
 
+export async function getWorkflowRun(runId: number) {
+  const response = await apiClient.get<ApiEnvelope<WorkflowRun>>(
+    `/api/workflow-runs/${runId}`,
+  );
+  return response.data.data;
+}
+
+export async function cancelWorkflowRun(runId: number) {
+  const response = await apiClient.post<ApiEnvelope<WorkflowRun>>(
+    `/api/workflow-runs/${runId}/cancel`,
+  );
+  return response.data.data;
+}
+
 export { toAPIErrorMessage };

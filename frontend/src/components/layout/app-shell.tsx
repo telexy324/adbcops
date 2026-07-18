@@ -30,6 +30,7 @@ const navigation = [
   { label: "拓扑视图", icon: Network, to: "/topology", enabled: true },
   { label: "故障中心", icon: Siren, to: "/operations", enabled: true },
   { label: "Linux 主机", icon: Server, to: "/linux-hosts", enabled: true },
+  { label: "Linux 分析", icon: Activity, to: "/linux-analysis", enabled: true },
   { label: "配置中心", icon: Settings, to: "/settings", enabled: true },
 ];
 

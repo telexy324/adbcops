@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -492,6 +492,15 @@ function HostPanel({
                   </td>
                   <td>
                     <div className="flex justify-end gap-2">
+                      <a
+                        href={`/linux-analysis/${host.id}`}
+                        className={buttonVariants({
+                          size: "sm",
+                          variant: "outline",
+                        })}
+                      >
+                        分析
+                      </a>
                       <Button
                         size="sm"
                         variant="outline"

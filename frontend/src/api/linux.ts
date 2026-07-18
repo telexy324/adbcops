@@ -156,6 +156,10 @@ export async function listLinuxHosts() {
   return (await apiClient.get<Envelope<LinuxHost[]>>("/api/linux/hosts")).data
     .data;
 }
+export async function getLinuxHost(id: number) {
+  return (await apiClient.get<Envelope<LinuxHost>>(`/api/linux/hosts/${id}`))
+    .data.data;
+}
 export async function createLinuxHost(data: SaveLinuxHost) {
   return (
     await apiClient.post<Envelope<LinuxHost>>(
