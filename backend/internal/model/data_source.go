@@ -13,6 +13,8 @@ const (
 	DataSourceTypeRedis         = "redis"
 	DataSourceTypeTiDB          = "tidb"
 	DataSourceTypeNginx         = "nginx"
+	DataSourceTypeLinuxServer   = "linux_server"
+	DataSourceTypeLinuxGroup    = "linux_server_group"
 )
 
 type CredentialSecret struct {
