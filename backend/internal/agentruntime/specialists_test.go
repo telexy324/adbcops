@@ -20,7 +20,7 @@ func TestBuiltinAgentsIncludeSpecialists(t *testing.T) {
 	for _, definition := range runtime.List() {
 		names[definition.Name] = true
 	}
-	for _, name := range []string{"knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "change_agent", "incident_agent"} {
+	for _, name := range []string{"knowledge_agent", "log_agent", "metrics_agent", "kubernetes_agent", "change_agent", "incident_agent", "linux_server_agent"} {
 		if !names[name] {
 			t.Fatalf("missing builtin agent %s in %+v", name, names)
 		}

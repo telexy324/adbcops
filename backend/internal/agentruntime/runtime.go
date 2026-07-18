@@ -165,6 +165,7 @@ func BuiltinAgents() []Agent {
 		KubernetesAgent{},
 		ChangeAgent{},
 		IncidentAgent{},
+		LinuxServerAgent{},
 	}
 }
 
