@@ -143,9 +143,16 @@ func run() error {
 	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
 	correlationService := correlationsvc.NewService(eventRepository, topologyRepository)
 	incidentService := incidentsvc.NewService(incidentRepository, analysisRepository)
+	linuxTool := linuxservertool.NewDefaultTool()
+	defer linuxTool.Close()
+	linuxSkillCollector, err := linuxhostsvc.NewSkillCollector(linuxHostService, linuxTool)
+	if err != nil {
+		return fmt.Errorf("initialize linux skill collector: %w", err)
+	}
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := []skillframework.Skill{skillframework.EchoSkill{}}
 	skills = append(skills, skillframework.ComponentDiagnosisSkillsWithServices(nacosService, redisService, tidbService, nginxService)...)
+	skills = append(skills, skillframework.LinuxSkills(linuxSkillCollector)...)
 	skills = append(skills, skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
 	skills = append(skills, skillframework.ChangeSkills(changeService)...)
@@ -211,8 +218,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize linux host importer: %w", err)
 	}
-	linuxTool := linuxservertool.NewDefaultTool()
-	defer linuxTool.Close()
 	linuxBatchTests, err := linuxhostsvc.NewBatchTestManager(linuxHostService, linuxTool, linuxhostsvc.DefaultBatchTestConcurrency, linuxhostsvc.DefaultBatchTestTimeout)
 	if err != nil {
 		return fmt.Errorf("initialize linux batch tests: %w", err)
