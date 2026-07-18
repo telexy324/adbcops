@@ -206,7 +206,11 @@ func run() error {
 	retrievalEvaluationHandler := handler.NewRetrievalEvaluationHandler(retrievaleval.NewService(userRepository, ragService))
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
-	linuxHostHandler := handler.NewLinuxHostHandler(linuxHostService)
+	linuxImporter, err := linuxhostsvc.NewBatchImporter(linuxHostService, cfg.FileStorage.LocalFileDir, 30*time.Minute, cfg.FileStorage.MaxUploadBytes)
+	if err != nil {
+		return fmt.Errorf("initialize linux host importer: %w", err)
+	}
+	linuxHostHandler := handler.NewLinuxHostHandler(linuxHostService).WithBatchImporter(linuxImporter)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)

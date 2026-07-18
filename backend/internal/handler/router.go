@@ -315,6 +315,8 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		hostRoutes.POST("/:id/enable", dependencies.RequireAdmin, dependencies.LinuxHostHandler.EnableHost)
 		hostRoutes.POST("/:id/disable", dependencies.RequireAdmin, dependencies.LinuxHostHandler.DisableHost)
 		hostRoutes.POST("/:id/host-key/confirm", dependencies.RequireAdmin, dependencies.LinuxHostHandler.ConfirmHostKey)
+		hostRoutes.POST("/import/preview", dependencies.RequireAdmin, dependencies.LinuxHostHandler.PreviewImport)
+		hostRoutes.POST("/import/confirm", dependencies.RequireAdmin, dependencies.LinuxHostHandler.ConfirmImport)
 
 		credentialGroupRoutes := linuxRoutes.Group("/credential-groups")
 		credentialGroupRoutes.Use(dependencies.RequireAdmin)

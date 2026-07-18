@@ -13,7 +13,88 @@ import (
 )
 
 type LinuxHostHandler struct {
-	service *linuxhostsvc.Service
+	service  *linuxhostsvc.Service
+	importer *linuxhostsvc.BatchImporter
+}
+
+func (h *LinuxHostHandler) WithBatchImporter(importer *linuxhostsvc.BatchImporter) *LinuxHostHandler {
+	h.importer = importer
+	return h
+}
+
+func (h *LinuxHostHandler) PreviewImport(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.importer == nil {
+		failure(c, http.StatusServiceUnavailable, 50321, "linux host importer is unavailable")
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	opened, err := file.Open()
+	if err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	defer opened.Close()
+	mapping := map[string]string{}
+	if raw := c.PostForm("columnMapping"); raw != "" && json.Unmarshal([]byte(raw), &mapping) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid column mapping")
+		return
+	}
+	result, err := h.importer.Preview(c.Request.Context(), actor, linuxhostsvc.ImportFile{Name: file.Filename, Reader: opened, ColumnMapping: mapping, Strategy: c.PostForm("strategy")})
+	if handleLinuxImportError(c, err) {
+		return
+	}
+	success(c, result)
+}
+
+func (h *LinuxHostHandler) ConfirmImport(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if h.importer == nil {
+		failure(c, http.StatusServiceUnavailable, 50321, "linux host importer is unavailable")
+		return
+	}
+	var request struct {
+		Token string `json:"token" binding:"required"`
+	}
+	if c.ShouldBindJSON(&request) != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.importer.Confirm(c.Request.Context(), actor, request.Token)
+	if handleLinuxImportError(c, err) {
+		return
+	}
+	success(c, result)
+}
+
+func handleLinuxImportError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	recordFailureError(c, err, "linux host import failed")
+	switch {
+	case errors.Is(err, linuxhostsvc.ErrImportTooManyRows):
+		failure(c, http.StatusRequestEntityTooLarge, 41322, err.Error())
+	case errors.Is(err, linuxhostsvc.ErrImportFormat), errors.Is(err, linuxhostsvc.ErrInvalidInput):
+		failure(c, http.StatusBadRequest, 40001, "invalid import")
+	case errors.Is(err, linuxhostsvc.ErrImportExpired):
+		failure(c, http.StatusGone, 41001, err.Error())
+	case errors.Is(err, linuxhostsvc.ErrImportHasErrors):
+		failure(c, http.StatusConflict, 40921, err.Error())
+	default:
+		failure(c, http.StatusInternalServerError, 50096, "linux host import failed")
+	}
+	return true
 }
 
 func NewLinuxHostHandler(service *linuxhostsvc.Service) *LinuxHostHandler {
