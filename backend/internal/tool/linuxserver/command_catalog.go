@@ -122,7 +122,7 @@ func (c *Catalog) Plan(key string, parameters json.RawMessage) (CommandPlan, err
 	}
 	maxRows := definition.MaxRows
 	if topN, ok := values["topN"].(int64); ok {
-		maxRows = int(topN)
+		maxRows = int(topN) + 1 // ps emits one header row before the bounded process rows.
 	}
 	return CommandPlan{
 		Key: definition.Key, Version: definition.Version, Executable: definition.Executable,
@@ -236,6 +236,7 @@ func BuiltinCommandDefinitions() []LinuxCommandDefinition {
 		definition("network.resolver", "Read resolver configuration.", "cat", []string{"/etc/resolv.conf"}, noParameters, RiskSensitiveRead, 5, 32*1024, 200),
 		definition("process.top_cpu", "Read processes sorted by CPU usage.", "ps", []string{"-eo", "pid,ppid,user,stat,pcpu,pmem,rss,vsz,lstart,etime,comm", "--sort=-pcpu"}, topNParameters, RiskSensitiveRead, 10, 256*1024, 20),
 		definition("process.top_memory", "Read processes sorted by memory usage.", "ps", []string{"-eo", "pid,ppid,user,stat,pcpu,pmem,rss,vsz,lstart,etime,comm", "--sort=-pmem"}, topNParameters, RiskSensitiveRead, 10, 256*1024, 20),
+		definition("process.all", "Read bounded process state and elapsed time for aggregate counts.", "ps", []string{"-eo", "pid,stat,etime,comm"}, noParameters, RiskSensitiveRead, 10, 512*1024, 10000),
 		definition("systemd.state", "Read systemd overall state.", "systemctl", []string{"is-system-running"}, noParameters, RiskSafeRead, 10, 16*1024, 100),
 		definition("systemd.failed", "Read failed systemd services.", "systemctl", []string{"list-units", "--type=service", "--state=failed", "--no-pager", "--no-legend"}, noParameters, RiskSafeRead, 10, 128*1024, 1000),
 		definition("systemd.show", "Read properties for one validated systemd service.", "systemctl", []string{"show", "${service}", "--no-pager"}, serviceParameters, RiskSensitiveRead, 10, 128*1024, 1000),

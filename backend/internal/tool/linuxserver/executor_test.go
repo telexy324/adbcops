@@ -28,7 +28,7 @@ func TestExecutorUsesCatalogArgvAndTruncatesRows(t *testing.T) {
 	if runner.executable != "ps" || len(runner.args) != 3 || runner.args[0] != "-eo" {
 		t.Fatalf("runner received %s %q", runner.executable, runner.args)
 	}
-	if result.Status != CommandStatusPartial || !result.Truncated || len(strings.Split(strings.TrimSpace(result.Output), "\n")) != 10 {
+	if result.Status != CommandStatusPartial || !result.Truncated || len(strings.Split(strings.TrimSpace(result.Output), "\n")) != 11 {
 		t.Fatalf("result = %+v", result)
 	}
 }

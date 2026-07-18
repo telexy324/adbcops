@@ -51,11 +51,11 @@ func TestCatalogBuildsArgvWithoutShellParsing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if processPlan.MaxRows != 20 {
-		t.Fatalf("default topN = %d, want 20", processPlan.MaxRows)
+	if processPlan.MaxRows != 21 {
+		t.Fatalf("default topN rows = %d, want header + 20", processPlan.MaxRows)
 	}
 	processPlan, err = catalog.Plan("process.top_cpu", json.RawMessage(`{"topN":100}`))
-	if err != nil || processPlan.MaxRows != 100 {
+	if err != nil || processPlan.MaxRows != 101 {
 		t.Fatalf("explicit topN plan = %+v, error = %v", processPlan, err)
 	}
 }

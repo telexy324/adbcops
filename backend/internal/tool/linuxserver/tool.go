@@ -11,10 +11,12 @@ import (
 )
 
 type Tool struct {
-	catalog *Catalog
-	pool    *ConnectionPool
-	parser  OutputParser
-	now     func() time.Time
+	catalog    *Catalog
+	collectors *CollectorRegistry
+	pool       *ConnectionPool
+	parser     OutputParser
+	now        func() time.Time
+	sleep      func(context.Context, time.Duration) error
 }
 
 func NewTool(catalog *Catalog, pool *ConnectionPool, parser OutputParser) (*Tool, error) {
@@ -27,7 +29,10 @@ func NewTool(catalog *Catalog, pool *ConnectionPool, parser OutputParser) (*Tool
 	if err := validateParser(parser); err != nil {
 		return nil, err
 	}
-	return &Tool{catalog: catalog, pool: pool, parser: parser, now: time.Now}, nil
+	return &Tool{
+		catalog: catalog, collectors: NewCollectorRegistry(), pool: pool, parser: parser,
+		now: time.Now, sleep: sleepContext,
+	}, nil
 }
 
 func NewDefaultTool() *Tool {
@@ -75,14 +80,14 @@ func (t *Tool) DetectPlatform(ctx context.Context, conn LinuxServerConnection) (
 
 func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request LinuxCollectRequest) (*LinuxCollectResult, error) {
 	if strings.TrimSpace(request.Collector) == "" {
-		return nil, ErrCommandNotFound
+		return nil, ErrCollectorNotFound
 	}
 	if request.TimeStart != nil && request.TimeEnd != nil && request.TimeStart.After(*request.TimeEnd) {
 		return nil, ErrInvalidParameters
 	}
-	definition, err := t.catalog.Get(request.Collector)
-	if err != nil || request.Collector == "platform.which" {
-		return nil, ErrCommandNotFound
+	definition, values, err := t.collectors.get(request.Collector, request.Parameters)
+	if err != nil {
+		return nil, err
 	}
 	lease, err := t.pool.Acquire(ctx, conn, false)
 	if err != nil {
@@ -96,26 +101,58 @@ func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request 
 		return nil, errors.New("detect linux platform failed")
 	}
 	executor, _ := NewExecutor(t.catalog, lease.Client())
-	commandResult, err := executor.Execute(ctx, CommandRequest{Key: request.Collector, Parameters: request.Parameters, Platform: platform})
+	results := map[string]*CommandResult{}
+	versions := map[string]bool{}
+	maxDelay := time.Duration(0)
+	for _, command := range definition.commands(values) {
+		if command.DelayBefore > 0 {
+			if err := t.sleep(ctx, command.DelayBefore); err != nil {
+				results[command.Alias] = &CommandResult{Key: command.Key, Status: CommandStatusTimeout, Warnings: []string{"sampling interrupted"}}
+				discard = true
+				break
+			}
+			if command.DelayBefore > maxDelay {
+				maxDelay = command.DelayBefore
+			}
+		}
+		result, executeErr := executor.Execute(ctx, CommandRequest{Key: command.Key, Parameters: command.Parameters, Platform: platform})
+		if executeErr != nil {
+			return nil, executeErr
+		}
+		results[command.Alias] = result
+		versions[result.CommandVersion] = true
+		if result.Status == CommandStatusTimeout {
+			discard = true
+		}
+	}
+	status, warnings, truncated, duration := aggregateCollectorStatus(results)
+	duration += maxDelay
+	parsed, parserWarnings := definition.parse(results, maxDelay)
+	if len(parserWarnings) > 0 {
+		warnings = append(warnings, parserWarnings...)
+		if status == CommandStatusSuccess {
+			status = CommandStatusPartial
+		}
+	}
+	data, err := json.Marshal(parsed)
 	if err != nil {
-		return nil, err
-	}
-	if commandResult.Status == CommandStatusTimeout || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		discard = true
-	}
-	data, parserWarnings, parserErr := t.parser.Parse(request.Collector, commandResult.Output, commandResult.Truncated)
-	status := commandResult.Status
-	warnings := append(append([]string(nil), commandResult.Warnings...), parserWarnings...)
-	if parserErr != nil {
-		status = CommandStatusPartial
-		warnings = append(warnings, "command output could not be parsed")
-		data = json.RawMessage(`{"format":"unavailable"}`)
+		return nil, fmt.Errorf("marshal collector result: %w", err)
 	}
 	return &LinuxCollectResult{
-		Collector: request.Collector, CommandVersion: definition.Version, Status: status, Data: data,
-		Warnings: warnings, CollectedAt: t.now().UTC(), DurationMs: commandResult.DurationMS,
-		Truncated: commandResult.Truncated,
+		Collector: request.Collector, CommandVersion: combineVersions(versions), Status: status, Data: data,
+		Warnings: warnings, CollectedAt: t.now().UTC(), DurationMs: duration.Milliseconds(), Truncated: truncated,
 	}, nil
+}
+
+func combineVersions(versions map[string]bool) string {
+	values := make([]string, 0, len(versions))
+	for version := range versions {
+		if version != "" {
+			values = append(values, version)
+		}
+	}
+	sort.Strings(values)
+	return strings.Join(values, ",")
 }
 
 func (t *Tool) Close() error { return t.pool.Close() }

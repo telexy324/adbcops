@@ -78,21 +78,21 @@ func TestDetectPlatformUsesCatalogProbesAndReportsMissingCommand(t *testing.T) {
 
 func TestCollectReturnsStructuredRedactedDataWithoutRawOutput(t *testing.T) {
 	client := newToolFakeClient()
-	client.outputs["free"] = "MemTotal: 1024\nPassword: super-secret\n"
+	client.outputs["cat /proc/meminfo"] = "MemTotal: 1024 kB\nMemAvailable: 512 kB\nPassword: super-secret\n"
 	tool := testTool(t, &toolFakeDialer{clients: []RemoteClient{client}})
-	result, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{Collector: "memory.free"})
+	result, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{Collector: CollectorMemory})
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
-	if result.Status != CommandStatusSuccess || result.CommandVersion == "" {
+	if result.Status != CommandStatusPartial || result.CommandVersion == "" {
 		t.Fatalf("result = %+v", result)
 	}
 	encoded, _ := json.Marshal(result)
 	if bytes.Contains(encoded, []byte("super-secret")) || bytes.Contains(encoded, []byte(`"output"`)) {
 		t.Fatalf("collect result exposed raw sensitive output: %s", encoded)
 	}
-	if !bytes.Contains(encoded, []byte("[REDACTED]")) || !bytes.Contains(encoded, []byte(`"format":"properties"`)) {
-		t.Fatalf("collect result is not structured/redacted: %s", encoded)
+	if !bytes.Contains(encoded, []byte(`"mem_total":1048576`)) || !bytes.Contains(encoded, []byte(`"mem_used_percent":50`)) {
+		t.Fatalf("collect result is not structured: %s", encoded)
 	}
 }
 
@@ -108,7 +108,7 @@ func TestCollectTimeoutDiscardsConnectionAndReleasesPoolSlot(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	result, err := tool.Collect(ctx, confirmedConnection(), LinuxCollectRequest{Collector: "memory.free"})
+	result, err := tool.Collect(ctx, confirmedConnection(), LinuxCollectRequest{Collector: CollectorMemory})
 	if err != nil {
 		t.Fatalf("Collect(timeout) error = %v", err)
 	}
@@ -126,9 +126,72 @@ func TestCollectTimeoutDiscardsConnectionAndReleasesPoolSlot(t *testing.T) {
 func TestCollectRejectsGenericAndInternalProbeCommands(t *testing.T) {
 	tool := testTool(t, &toolFakeDialer{clients: []RemoteClient{newToolFakeClient()}})
 	for _, key := range []string{"", "command", "shell", "platform.which"} {
-		if _, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{Collector: key}); !errors.Is(err, ErrCommandNotFound) {
+		if _, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{Collector: key}); !errors.Is(err, ErrCollectorNotFound) {
 			t.Fatalf("Collect(%q) error = %v", key, err)
 		}
+	}
+}
+
+func TestCollectorsDegradeForMissingCommandAndPermissionDenied(t *testing.T) {
+	missing := newToolFakeClient()
+	missing.missing["free"] = true
+	missing.outputs["cat /proc/meminfo"] = "MemTotal: 1024 kB\nMemAvailable: 512 kB\n"
+	tool := testTool(t, &toolFakeDialer{clients: []RemoteClient{missing}})
+	result, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{Collector: CollectorMemory})
+	if err != nil {
+		t.Fatalf("Collect(missing command) error = %v", err)
+	}
+	if result.Status != CommandStatusPartial || !strings.Contains(strings.Join(result.Warnings, " "), "free") {
+		t.Fatalf("missing command result = %+v", result)
+	}
+
+	permission := newToolFakeClient()
+	permission.runErrors["dmesg"] = ErrRunnerPermission
+	permission.outputs["journalctl -k -p warning --since -24h --no-pager"] = "kernel warning recovered"
+	tool = testTool(t, &toolFakeDialer{clients: []RemoteClient{permission}})
+	result, err = tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{Collector: CollectorKernelEvents})
+	if err != nil {
+		t.Fatalf("Collect(permission) error = %v", err)
+	}
+	joined := strings.Join(result.Warnings, " ")
+	if result.Status != CommandStatusPartial || !strings.Contains(joined, "permission denied") {
+		t.Fatalf("permission result = %+v", result)
+	}
+}
+
+func TestCollectorsApplyTopNAndBoundedLogWindowToCatalogPlans(t *testing.T) {
+	client := newToolFakeClient()
+	client.outputs["ps -eo pid,stat,etime,comm"] = "PID STAT ELAPSED COMMAND\n1 S 1-00:00 init"
+	tool := testTool(t, &toolFakeDialer{clients: []RemoteClient{client}})
+	if _, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{
+		Collector: CollectorProcess, Parameters: json.RawMessage(`{"topN":100}`),
+	}); err != nil {
+		t.Fatalf("Collect(process) error = %v", err)
+	}
+	processCalls := 0
+	for _, call := range client.calls {
+		if call.executable == "ps" && len(call.args) > 0 && strings.Contains(strings.Join(call.args, " "), "--sort") {
+			processCalls++
+		}
+	}
+	if processCalls != 2 {
+		t.Fatalf("sorted process calls = %d, want CPU and memory TopN plans", processCalls)
+	}
+
+	logsClient := newToolFakeClient()
+	tool = testTool(t, &toolFakeDialer{clients: []RemoteClient{logsClient}})
+	if _, err := tool.Collect(context.Background(), confirmedConnection(), LinuxCollectRequest{
+		Collector: CollectorSystemLogs, Parameters: json.RawMessage(`{"service":"nginx.service","sinceHours":168}`),
+	}); err != nil {
+		t.Fatalf("Collect(logs) error = %v", err)
+	}
+	joinedCalls := ""
+	for _, call := range logsClient.calls {
+		joinedCalls += call.executable + " " + strings.Join(call.args, " ") + "\n"
+	}
+	if !strings.Contains(joinedCalls, "journalctl -p warning --since -168h --no-pager") ||
+		!strings.Contains(joinedCalls, "journalctl -u nginx.service --since -168h --no-pager") {
+		t.Fatalf("bounded journal calls missing:\n%s", joinedCalls)
 	}
 }
 
@@ -186,13 +249,14 @@ type toolFakeClient struct {
 	mu              sync.Mutex
 	calls           []commandCall
 	outputs         map[string]string
+	runErrors       map[string]error
 	missing         map[string]bool
 	blockExecutable string
 	closed          bool
 }
 
 func newToolFakeClient() *toolFakeClient {
-	return &toolFakeClient{outputs: map[string]string{}, missing: map[string]bool{}}
+	return &toolFakeClient{outputs: map[string]string{}, runErrors: map[string]error{}, missing: map[string]bool{}}
 }
 
 func (c *toolFakeClient) Run(ctx context.Context, executable string, args []string, stdout, _ io.Writer) error {
@@ -209,6 +273,17 @@ func (c *toolFakeClient) Run(ctx context.Context, executable string, args []stri
 			return ErrRunnerCommandNotFound
 		}
 		_, _ = io.WriteString(stdout, "/usr/bin/"+args[0]+"\n")
+		return nil
+	}
+	lookup := strings.TrimSpace(executable + " " + strings.Join(args, " "))
+	if err := c.runErrors[lookup]; err != nil {
+		return err
+	}
+	if err := c.runErrors[executable]; err != nil {
+		return err
+	}
+	if output, ok := c.outputs[lookup]; ok {
+		_, _ = io.WriteString(stdout, output)
 		return nil
 	}
 	if output, ok := c.outputs[executable]; ok {
