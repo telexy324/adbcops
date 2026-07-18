@@ -21,6 +21,7 @@ type RouterDependencies struct {
 	RetrievalEvaluationHandler *RetrievalEvaluationHandler
 	RAGHandler                 *RAGHandler
 	DataSourceHandler          *DataSourceHandler
+	LinuxHostHandler           *LinuxHostHandler
 	AnalysisHandler            *AnalysisHandler
 	EventHandler               *EventHandler
 	EvidenceHandler            *EvidenceHandler
@@ -300,6 +301,27 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		dataSourceRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Update)
 		dataSourceRoutes.DELETE("/:id", dependencies.RequireAdmin, dependencies.DataSourceHandler.Delete)
 		dataSourceRoutes.POST("/:id/test", dependencies.RequireAdmin, dependencies.DataSourceHandler.Test)
+	}
+	if dependencies.LinuxHostHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
+		linuxRoutes := router.Group("/api/linux")
+		linuxRoutes.Use(dependencies.Authenticate)
+
+		hostRoutes := linuxRoutes.Group("/hosts")
+		hostRoutes.GET("", dependencies.LinuxHostHandler.ListHosts)
+		hostRoutes.GET("/:id", dependencies.LinuxHostHandler.GetHost)
+		hostRoutes.POST("", dependencies.RequireAdmin, dependencies.LinuxHostHandler.CreateHost)
+		hostRoutes.PUT("/:id", dependencies.RequireAdmin, dependencies.LinuxHostHandler.UpdateHost)
+		hostRoutes.DELETE("/:id", dependencies.RequireAdmin, dependencies.LinuxHostHandler.DeleteHost)
+		hostRoutes.POST("/:id/enable", dependencies.RequireAdmin, dependencies.LinuxHostHandler.EnableHost)
+		hostRoutes.POST("/:id/disable", dependencies.RequireAdmin, dependencies.LinuxHostHandler.DisableHost)
+
+		credentialGroupRoutes := linuxRoutes.Group("/credential-groups")
+		credentialGroupRoutes.Use(dependencies.RequireAdmin)
+		credentialGroupRoutes.GET("", dependencies.LinuxHostHandler.ListCredentialGroups)
+		credentialGroupRoutes.POST("", dependencies.LinuxHostHandler.CreateCredentialGroup)
+		credentialGroupRoutes.GET("/:id", dependencies.LinuxHostHandler.GetCredentialGroup)
+		credentialGroupRoutes.PUT("/:id", dependencies.LinuxHostHandler.UpdateCredentialGroup)
+		credentialGroupRoutes.DELETE("/:id", dependencies.LinuxHostHandler.DeleteCredentialGroup)
 	}
 	if dependencies.ToolHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		toolRoutes := router.Group("/api/tools")

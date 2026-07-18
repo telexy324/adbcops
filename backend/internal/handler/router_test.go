@@ -210,6 +210,29 @@ func TestUserAccessingAdminAPIIsForbidden(t *testing.T) {
 	}
 }
 
+func TestUserCannotConfigureLinuxCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	normalUser := &model.AppUser{ID: 11, Username: "operator", Role: model.RoleUser, Enabled: true}
+	router := NewRouter(discardLogger(), RouterDependencies{
+		LinuxHostHandler: &LinuxHostHandler{},
+		Authenticate:     appmiddleware.Authenticate(&routerFakeAuthenticator{user: normalUser}),
+		RequireAdmin:     appmiddleware.RequireAdmin(),
+	})
+	for _, path := range []string{"/api/linux/hosts", "/api/linux/credential-groups"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"password":"plain-secret"}`))
+		request.Header.Set("Authorization", "Bearer valid-token")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("POST %s status = %d, want %d", path, response.Code, http.StatusForbidden)
+		}
+		if strings.Contains(response.Body.String(), "plain-secret") {
+			t.Fatalf("POST %s response leaked credential: %s", path, response.Body.String())
+		}
+	}
+}
+
 func TestToolRoutesExposeManagementButNotGenericInvoke(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	admin := &model.AppUser{ID: 1, Username: "admin", Role: model.RoleAdmin, Enabled: true}

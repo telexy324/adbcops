@@ -28,6 +28,7 @@ import (
 	"aiops-platform/backend/internal/handler"
 	incidentsvc "aiops-platform/backend/internal/incident"
 	k8ssvc "aiops-platform/backend/internal/k8s"
+	linuxhostsvc "aiops-platform/backend/internal/linuxhost"
 	llmsvc "aiops-platform/backend/internal/llm"
 	logssvc "aiops-platform/backend/internal/logs"
 	metricssvc "aiops-platform/backend/internal/metrics"
@@ -93,6 +94,7 @@ func run() error {
 	llmRepository := repository.NewLLMRepository(databaseConnection.GORM)
 	ragRepository := repository.NewRAGRepository(databaseConnection.GORM)
 	dataSourceRepository := repository.NewDataSourceRepository(databaseConnection.GORM)
+	linuxHostRepository := repository.NewLinuxHostRepository(databaseConnection.GORM)
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	evidenceRepository := repository.NewEvidenceRepository(databaseConnection.GORM)
@@ -123,6 +125,7 @@ func run() error {
 	llmService := llmsvc.NewService(llmRepository, credentialManager, llmClient)
 	ragService := ragsvc.NewService(ragRepository, credentialManager, llmClient)
 	dataSourceService := datasourcesvc.NewService(dataSourceRepository, credentialManager, cfg.Credential.KeyVersion)
+	linuxHostService := linuxhostsvc.NewService(linuxHostRepository, credentialManager, cfg.Credential.KeyVersion)
 	logsService := logssvc.NewService(dataSourceRepository, credentialManager, nil)
 	sftpService := sshsftpsvc.NewService(dataSourceRepository, credentialManager, nil)
 	k8sService := k8ssvc.NewService(dataSourceRepository, credentialManager, nil)
@@ -202,6 +205,7 @@ func run() error {
 	retrievalEvaluationHandler := handler.NewRetrievalEvaluationHandler(retrievaleval.NewService(userRepository, ragService))
 	ragHandler := handler.NewRAGHandler(ragService)
 	dataSourceHandler := handler.NewDataSourceHandler(dataSourceService)
+	linuxHostHandler := handler.NewLinuxHostHandler(linuxHostService)
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
@@ -235,6 +239,7 @@ func run() error {
 			RetrievalEvaluationHandler: retrievalEvaluationHandler,
 			RAGHandler:                 ragHandler,
 			DataSourceHandler:          dataSourceHandler,
+			LinuxHostHandler:           linuxHostHandler,
 			AnalysisHandler:            analysisHandler,
 			EventHandler:               eventHandler,
 			EvidenceHandler:            evidenceHandler,

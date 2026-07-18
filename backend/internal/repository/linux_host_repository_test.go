@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"aiops-platform/backend/internal/model"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestCreateCredentialGroupRejectsInvalidScopeBeforeDatabaseAccess(t *testing.T) {
@@ -17,6 +18,18 @@ func TestCreateCredentialGroupRejectsInvalidScopeBeforeDatabaseAccess(t *testing
 	}, &model.CredentialSecret{})
 	if !errors.Is(err, model.ErrInvalidCredentialGroupScope) {
 		t.Fatalf("CreateCredentialGroup() error = %v, want ErrInvalidCredentialGroupScope", err)
+	}
+}
+
+func TestMapLinuxMutationError(t *testing.T) {
+	t.Parallel()
+	duplicate := mapLinuxMutationError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_linux_host_environment_address"}, false)
+	if !errors.Is(duplicate, ErrLinuxResourceConflict) {
+		t.Fatalf("duplicate error = %v", duplicate)
+	}
+	referenced := mapLinuxMutationError(&pgconn.PgError{Code: "23503", ConstraintName: "fk_linux_host_credential_group"}, true)
+	if !errors.Is(referenced, ErrCredentialGroupReferenced) {
+		t.Fatalf("referenced error = %v", referenced)
 	}
 }
 
