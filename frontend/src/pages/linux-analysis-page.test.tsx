@@ -78,6 +78,36 @@ const partialRun = {
   createdAt: "2026-07-18T01:30:00Z",
   nodeRuns: [
     {
+      id: 10,
+      nodeId: "collect_system_overview",
+      nodeType: "skill",
+      status: "success",
+      attempt: 1,
+      output: {
+        facts: [
+          {
+            type: "FACT",
+            summary: "Linux system overview collected",
+            evidence: {
+              collector: "system_overview",
+              status: "success",
+              data: {
+                hostname: "app01.internal",
+                os_name: "Ubuntu 24.04 LTS",
+                os_version: "24.04",
+                kernel: "6.8.0",
+                architecture: "x86_64",
+                cpu_count: 8,
+                memory_total: 17179869184,
+                uptime_seconds: 183845,
+                timezone: "Asia/Shanghai",
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
       id: 1,
       nodeId: "collect_memory",
       nodeType: "skill",
@@ -184,6 +214,95 @@ describe("LinuxAnalysisPage", () => {
     expect(screen.getAllByText("FACT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("RULE").length).toBeGreaterThan(0);
     expect(screen.getAllByText("HYPOTHESIS").length).toBeGreaterThan(0);
+  });
+
+  it("shows collected host system details separately from optional metadata", async () => {
+    renderPage();
+
+    expect(await screen.findByText("app01.internal")).toBeInTheDocument();
+    expect(screen.getByText("Ubuntu 24.04 LTS · 24.04")).toBeInTheDocument();
+    expect(screen.getByText("8 核")).toBeInTheDocument();
+    expect(screen.getByText("16.0 GiB")).toBeInTheDocument();
+    expect(screen.getByText("2 天 3 小时")).toBeInTheDocument();
+    expect(screen.getByText("连接与配置归属")).toBeInTheDocument();
+  });
+
+  it("uses the latest available overview when the newest run is specialized", async () => {
+    vi.mocked(listWorkflowRuns).mockResolvedValue([
+      {
+        id: 30,
+        workflowId: 3,
+        status: "success",
+        input: { hostId: 7, diagnosisType: "cpu" },
+        createdAt: "2026-07-19T02:00:00Z",
+        nodeRuns: [
+          {
+            id: 30,
+            nodeId: "collect_cpu",
+            nodeType: "skill",
+            status: "success",
+            attempt: 1,
+            output: { facts: [] },
+          },
+        ],
+      },
+      partialRun,
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText("app01.internal")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/最近的运行记录中没有 system_overview 数据/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens Health after a successful run and understands real agent output", async () => {
+    const user = userEvent.setup();
+    vi.mocked(runWorkflow).mockResolvedValue({
+      id: 23,
+      workflowId: 1,
+      status: "success",
+      input: { hostId: 7 },
+      createdAt: "2026-07-19T01:00:00Z",
+      nodeRuns: [
+        {
+          id: 3,
+          nodeId: "linux_server_agent",
+          nodeType: "agent",
+          status: "success",
+          attempt: 1,
+          output: {
+            facts: [
+              {
+                summary: "CPU evidence collected",
+                evidenceKey: "linux.host.7.cpu",
+              },
+            ],
+            hypotheses: [
+              { summary: "Load may be transient", confidence: 0.45 },
+            ],
+            structured: JSON.stringify({
+              ruleFindings: [
+                { summary: "CPU threshold is normal", severity: "info" },
+              ],
+            }),
+          },
+        },
+      ],
+    });
+    renderPage();
+
+    await user.click(
+      await screen.findByRole("button", { name: "运行主机诊断" }),
+    );
+
+    expect(
+      await screen.findByText("CPU evidence collected"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("CPU threshold is normal")).toBeInTheDocument();
+    expect(screen.getByText("Load may be transient")).toBeInTheDocument();
+    expect(screen.getByText(/Workflow Run #23 已完成/)).toBeInTheDocument();
   });
 
   it("never renders raw command output or credential fields", async () => {

@@ -228,6 +228,16 @@ export function LinuxAnalysisPage() {
     [runsQuery.data, primaryHost],
   );
   const displayRun = currentRun ?? hostRuns[0] ?? null;
+  const systemOverview = useMemo(() => {
+    const candidates = currentRun
+      ? [currentRun, ...hostRuns.filter((run) => run.id !== currentRun.id)]
+      : hostRuns;
+    for (const run of candidates) {
+      const overview = extractSystemOverview(run);
+      if (overview) return overview;
+    }
+    return undefined;
+  }, [currentRun, hostRuns]);
   const findings = useMemo(() => extractFindings(displayRun), [displayRun]);
   const health = deriveHealth(displayRun, findings);
   const selectedDiagnosis = diagnosisOptions.find(
@@ -260,6 +270,7 @@ export function LinuxAnalysisPage() {
     },
     onSuccess: (run) => {
       setCurrentRun(run);
+      if (diagnosis !== "batch") setTab("health");
       setNotice(`Workflow Run #${run.id} 已完成：${run.status}`);
       setError(null);
       client.invalidateQueries({ queryKey: ["workflow-runs"] });
@@ -449,6 +460,7 @@ export function LinuxAnalysisPage() {
                 tab={tab}
                 host={primaryHost}
                 run={displayRun}
+                systemOverview={systemOverview}
                 findings={findings}
                 health={health}
                 evidence={hostEvidence}
@@ -599,6 +611,7 @@ function DetailContent({
   tab,
   host,
   run,
+  systemOverview,
   findings,
   health,
   evidence,
@@ -608,6 +621,7 @@ function DetailContent({
   tab: DetailTab;
   host: LinuxHost;
   run: WorkflowRun | null;
+  systemOverview?: Record<string, unknown>;
   findings: Finding[];
   health: string;
   evidence: LinuxEvidence[];
@@ -629,7 +643,10 @@ function DetailContent({
     }>;
   };
 }) {
-  if (tab === "overview") return <OverviewPanel host={host} run={run} />;
+  if (tab === "overview")
+    return (
+      <OverviewPanel host={host} run={run} systemOverview={systemOverview} />
+    );
   if (tab === "health")
     return <FindingsPanel findings={findings} health={health} />;
   if (tab === "evidence") return <EvidencePanel records={evidence} />;
@@ -648,36 +665,93 @@ function DetailContent({
 function OverviewPanel({
   host,
   run,
+  systemOverview,
 }: {
   host: LinuxHost;
   run: WorkflowRun | null;
+  systemOverview?: Record<string, unknown>;
 }) {
-  const rows = [
+  const systemRows = [
+    ["主机名", textValue(fieldValue(systemOverview, "hostname", "hostName"))],
+    [
+      "操作系统",
+      joinValues(
+        fieldValue(systemOverview, "os_name", "osName"),
+        fieldValue(systemOverview, "os_version", "osVersion"),
+      ),
+    ],
+    ["内核", textValue(fieldValue(systemOverview, "kernel"))],
+    ["架构", textValue(fieldValue(systemOverview, "architecture", "arch"))],
+    [
+      "CPU",
+      countValue(fieldValue(systemOverview, "cpu_count", "cpuCount"), "核"),
+    ],
+    [
+      "内存",
+      bytesValue(fieldValue(systemOverview, "memory_total", "memoryTotal")),
+    ],
+    [
+      "运行时间",
+      durationValue(
+        fieldValue(systemOverview, "uptime_seconds", "uptimeSeconds"),
+      ),
+    ],
+    ["时区", textValue(fieldValue(systemOverview, "timezone", "timeZone"))],
+  ];
+  const configRows = [
     ["连接状态", host.connectionStatus],
     ["Host Key", host.hostKeyStatus],
-    ["环境", host.environment || "未设置"],
-    ["系统", host.systemName || "未设置"],
-    ["组件", host.componentName || "未设置"],
+    ["环境归属", host.environment || "未配置"],
+    ["系统归属", host.systemName || "未配置"],
+    ["组件归属", host.componentName || "未配置"],
     ["最近测试", formatTime(host.lastTestAt)],
     ["最近诊断", formatTime(run?.finishedAt || run?.createdAt)],
   ];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Host Overview</CardTitle>
-        <CardDescription>
-          仅显示主机元数据和状态，不展示用户名、凭据或完整密钥。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {rows.map(([label, value]) => (
-          <div key={label} className="rounded-xl border bg-slate-50 p-4">
-            <p className="text-xs font-semibold text-slate-500">{label}</p>
-            <p className="mt-2 text-sm font-semibold">{value}</p>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>实时系统概览</CardTitle>
+          <CardDescription>
+            来自 system_overview Collector；需要至少完成一次包含系统概览的诊断。
+          </CardDescription>
+        </CardHeader>
+        {!systemOverview && (
+          <div className="mx-6 mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            最近的运行记录中没有 system_overview
+            数据。请选择“基础主机诊断”重新运行；CPU、内存、磁盘和网络专项诊断不会采集完整主机概览。
           </div>
-        ))}
-      </CardContent>
-    </Card>
+        )}
+        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {systemRows.map(([label, value]) => (
+            <OverviewValue key={label} label={label} value={value} />
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>连接与配置归属</CardTitle>
+          <CardDescription>
+            环境、系统和组件是保存主机时填写的业务元数据，不会由 SSH
+            连接状态自动推断。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {configRows.map(([label, value]) => (
+            <OverviewValue key={label} label={label} value={value} />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function OverviewValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border bg-slate-50 p-4">
+      <p className="text-xs font-semibold text-slate-500">{label}</p>
+      <p className="mt-2 break-words text-sm font-semibold">{value}</p>
+    </div>
   );
 }
 
@@ -692,6 +766,12 @@ function FindingsPanel({
   return (
     <div className="space-y-4">
       {health === "unknown" && <UnknownBanner />}
+      {findings.length === 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Workflow
+          已完成，但没有返回可识别的结构化诊断结论。请查看上方节点状态；失败或被截断的节点不会被当作健康结果。
+        </div>
+      )}
       <div className="grid gap-4 xl:grid-cols-3">
         {groups.map((type) => (
           <Card key={type}>
@@ -1175,25 +1255,37 @@ export function extractFindings(run: WorkflowRun | null): Finding[] {
   if (!run) return [];
   const findings: Finding[] = [];
   const seen = new Set<string>();
-  const visit = (value: unknown) => {
+  const visit = (value: unknown, inferredType?: FindingType) => {
+    if (typeof value === "string") {
+      const parsed = parseStructuredJSON(value);
+      if (parsed !== undefined) visit(parsed, inferredType);
+      return;
+    }
     if (Array.isArray(value)) {
-      value.forEach(visit);
+      value.forEach((item) => visit(item, inferredType));
       return;
     }
     if (!value || typeof value !== "object") return;
     const object = value as Record<string, unknown>;
-    const type = String(object.type || object.findingType || "").toUpperCase();
+    const explicitType = String(
+      object.type || object.findingType || "",
+    ).toUpperCase();
+    const type = (["FACT", "RULE", "HYPOTHESIS"] as const).includes(
+      explicitType as FindingType,
+    )
+      ? (explicitType as FindingType)
+      : inferredType;
     const summary =
       typeof object.summary === "string"
         ? object.summary
         : typeof object.message === "string"
           ? object.message
           : "";
-    if (["FACT", "RULE", "HYPOTHESIS"].includes(type) && summary) {
+    if (type && summary) {
       const key = `${type}:${summary}:${String(object.evidenceRef || "")}`;
       if (!seen.has(key)) {
         findings.push({
-          type: type as FindingType,
+          type,
           summary,
           evidenceRef:
             typeof object.evidenceRef === "string"
@@ -1204,11 +1296,139 @@ export function extractFindings(run: WorkflowRun | null): Finding[] {
         seen.add(key);
       }
     }
-    Object.values(object).forEach(visit);
+    Object.entries(object).forEach(([key, child]) => {
+      const normalized = key.toLowerCase();
+      const childType =
+        normalized === "facts"
+          ? "FACT"
+          : normalized === "rulefindings" || normalized === "rules"
+            ? "RULE"
+            : normalized === "hypotheses"
+              ? "HYPOTHESIS"
+              : inferredType;
+      visit(child, childType);
+    });
   };
   visit(run.output);
   run.nodeRuns?.forEach((node) => visit(node.output));
   return findings;
+}
+
+function parseStructuredJSON(value: string): unknown | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("[")))
+    return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    try {
+      const bytes = Uint8Array.from(window.atob(trimmed), (character) =>
+        character.charCodeAt(0),
+      );
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+export function extractSystemOverview(
+  run: WorkflowRun | null,
+): Record<string, unknown> | undefined {
+  if (!run) return undefined;
+  let result: Record<string, unknown> | undefined;
+  const visit = (value: unknown) => {
+    if (result) return;
+    if (typeof value === "string") {
+      const parsed = parseStructuredJSON(value);
+      if (parsed !== undefined) visit(parsed);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const object = value as Record<string, unknown>;
+    if (object.collector === "system_overview") {
+      const data =
+        typeof object.data === "string"
+          ? parseStructuredJSON(object.data)
+          : object.data;
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        result = data as Record<string, unknown>;
+        return;
+      }
+    }
+    if (
+      [
+        "hostname",
+        "hostName",
+        "os_name",
+        "osName",
+        "kernel",
+        "cpu_count",
+        "cpuCount",
+      ].filter((key) => object[key] != null).length >= 2
+    ) {
+      result = object;
+      return;
+    }
+    Object.values(object).forEach(visit);
+  };
+  visit(run.output);
+  run.nodeRuns?.forEach((node) => visit(node.output));
+  return result;
+}
+
+function fieldValue(
+  value: Record<string, unknown> | undefined,
+  ...keys: string[]
+) {
+  for (const key of keys) {
+    if (value?.[key] != null) return value[key];
+  }
+  return undefined;
+}
+
+function textValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "未采集";
+}
+
+function joinValues(...values: unknown[]) {
+  const parts = values
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "未采集";
+}
+
+function countValue(value: unknown, suffix: string) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? `${value} ${suffix}`
+    : "未采集";
+}
+
+function bytesValue(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+    return "未采集";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const index = Math.min(
+    Math.floor(Math.log(value) / Math.log(1024)),
+    units.length - 1,
+  );
+  return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`;
+}
+
+function durationValue(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    return "未采集";
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  if (days > 0) return `${days} 天 ${hours} 小时`;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分钟`;
+  return `${minutes} 分钟`;
 }
 
 function deriveHealth(run: WorkflowRun | null, findings: Finding[]) {
