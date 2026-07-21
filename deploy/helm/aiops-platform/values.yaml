@@ -14,6 +14,7 @@ env:
   APP_PORT: "8080"
   APP_TIMEZONE: Asia/Shanghai
   HTTP_SERVER_WRITE_TIMEOUT_SECONDS: "300"
+  KNOWLEDGE_DOCUMENT_PASS_SCORE: "70"
   DB_HOST: postgres.default.svc.cluster.local
   DB_PORT: "5432"
   DB_USER: aiops

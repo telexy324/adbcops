@@ -172,6 +172,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize document service: %w", err)
 	}
+	documentService.WithQualityPassScore(cfg.KnowledgeQuality.DocumentPassScore)
 	parserRegistry, err := documentsvc.NewDefaultParserRegistry(documentsvc.ParseLimits{
 		Timeout:   cfg.KnowledgeParse.Timeout,
 		MaxBlocks: cfg.KnowledgeParse.MaxBlocks,

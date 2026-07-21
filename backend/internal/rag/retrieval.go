@@ -211,7 +211,7 @@ func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstand
 	run("possible_question", func() ([]repository.RankedKnowledgeChunk, error) {
 		return s.repository.SearchChunksPossibleQuestions(ctx, query, filter, exactChannelBudget)
 	})
-	if embeddingReady && embeddingConfig != nil {
+	if embeddingReady && embeddingConfig != nil && strings.TrimSpace(options.EmbeddingModelRevision) != "" {
 		client := s.client.(llmsvc.EmbeddingClient)
 		result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
 			BaseURL: embeddingConfig.BaseURL, APIKey: credential.APIKey, APISecret: credential.APISecret,
@@ -229,7 +229,11 @@ func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstand
 			})
 		}
 	} else {
-		trace.Channels = append(trace.Channels, ChannelTrace{Channel: "dense_vector", Degraded: true, Error: "embedding model unavailable"})
+		reason := "embedding model unavailable"
+		if embeddingReady && embeddingConfig != nil {
+			reason = "ready chunk embedding index unavailable"
+		}
+		trace.Channels = append(trace.Channels, ChannelTrace{Channel: "dense_vector", Degraded: true, Error: reason})
 	}
 
 	fused := fuseRRF(channels, defaultRRFK, mergedCandidateBudget)

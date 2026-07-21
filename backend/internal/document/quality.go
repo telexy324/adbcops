@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	QualityPrompt         = `You are an operations knowledge quality reviewer. Score the document only against the supplied scoring standards. Return strict JSON only, with no markdown fences or extra text.`
-	maxQualityPromptRunes = 20000
+	QualityPrompt           = `You are an operations knowledge quality reviewer. Score the document only against the supplied scoring standards. Return strict JSON only, with no markdown fences or extra text.`
+	maxQualityPromptRunes   = 20000
+	defaultQualityPassScore = 70
 )
 
 var ErrInvalidQualityJSON = errors.New("invalid quality result JSON")
@@ -73,14 +74,22 @@ func ParseQualityResult(raw json.RawMessage) (QualityResult, []byte, error) {
 }
 
 func StatusAfterQualityScore(score int) string {
-	if score >= 70 {
+	return StatusAfterQualityScoreAt(score, defaultQualityPassScore)
+}
+
+func StatusAfterQualityScoreAt(score, passScore int) string {
+	if score >= passScore {
 		return model.DocumentStatusReviewing
 	}
 	return model.DocumentStatusRejected
 }
 
 func CanPublish(document *model.KBDocument) bool {
-	return document != nil && document.QualityScore >= 70 && document.Status == model.DocumentStatusReviewing
+	return CanPublishAt(document, defaultQualityPassScore)
+}
+
+func CanPublishAt(document *model.KBDocument, passScore int) bool {
+	return document != nil && document.QualityScore >= passScore && document.Status == model.DocumentStatusReviewing
 }
 
 func DefaultQualityCriteria() []QualityCriterion {
@@ -94,6 +103,10 @@ func DefaultQualityCriteria() []QualityCriterion {
 }
 
 func BuildQualityResult(document *model.KBDocument, content string, customStandards []model.KBQualityStandard, useDefault bool) QualityResult {
+	return BuildQualityResultAt(document, content, customStandards, useDefault, defaultQualityPassScore)
+}
+
+func BuildQualityResultAt(document *model.KBDocument, content string, customStandards []model.KBQualityStandard, useDefault bool, passScore int) QualityResult {
 	criteria := make([]QualityCriterion, 0, len(customStandards)+len(DefaultQualityCriteria()))
 	standards := make([]string, 0, len(customStandards)+1)
 	if useDefault {
@@ -124,7 +137,7 @@ func BuildQualityResult(document *model.KBDocument, content string, customStanda
 			Missing:  missing,
 			Standard: criterion.Standard,
 		})
-		if score >= 70 {
+		if score >= passScore {
 			findings = append(findings, fmt.Sprintf("%s 达标，匹配：%s", criterion.Name, strings.Join(matched, "、")))
 		} else {
 			suggestions = append(suggestions, fmt.Sprintf("补充「%s」相关内容：%s", criterion.Name, strings.Join(missing, "、")))
@@ -155,11 +168,15 @@ func BuildQualityResult(document *model.KBDocument, content string, customStanda
 }
 
 func BuildQualityLLMPrompt(document *model.KBDocument, content string, customStandards []model.KBQualityStandard, useDefault bool) string {
+	return BuildQualityLLMPromptAt(document, content, customStandards, useDefault, defaultQualityPassScore)
+}
+
+func BuildQualityLLMPromptAt(document *model.KBDocument, content string, customStandards []model.KBQualityStandard, useDefault bool, passScore int) string {
 	var builder strings.Builder
 	builder.WriteString("请根据评分标准对知识手册进行质量评分。必须返回严格 JSON：\n")
 	builder.WriteString(`{"score":0,"summary":"string","findings":["string"],"suggestions":["string"],"criteriaScores":[{"name":"string","score":0,"matched":["string"],"missing":["string"],"standard":"string"}],"standards":["string"],"source":"llm"}`)
 	builder.WriteString("\n\n评分要求：\n")
-	builder.WriteString("- score 必须是 0 到 100 的整数；70 分及以上表示可进入发布审核，低于 70 分表示不达标。\n")
+	builder.WriteString(fmt.Sprintf("- score 必须是 0 到 100 的整数；%d 分及以上表示可进入发布审核，低于 %d 分表示不达标。\n", passScore, passScore))
 	builder.WriteString("- criteriaScores 必须覆盖所选默认标准和自定义标准中的关键条目。\n")
 	builder.WriteString("- findings 写已经满足的证据，suggestions 写需要补充或修正的内容。\n")
 	builder.WriteString("- source 固定返回 llm。\n\n")

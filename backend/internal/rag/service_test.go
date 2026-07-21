@@ -29,6 +29,70 @@ func TestAskWithoutEvidenceReturnsClearNoEvidenceAnswer(t *testing.T) {
 	}
 }
 
+func TestAskWithOnlyDraftChunksSkipsExternalModels(t *testing.T) {
+	store := newFakeRepository()
+	store.llmConfigs[model.LLMPurposeChat] = &model.LLMConfig{ID: 1, Purpose: model.LLMPurposeChat, Enabled: true, IsDefault: true}
+	store.llmConfigs[model.LLMPurposeEmbedding] = &model.LLMConfig{ID: 2, Purpose: model.LLMPurposeEmbedding, Enabled: true, IsDefault: true}
+	documentID := store.addDocument(model.DocumentStatusDraft)
+	store.addChunk(documentID, "已上传但尚未发布的数据库连接池手册。")
+	client := &semanticFakeClient{}
+
+	result, err := NewService(store, nil, client).Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "连接池如何排查？"})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.Answer != noEvidenceAnswer || result.RecallCount != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	if client.chatCalls != 0 || client.embedCalls != 0 || client.rerankCalls != 0 {
+		t.Fatalf("draft-only knowledge called external models: %+v", client)
+	}
+}
+
+func TestAskWithoutReadyEmbeddingIndexSkipsQueryEmbedding(t *testing.T) {
+	store := newFakeRepository()
+	store.noReadyIndex = true
+	store.llmConfigs[model.LLMPurposeEmbedding] = &model.LLMConfig{ID: 2, Purpose: model.LLMPurposeEmbedding, Model: "embed-model", Enabled: true, IsDefault: true}
+	documentID := store.addDocument(model.DocumentStatusPublished)
+	store.addChunk(documentID, "数据库连接池耗尽时先查看活跃连接。")
+	client := &semanticFakeClient{}
+
+	result, err := NewService(store, nil, client).Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "数据库连接池怎么排查？"})
+	if err != nil || result.RecallCount != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if client.embedCalls != 0 {
+		t.Fatalf("query embedding called without a ready chunk index: %d", client.embedCalls)
+	}
+	found := false
+	for _, channel := range result.Retrieval.Channels {
+		if channel.Channel == "dense_vector" && channel.Degraded && strings.Contains(channel.Error, "index") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("retrieval trace did not explain dense degradation: %+v", result.Retrieval.Channels)
+	}
+}
+
+func TestTokenizeExpandsChineseQuestionForLexicalFallback(t *testing.T) {
+	terms := tokenize("数据库连接池耗尽时如何排查？")
+	for _, expected := range []string{"数据库", "连接池", "耗尽", "排查"} {
+		if !containsTerm(terms, expected) {
+			t.Fatalf("tokenize() missing %q: %v", expected, terms)
+		}
+	}
+}
+
+func containsTerm(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAskCitesRealPublishedChunkOnly(t *testing.T) {
 	store := newFakeRepository()
 	publishedID := store.addDocument(model.DocumentStatusPublished)
@@ -273,7 +337,17 @@ type fakeRepository struct {
 	trigramCalls       int
 	denseCalls         int
 	failDense          bool
+	noReadyIndex       bool
 	lastFilter         repository.KnowledgeRetrievalFilter
+}
+
+func (f *fakeRepository) HasPublishedChunks(_ context.Context) (bool, error) {
+	for documentID, chunks := range f.chunks {
+		if f.documents[documentID] == model.DocumentStatusPublished && len(chunks) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeRepository) rankedSearch(query string, limit int) []repository.RankedKnowledgeChunk {
@@ -539,6 +613,9 @@ func (f *fakeRepository) FindLLMConfigByID(_ context.Context, id int64) (*model.
 }
 
 func (f *fakeRepository) FindReadyEmbeddingModelRevision(_ context.Context, _ int64, _ *int64) (string, error) {
+	if f.noReadyIndex {
+		return "", repository.ErrNotFound
+	}
 	return "test-revision", nil
 }
 
@@ -550,6 +627,7 @@ func (f *fakeRepository) CreateQARecord(_ context.Context, record *model.QARecor
 }
 
 type semanticFakeClient struct {
+	chatCalls   int
 	embedCalls  int
 	rerankCalls int
 }
@@ -565,6 +643,7 @@ func (f *rerankFailureClient) Rerank(_ context.Context, _ llmsvc.RerankRequest) 
 }
 
 func (f *semanticFakeClient) Chat(_ context.Context, req llmsvc.ChatRequest) (*llmsvc.ChatResult, error) {
+	f.chatCalls++
 	return &llmsvc.ChatResult{Content: "answer", Model: req.Model}, nil
 }
 

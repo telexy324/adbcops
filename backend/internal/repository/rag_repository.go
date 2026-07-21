@@ -100,6 +100,16 @@ func (r *GORMRAGRepository) retrievalScope(ctx context.Context, filter Knowledge
 	return query
 }
 
+func (r *GORMRAGRepository) HasPublishedChunks(ctx context.Context) (bool, error) {
+	var marker struct{ ID int64 }
+	result := r.retrievalScope(ctx, KnowledgeRetrievalFilter{Now: time.Now().UTC()}).
+		Select("kb_chunk.id").Limit(1).Scan(&marker)
+	if result.Error != nil {
+		return false, fmt.Errorf("check published kb chunks: %w", result.Error)
+	}
+	return result.RowsAffected > 0 && marker.ID > 0, nil
+}
+
 func rowsToRankedKnowledgeChunks(rows []rankedKnowledgeChunkRow) []RankedKnowledgeChunk {
 	result := make([]RankedKnowledgeChunk, 0, len(rows))
 	for _, row := range rows {
@@ -121,20 +131,22 @@ func (r *GORMRAGRepository) SearchChunksTrigram(ctx context.Context, query strin
 
 func (r *GORMRAGRepository) SearchChunksExact(ctx context.Context, terms []string, filter KnowledgeRetrievalFilter, limit int) ([]RankedKnowledgeChunk, error) {
 	query := r.retrievalScope(ctx, filter)
-	matched := 0
+	conditions := make([]string, 0, len(terms))
+	args := make([]any, 0, len(terms)*2)
 	for _, term := range terms {
 		term = strings.TrimSpace(term)
 		if term == "" {
 			continue
 		}
-		query = query.Where("(kb_chunk.content ILIKE ? OR coalesce(kb_chunk.search_text, '') ILIKE ?)", "%"+term+"%", "%"+term+"%")
-		matched++
+		conditions = append(conditions, "(kb_chunk.content ILIKE ? OR coalesce(kb_chunk.search_text, '') ILIKE ?)")
+		args = append(args, "%"+term+"%", "%"+term+"%")
 	}
-	if matched == 0 {
+	if len(conditions) == 0 {
 		return nil, nil
 	}
+	query = query.Where("("+strings.Join(conditions, " OR ")+")", args...)
 	var rows []rankedKnowledgeChunkRow
-	if err := query.Select("kb_chunk.*, ?::float8 AS retrieval_score", float64(matched)).
+	if err := query.Select("kb_chunk.*, ?::float8 AS retrieval_score", float64(len(conditions))).
 		Order("kb_chunk.id ASC").Limit(limit).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("exact search kb chunks: %w", err)
 	}

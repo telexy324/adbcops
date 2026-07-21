@@ -862,6 +862,30 @@ export function toAPIErrorMessage(error: unknown) {
   return "请求失败";
 }
 
+export function toPublicationGateErrorMessage(error: unknown) {
+  if (
+    isAxiosError<{ message?: string; data?: PublicationGate }>(error) &&
+    error.response?.data?.data?.checks
+  ) {
+    const failed = error.response.data.data.checks
+      .filter((check) => !check.passed)
+      .map((check) => publicationGateLabel(check.name));
+    if (failed.length) return `发布门禁未通过：${failed.join("、")}`;
+  }
+  return toAPIErrorMessage(error);
+}
+
+export function publicationGateLabel(name: string) {
+  const labels: Record<string, string> = {
+    parse: "文档解析",
+    quality: "质量评分",
+    embedding: "向量索引",
+    retrieval: "检索冒烟测试",
+    review: "人工审核",
+  };
+  return labels[name] ?? name;
+}
+
 function appendIfPresent(form: FormData, key: string, value?: string) {
   if (value && value.trim() !== "") {
     form.append(key, value.trim());

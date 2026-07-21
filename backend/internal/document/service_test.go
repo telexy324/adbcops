@@ -229,6 +229,33 @@ func TestReviewQualitySetsStatusByScore(t *testing.T) {
 	}
 }
 
+func TestReviewQualityUsesConfiguredPassScore(t *testing.T) {
+	store := newFakeRepository()
+	service := newTestService(t, store, t.TempDir(), 1024).WithQualityPassScore(80)
+	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
+	admin := &model.AppUser{ID: 1, Role: model.RoleAdmin}
+	document, err := service.Upload(context.Background(), owner, newFileHeader(t, "configured.md", "# configured threshold"), UploadMetadata{Title: "Configured"})
+	if err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	if _, err := service.Reprocess(context.Background(), owner, document.ID); err != nil {
+		t.Fatalf("Reprocess() error = %v", err)
+	}
+
+	below, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":79,"summary":"below","findings":["x"],"suggestions":["y"]}`))
+	if err != nil || below.Status != model.DocumentStatusRejected || service.CanPublish(below) {
+		t.Fatalf("below threshold document=%+v err=%v", below, err)
+	}
+	passing, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":80,"summary":"pass","findings":["x"],"suggestions":["y"]}`))
+	if err != nil || passing.Status != model.DocumentStatusReviewing || !service.CanPublish(passing) {
+		t.Fatalf("passing document=%+v err=%v", passing, err)
+	}
+	prompt := BuildQualityLLMPromptAt(passing, "content", nil, true, 80)
+	if !strings.Contains(prompt, "80 分及以上") {
+		t.Fatalf("prompt does not contain configured threshold: %s", prompt)
+	}
+}
+
 func TestAutoReviewQualityUsesDefaultAndCustomStandards(t *testing.T) {
 	store := newFakeRepository()
 	service := newTestServiceWithChunk(t, store, t.TempDir(), 4096, 120, 10)

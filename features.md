@@ -4958,7 +4958,8 @@ GET /api/health
 - 自动评分可使用默认标准；
 - 自动评分可同时使用默认标准和自定义标准；
 - 已配置默认 chat LLM 时，自动评分必须调用 LLM 接口完成评分；
-- score < 70 不可发布。
+- 旧版文档质检以 `KNOWLEDGE_DOCUMENT_PASS_SCORE` 作为可进入发布审核的最低分，默认 70；
+- 结构化评分以 Quality Profile 的 `passScore` 为准，管理员可在 Standard Builder 中配置通过分数和警告分数。
 
 ### Task 1.8：检索增强
 
@@ -8255,6 +8256,7 @@ KNOWLEDGE_RERANK_TIMEOUT_SECONDS=20
 
 KNOWLEDGE_QUALITY_TIMEOUT_SECONDS=180
 KNOWLEDGE_QUALITY_MAX_PARALLEL_RULES=6
+KNOWLEDGE_DOCUMENT_PASS_SCORE=70
 KNOWLEDGE_DEFAULT_PASS_SCORE=80
 KNOWLEDGE_DEFAULT_WARNING_SCORE=70
 
@@ -8470,7 +8472,10 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - exact；
 - metadata；
 - RRF；
-- retrieval trace。
+- retrieval trace；
+- 正式问答仅检索 Published 文档的当前发布版本，仅上传或仅生成 Chunk 的草稿不会进入召回；
+- 问题 Embedding 仅在存在匹配模型的 Ready Chunk Embedding Index 时调用；无 Ready 索引时跳过向量调用并降级到 lexical；
+- 中文问题的本地 Query Understanding 生成有限二至四字词组，exact 通道按任一关键词匹配，避免整句匹配导致零召回。
 
 验收：
 
@@ -8478,7 +8483,9 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 2. Embedding 失败降级；
 3. 权限/status/validity 先过滤；
 4. 返回各通道 Rank；
-5. RRF 单测。
+5. RRF 单测；
+6. 仅存在 Draft Chunk 时快速返回无 Published Evidence，且不调用外部模型；
+7. 无 Ready Chunk Embedding Index 时不发送问题 Embedding 请求。
 
 ### Task 1.9B：Rerank 与 Context Builder
 
@@ -8534,6 +8541,7 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 1. 新版本不覆盖旧版本；
 2. 历史 Citation 仍可访问；
 3. Gate 检查 Parse/Quality/Embedding/Retrieval/Review；
+   门禁失败时接口和管理页面明确展示未通过的检查项；质量检查使用该版本最新一次已完成评分，评分发布状态由 Review 检查独立判断；
 4. 当前检索默认最新有效版本。
 
 ### Task 1.11A：Knowledge Center 前端

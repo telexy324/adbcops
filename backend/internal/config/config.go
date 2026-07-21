@@ -11,23 +11,24 @@ import (
 )
 
 const (
-	defaultEnvironment     = "dev"
-	defaultPort            = 8080
-	defaultTimezone        = "Asia/Shanghai"
-	defaultDBHost          = "127.0.0.1"
-	defaultDBPort          = 5432
-	defaultDBUser          = "postgres"
-	defaultDBName          = "aiops"
-	defaultDBSSLMode       = "disable"
-	defaultJWTExpiry       = 12
-	defaultLocalFileDir    = "./data/uploads"
-	defaultMaxUploadBytes  = 52428800
-	defaultRAGChunkSize    = 800
-	defaultRAGChunkOverlap = 100
-	defaultParseMaxPages   = 1000
-	defaultParseMaxBlocks  = 50000
-	defaultParseTimeout    = 120
-	defaultWriteTimeout    = 300
+	defaultEnvironment       = "dev"
+	defaultPort              = 8080
+	defaultTimezone          = "Asia/Shanghai"
+	defaultDBHost            = "127.0.0.1"
+	defaultDBPort            = 5432
+	defaultDBUser            = "postgres"
+	defaultDBName            = "aiops"
+	defaultDBSSLMode         = "disable"
+	defaultJWTExpiry         = 12
+	defaultLocalFileDir      = "./data/uploads"
+	defaultMaxUploadBytes    = 52428800
+	defaultRAGChunkSize      = 800
+	defaultRAGChunkOverlap   = 100
+	defaultParseMaxPages     = 1000
+	defaultParseMaxBlocks    = 50000
+	defaultParseTimeout      = 120
+	defaultWriteTimeout      = 300
+	defaultDocumentPassScore = 70
 )
 
 var allowedSSLMode = map[string]struct{}{
@@ -85,6 +86,10 @@ type HTTPServerConfig struct {
 	WriteTimeout time.Duration
 }
 
+type KnowledgeQualityConfig struct {
+	DocumentPassScore int
+}
+
 // DSN returns a PostgreSQL URL. The returned value contains the database
 // password and must only be passed directly to database drivers.
 func (c DatabaseConfig) DSN() string {
@@ -102,16 +107,17 @@ func (c DatabaseConfig) DSN() string {
 
 // Config contains the process-level settings needed by the HTTP server.
 type Config struct {
-	Environment    string
-	Port           int
-	Timezone       string
-	Database       DatabaseConfig
-	Auth           AuthConfig
-	Credential     CredentialConfig
-	FileStorage    FileStorageConfig
-	RAG            RAGConfig
-	KnowledgeParse KnowledgeParseConfig
-	HTTPServer     HTTPServerConfig
+	Environment      string
+	Port             int
+	Timezone         string
+	Database         DatabaseConfig
+	Auth             AuthConfig
+	Credential       CredentialConfig
+	FileStorage      FileStorageConfig
+	RAG              RAGConfig
+	KnowledgeParse   KnowledgeParseConfig
+	HTTPServer       HTTPServerConfig
+	KnowledgeQuality KnowledgeQualityConfig
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -153,19 +159,32 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	knowledgeQuality, err := loadKnowledgeQualityConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		Environment:    valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
-		Port:           port,
-		Timezone:       timezone,
-		Database:       database,
-		Auth:           auth,
-		Credential:     credential,
-		FileStorage:    fileStorage,
-		RAG:            rag,
-		KnowledgeParse: knowledgeParse,
-		HTTPServer:     httpServer,
+		Environment:      valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
+		Port:             port,
+		Timezone:         timezone,
+		Database:         database,
+		Auth:             auth,
+		Credential:       credential,
+		FileStorage:      fileStorage,
+		RAG:              rag,
+		KnowledgeParse:   knowledgeParse,
+		HTTPServer:       httpServer,
+		KnowledgeQuality: knowledgeQuality,
 	}, nil
+}
+
+func loadKnowledgeQualityConfig() (KnowledgeQualityConfig, error) {
+	passScore, err := loadPositiveInt("KNOWLEDGE_DOCUMENT_PASS_SCORE", defaultDocumentPassScore, 100)
+	if err != nil {
+		return KnowledgeQualityConfig{}, err
+	}
+	return KnowledgeQualityConfig{DocumentPassScore: passScore}, nil
 }
 
 func loadHTTPServerConfig() (HTTPServerConfig, error) {

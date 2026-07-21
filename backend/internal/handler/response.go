@@ -13,13 +13,17 @@ func success(c *gin.Context, data any) {
 }
 
 func failure(c *gin.Context, status, code int, message string) {
+	failureWithData(c, status, code, message, nil)
+}
+
+func failureWithData(c *gin.Context, status, code int, message string, data any) {
 	if len(c.Errors) == 0 {
 		_ = c.Error(fmt.Errorf("%s", message))
 	}
 	c.JSON(status, gin.H{
 		"code":      code,
 		"message":   message,
-		"data":      nil,
+		"data":      data,
 		"requestId": appmiddleware.GetRequestID(c),
 	})
 }

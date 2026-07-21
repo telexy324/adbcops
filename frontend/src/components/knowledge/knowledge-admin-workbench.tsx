@@ -32,10 +32,12 @@ import {
   parseDocumentVersion,
   publishDocumentVersion,
   publishQualityEvaluation,
+  publicationGateLabel,
   publishStructuredQualityStandard,
   runRetrievalLab,
   runRetrievalSmoke,
   toAPIErrorMessage,
+  toPublicationGateErrorMessage,
   uploadDocumentVersion,
   type DocumentBlock,
   type KnowledgeDocument,
@@ -310,7 +312,12 @@ function DocumentPipeline({
         queryKey: ["knowledge", "documents"],
       });
     },
-    onError: (error) => setMessage(toAPIErrorMessage(error)),
+    onError: async (error) => {
+      setMessage(toPublicationGateErrorMessage(error));
+      await queryClient.invalidateQueries({
+        queryKey: ["knowledge", "publication-gate", versionID],
+      });
+    },
   });
 
   if (!document) return <Empty text="请先从文档列表选择一份文档。" />;
@@ -580,10 +587,21 @@ function DocumentPipeline({
                   ) : (
                     <span className="mb-1 block">●</span>
                   )}
-                  {check.name}
+                  {publicationGateLabel(check.name)}
                 </div>
               ))}
             </div>
+            {gate.data && !gate.data.canPublish && (
+              <div className="space-y-1 text-xs text-rose-200">
+                {gate.data.checks
+                  .filter((check) => !check.passed)
+                  .map((check) => (
+                    <p key={check.name}>
+                      {publicationGateLabel(check.name)}：{check.message}
+                    </p>
+                  ))}
+              </div>
+            )}
             <Button
               onClick={() => publish.mutate()}
               disabled={!gate.data?.canPublish || publish.isPending}
@@ -602,6 +620,8 @@ function StandardBuilder() {
   const [name, setName] = useState("Runbook 质量标准");
   const [version, setVersion] = useState("v1.0");
   const [profileKey, setProfileKey] = useState("runbook_default");
+  const [passScore, setPassScore] = useState("70");
+  const [warningScore, setWarningScore] = useState("60");
   const [criterion, setCriterion] = useState(initialCriterion);
   const [message, setMessage] = useState("");
   const standards = useQuery({
@@ -618,14 +638,20 @@ function StandardBuilder() {
           name: `${name} Profile`,
           applicableDocTypes: ["runbook"],
           totalScore: criterion.maxScore,
-          passScore: criterion.maxScore * 0.7,
-          warningScore: criterion.maxScore * 0.6,
+          passScore: Number(passScore),
+          warningScore: Number(warningScore),
           criteria: [criterion],
         },
       ],
     }),
-    [criterion, name, profileKey, version],
+    [criterion, name, passScore, profileKey, version, warningScore],
   );
+  const thresholdsValid =
+    Number.isFinite(Number(passScore)) &&
+    Number.isFinite(Number(warningScore)) &&
+    Number(warningScore) >= 0 &&
+    Number(warningScore) <= Number(passScore) &&
+    Number(passScore) <= criterion.maxScore;
   const create = useMutation({
     mutationFn: () => createStructuredQualityStandard(standard),
     onSuccess: async () => {
@@ -658,7 +684,7 @@ function StandardBuilder() {
             {message}
           </p>
         )}
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-5">
           <DarkField label="标准名称">
             <Input
               value={name}
@@ -675,6 +701,26 @@ function StandardBuilder() {
             <Input
               value={profileKey}
               onChange={(event) => setProfileKey(event.target.value)}
+            />
+          </DarkField>
+          <DarkField label="通过分数">
+            <Input
+              type="number"
+              min="1"
+              max={criterion.maxScore}
+              step="0.1"
+              value={passScore}
+              onChange={(event) => setPassScore(event.target.value)}
+            />
+          </DarkField>
+          <DarkField label="警告分数">
+            <Input
+              type="number"
+              min="0"
+              max={passScore || criterion.maxScore}
+              step="0.1"
+              value={warningScore}
+              onChange={(event) => setWarningScore(event.target.value)}
             />
           </DarkField>
         </div>
@@ -792,7 +838,12 @@ function StandardBuilder() {
         </div>
         <Button
           onClick={() => create.mutate()}
-          disabled={!name.trim() || !version.trim() || create.isPending}
+          disabled={
+            !name.trim() ||
+            !version.trim() ||
+            !thresholdsValid ||
+            create.isPending
+          }
         >
           {create.isPending ? (
             <Loader2 className="size-4 animate-spin" />
@@ -818,7 +869,8 @@ function StandardBuilder() {
                   key={profile.id ?? profile.profileKey}
                   className="mt-1 text-xs text-slate-400"
                 >
-                  Profile ID {profile.id ?? "draft"} · {profile.profileKey}
+                  Profile ID {profile.id ?? "draft"} · {profile.profileKey} ·
+                  通过 {profile.passScore} / 警告 {profile.warningScore}
                 </p>
               ))}
               {item.status === "draft" && item.id && (

@@ -11,6 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_PORT", "")
 	t.Setenv("APP_TIMEZONE", "")
 	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "")
+	t.Setenv("KNOWLEDGE_DOCUMENT_PASS_SCORE", "")
 	setDatabaseEnv(t)
 
 	cfg, err := Load()
@@ -41,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPServer.WriteTimeout != time.Duration(defaultWriteTimeout)*time.Second {
 		t.Fatalf("HTTPServer = %+v", cfg.HTTPServer)
 	}
+	if cfg.KnowledgeQuality.DocumentPassScore != defaultDocumentPassScore {
+		t.Fatalf("KnowledgeQuality = %+v", cfg.KnowledgeQuality)
+	}
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
@@ -61,6 +65,7 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("KNOWLEDGE_PARSE_MAX_BLOCKS", "9000")
 	t.Setenv("KNOWLEDGE_PARSE_TIMEOUT_SECONDS", "30")
 	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "600")
+	t.Setenv("KNOWLEDGE_DOCUMENT_PASS_SCORE", "85")
 	setAuthEnv(t)
 	setCredentialEnv(t)
 
@@ -94,6 +99,9 @@ func TestLoadFromEnvironment(t *testing.T) {
 	if cfg.HTTPServer.WriteTimeout != 600*time.Second {
 		t.Fatalf("HTTPServer = %+v", cfg.HTTPServer)
 	}
+	if cfg.KnowledgeQuality.DocumentPassScore != 85 {
+		t.Fatalf("KnowledgeQuality = %+v", cfg.KnowledgeQuality)
+	}
 }
 
 func TestLoadRejectsInvalidHTTPServerWriteTimeout(t *testing.T) {
@@ -101,6 +109,14 @@ func TestLoadRejectsInvalidHTTPServerWriteTimeout(t *testing.T) {
 	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "3601")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid HTTP_SERVER_WRITE_TIMEOUT_SECONDS error")
+	}
+}
+
+func TestLoadRejectsInvalidDocumentPassScore(t *testing.T) {
+	setDatabaseEnv(t)
+	t.Setenv("KNOWLEDGE_DOCUMENT_PASS_SCORE", "101")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid KNOWLEDGE_DOCUMENT_PASS_SCORE error")
 	}
 }
 

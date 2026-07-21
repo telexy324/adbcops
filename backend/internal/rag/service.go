@@ -30,6 +30,7 @@ type Repository interface {
 	CreateConversation(ctx context.Context, conversation *model.Conversation) error
 	FindConversationByID(ctx context.Context, id int64) (*model.Conversation, error)
 	CreateMessage(ctx context.Context, message *model.Message) error
+	HasPublishedChunks(ctx context.Context) (bool, error)
 	SearchChunksTrigram(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
 	SearchChunksExact(ctx context.Context, terms []string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
 	SearchChunksTitleSection(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error)
@@ -108,12 +109,21 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	if err != nil {
 		return nil, err
 	}
-	llmConfig, llmCredential, llmReady, err := s.loadLLM(ctx)
+	hasPublishedChunks, err := s.repository.HasPublishedChunks(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("check published knowledge: %w", err)
 	}
-	embeddingConfig, embeddingCredential, embeddingReady := s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
-	rerankConfig, rerankCredential, rerankReady := s.loadOptionalModel(ctx, model.LLMPurposeRerank)
+	var llmConfig, embeddingConfig, rerankConfig *model.LLMConfig
+	var llmCredential, embeddingCredential, rerankCredential modelCredential
+	var llmReady, embeddingReady, rerankReady bool
+	if hasPublishedChunks {
+		llmConfig, llmCredential, llmReady, err = s.loadLLM(ctx)
+		if err != nil {
+			return nil, err
+		}
+		embeddingConfig, embeddingCredential, embeddingReady = s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
+		rerankConfig, rerankCredential, rerankReady = s.loadOptionalModel(ctx, model.LLMPurposeRerank)
+	}
 	embeddingRevision := s.readyEmbeddingRevision(ctx, embeddingConfig, embeddingReady, nil, "")
 	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
 	rewritten := understood.NormalizedQuery
@@ -366,16 +376,43 @@ func modelName(config *model.LLMConfig, ready bool) string {
 
 func tokenize(value string) []string {
 	value = strings.ToLower(value)
-	var terms []string
+	terms := []string{}
+	seen := map[string]struct{}{}
+	appendTerm := func(term string) {
+		term = strings.TrimSpace(term)
+		if len([]rune(term)) < 2 {
+			return
+		}
+		if _, exists := seen[term]; exists {
+			return
+		}
+		seen[term] = struct{}{}
+		terms = append(terms, term)
+	}
 	for _, field := range strings.FieldsFunc(value, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsPunct(r)
 	}) {
-		term := strings.TrimSpace(field)
-		if len([]rune(term)) >= 2 {
-			terms = append(terms, term)
+		appendTerm(field)
+		runes := []rune(strings.TrimSpace(field))
+		if !containsHan(runes) || len(runes) <= 4 {
+			continue
+		}
+		for size := 2; size <= 4; size++ {
+			for start := 0; start+size <= len(runes) && len(terms) < 32; start++ {
+				appendTerm(string(runes[start : start+size]))
+			}
 		}
 	}
 	return terms
+}
+
+func containsHan(value []rune) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildContextCitations(blocks []ContextBlock) []Citation {

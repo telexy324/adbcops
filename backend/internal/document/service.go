@@ -72,15 +72,16 @@ type SecretManager interface {
 }
 
 type Service struct {
-	documents      Repository
-	secrets        SecretManager
-	llmClient      llmsvc.Client
-	localFileDir   string
-	maxUploadBytes int64
-	chunkSize      int
-	chunkOverlap   int
-	parserRegistry *ParserRegistry
-	publication    PublicationRepository
+	documents        Repository
+	secrets          SecretManager
+	llmClient        llmsvc.Client
+	localFileDir     string
+	maxUploadBytes   int64
+	chunkSize        int
+	chunkOverlap     int
+	parserRegistry   *ParserRegistry
+	publication      PublicationRepository
+	qualityPassScore int
 }
 
 type UploadMetadata struct {
@@ -117,9 +118,20 @@ func NewService(documents Repository, localFileDir string, maxUploadBytes int64,
 	if err != nil {
 		return nil, fmt.Errorf("initialize parser registry: %w", err)
 	}
-	service := &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap, parserRegistry: parserRegistry}
+	service := &Service{documents: documents, localFileDir: localFileDir, maxUploadBytes: maxUploadBytes, chunkSize: chunkSize, chunkOverlap: chunkOverlap, parserRegistry: parserRegistry, qualityPassScore: defaultQualityPassScore}
 	service.publication, _ = documents.(PublicationRepository)
 	return service, nil
+}
+
+func (s *Service) WithQualityPassScore(score int) *Service {
+	if score >= 1 && score <= 100 {
+		s.qualityPassScore = score
+	}
+	return s
+}
+
+func (s *Service) CanPublish(document *model.KBDocument) bool {
+	return CanPublishAt(document, s.qualityPassScore)
 }
 
 func (s *Service) WithQualityLLM(secrets SecretManager, client llmsvc.Client) *Service {
@@ -386,7 +398,7 @@ func (s *Service) ReviewQuality(ctx context.Context, actor *model.AppUser, id in
 	if err != nil {
 		return nil, QualityResult{}, err
 	}
-	status := StatusAfterQualityScore(result.Score)
+	status := StatusAfterQualityScoreAt(result.Score, s.qualityPassScore)
 	updated, err := s.documents.UpdateDocumentQuality(ctx, document.ID, result.Score, normalized, status)
 	if err != nil {
 		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
@@ -427,7 +439,7 @@ func (s *Service) AutoReviewQuality(ctx context.Context, actor *model.AppUser, i
 	if err != nil {
 		return nil, QualityResult{}, fmt.Errorf("normalize quality result: %w", err)
 	}
-	status := StatusAfterQualityScore(result.Score)
+	status := StatusAfterQualityScoreAt(result.Score, s.qualityPassScore)
 	updated, err := s.documents.UpdateDocumentQuality(ctx, document.ID, result.Score, normalized, status)
 	if err != nil {
 		return nil, QualityResult{}, fmt.Errorf("update document quality: %w", err)
@@ -440,7 +452,7 @@ func (s *Service) buildAutoQualityResult(ctx context.Context, document *model.KB
 	if err == nil && llmReady {
 		return result, nil
 	}
-	fallback := BuildQualityResult(document, content, standards, input.UseDefault)
+	fallback := BuildQualityResultAt(document, content, standards, input.UseDefault, s.qualityPassScore)
 	if llmReady && err != nil {
 		fallback.Source = "rule-based-fallback"
 		fallback.Suggestions = append(fallback.Suggestions, "LLM 评分接口暂不可用，已按本地规则生成临时评分，请稍后重新发起自动评分。")
@@ -473,7 +485,7 @@ func (s *Service) buildLLMQualityResult(ctx context.Context, document *model.KBD
 		Temperature: config.Temperature,
 		Messages: []llmsvc.ChatMessage{
 			{Role: "system", Content: QualityPrompt},
-			{Role: "user", Content: BuildQualityLLMPrompt(document, content, standards, useDefault)},
+			{Role: "user", Content: BuildQualityLLMPromptAt(document, content, standards, useDefault, s.qualityPassScore)},
 		},
 	})
 	if err != nil {
@@ -603,7 +615,7 @@ func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id i
 		}
 		return s.documents.FindDocumentByID(ctx, document.ID)
 	}
-	if action == model.DocumentReviewActionPublish && !CanPublish(document) {
+	if action == model.DocumentReviewActionPublish && !s.CanPublish(document) {
 		return nil, ErrCannotPublish
 	}
 	comment := optionalReviewComment(input.Comment)

@@ -125,3 +125,23 @@ func TestPublicationGateAndPublishSupersedesCurrentVersion(t *testing.T) {
 		t.Fatalf("candidate status = %q", base.versions[candidateID].Status)
 	}
 }
+
+func TestPublicationGateSeparatesQualityFromReview(t *testing.T) {
+	base := newFakeRepository()
+	owner := int64(7)
+	versionID := int64(2)
+	base.documents[1] = &model.KBDocument{ID: 1, CreatedBy: &owner}
+	base.versions[versionID] = &model.KBDocumentVersion{ID: versionID, DocumentID: 1, Status: model.DocumentVersionStatusReviewing, ParseQuality: ParseQuality{ParseSuccess: true, BlockCount: 1}.JSON()}
+	store := &publicationTestRepository{fakeRepository: base,
+		quality: &model.KBQualityEvaluation{ID: 10, GateStatus: "pass", Status: "completed", ReviewStatus: "draft"},
+		index:   &model.KBEmbeddingIndex{ID: 20, Status: model.EmbeddingIndexReady, ChunkCount: 1, EmbeddedCount: 1},
+		run:     &model.KBRetrievalEvaluationRun{ID: 30, Status: model.RetrievalEvaluationCompleted, Passed: true},
+	}
+	gate, err := (&Service{documents: store, publication: store}).EvaluatePublicationGate(context.Background(), &model.AppUser{ID: 1, Role: model.RoleAdmin}, versionID)
+	if err != nil {
+		t.Fatalf("EvaluatePublicationGate() error = %v", err)
+	}
+	if gate.CanPublish || len(gate.Checks) != 5 || !gate.Checks[1].Passed || gate.Checks[4].Passed {
+		t.Fatalf("gate = %+v", gate)
+	}
+}

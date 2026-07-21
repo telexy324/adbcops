@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	documentsvc "aiops-platform/backend/internal/document"
@@ -326,7 +327,8 @@ func (h *DocumentHandler) PublishVersion(c *gin.Context) {
 	document, gate, err := h.service.PublishVersion(c.Request.Context(), actor, versionID, request.Comment)
 	if err != nil {
 		if errors.Is(err, documentsvc.ErrPublicationGate) {
-			failure(c, http.StatusConflict, 40903, "publication gate is not satisfied")
+			recordFailureError(c, err, "publish document version failed")
+			failureWithData(c, http.StatusConflict, 40903, publicationGateFailureMessage(gate), gate)
 			return
 		}
 		if handleDocumentError(c, err, "publish document version failed") {
@@ -334,6 +336,22 @@ func (h *DocumentHandler) PublishVersion(c *gin.Context) {
 		}
 	}
 	success(c, gin.H{"document": toDocumentResponse(document), "gate": gate})
+}
+
+func publicationGateFailureMessage(gate *documentsvc.PublicationGate) string {
+	if gate == nil {
+		return "publication gate is not satisfied"
+	}
+	failed := make([]string, 0, len(gate.Checks))
+	for _, check := range gate.Checks {
+		if !check.Passed {
+			failed = append(failed, check.Name)
+		}
+	}
+	if len(failed) == 0 {
+		return "publication gate is not satisfied"
+	}
+	return "publication gate is not satisfied: " + strings.Join(failed, ", ")
 }
 
 func (h *DocumentHandler) DeprecateVersion(c *gin.Context) {
@@ -569,7 +587,7 @@ func (h *DocumentHandler) Review(c *gin.Context) {
 		success(c, gin.H{
 			"document":   toDocumentResponse(document),
 			"action":     request.Action,
-			"canPublish": documentsvc.CanPublish(document),
+			"canPublish": h.service.CanPublish(document),
 		})
 		return
 	}
@@ -589,7 +607,7 @@ func (h *DocumentHandler) Review(c *gin.Context) {
 			success(c, gin.H{
 				"document":      toDocumentResponse(document),
 				"qualityResult": result,
-				"canPublish":    documentsvc.CanPublish(document),
+				"canPublish":    h.service.CanPublish(document),
 			})
 			return
 		}
@@ -603,7 +621,7 @@ func (h *DocumentHandler) Review(c *gin.Context) {
 	success(c, gin.H{
 		"document":      toDocumentResponse(document),
 		"qualityResult": result,
-		"canPublish":    documentsvc.CanPublish(document),
+		"canPublish":    h.service.CanPublish(document),
 	})
 }
 
