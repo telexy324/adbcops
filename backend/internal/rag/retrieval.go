@@ -153,6 +153,11 @@ func localQueryUnderstanding(question string) QueryUnderstanding {
 	return understood
 }
 
+func broadQueryUnderstanding(question string) QueryUnderstanding {
+	normalized := ruleBasedRewrite(question)
+	return QueryUnderstanding{NormalizedQuery: normalized, Keywords: tokenize(normalized)}
+}
+
 func cleanTerms(values []string) []string {
 	seen := map[string]struct{}{}
 	result := make([]string, 0, len(values))

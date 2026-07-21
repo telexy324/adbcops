@@ -319,6 +319,8 @@ Content-Type: application/json
 
 新版版本发布前检查 Parse、Quality、Embedding、Retrieval Smoke Test 和 Review。发布接口返回 `40903` 时，`message` 会列出失败项，`data` 返回完整 Publication Gate；Quality 使用该版本最新一次已完成评分，Review 独立检查该评分是否已发布。
 
+知识问答在不存在 Ready Embedding Index 时跳过 Query Embedding 并使用 lexical/exact 检索。LLM Query Understanding 返回的元数据或 must-have 条件导致零候选时，服务端会自动使用本地关键词进行一次宽松重试，避免模型推断条件误过滤已发布内容。
+
 ### 知识检索
 
 ```http

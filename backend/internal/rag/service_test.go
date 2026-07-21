@@ -57,7 +57,7 @@ func TestAskWithoutReadyEmbeddingIndexSkipsQueryEmbedding(t *testing.T) {
 	store.addChunk(documentID, "数据库连接池耗尽时先查看活跃连接。")
 	client := &semanticFakeClient{}
 
-	result, err := NewService(store, nil, client).Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "数据库连接池怎么排查？"})
+	result, err := NewService(store, nil, client).Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "生产环境数据库连接池怎么排查？"})
 	if err != nil || result.RecallCount != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -72,6 +72,30 @@ func TestAskWithoutReadyEmbeddingIndexSkipsQueryEmbedding(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("retrieval trace did not explain dense degradation: %+v", result.Retrieval.Channels)
+	}
+}
+
+func TestAskRetriesLocallyWhenLLMQueryFiltersRemoveAllCandidates(t *testing.T) {
+	base := newFakeRepository()
+	base.noReadyIndex = true
+	base.llmConfigs[model.LLMPurposeChat] = &model.LLMConfig{ID: 1, Purpose: model.LLMPurposeChat, Model: "chat-model", Enabled: true, IsDefault: true}
+	documentID := base.addDocument(model.DocumentStatusPublished)
+	base.addChunk(documentID, "数据库连接池耗尽时先查看活跃连接和慢查询。")
+	store := &restrictiveFilterRepository{fakeRepository: base}
+	client := &misleadingUnderstandingClient{}
+
+	result, err := NewService(store, nil, client).Ask(context.Background(), &model.AppUser{ID: 7, Role: model.RoleUser}, AskInput{Question: "数据库连接池怎么排查？"})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if result.RecallCount != 1 || len(result.Citations) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Retrieval.Understanding.SystemName != "" || result.Retrieval.Understanding.ComponentName != "" || result.Retrieval.Understanding.Environment != "" {
+		t.Fatalf("fallback understanding still contains LLM filters: %+v", result.Retrieval.Understanding)
+	}
+	if len(result.Retrieval.Channels) == 0 || result.Retrieval.Channels[0].Channel != "local_query_fallback" {
+		t.Fatalf("fallback trace = %+v", result.Retrieval.Channels)
 	}
 }
 
@@ -630,6 +654,54 @@ type semanticFakeClient struct {
 	chatCalls   int
 	embedCalls  int
 	rerankCalls int
+}
+
+type restrictiveFilterRepository struct {
+	*fakeRepository
+}
+
+func (r *restrictiveFilterRepository) reject(filter repository.KnowledgeRetrievalFilter) bool {
+	return filter.SystemName != "" || filter.ComponentName != "" || filter.Environment != "" || len(filter.DocTypes) > 0 || len(filter.MustHaveTerms) > 0
+}
+
+func (r *restrictiveFilterRepository) SearchChunksTrigram(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	if r.reject(filter) {
+		return nil, nil
+	}
+	return r.fakeRepository.SearchChunksTrigram(ctx, query, filter, limit)
+}
+
+func (r *restrictiveFilterRepository) SearchChunksExact(ctx context.Context, terms []string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	if r.reject(filter) {
+		return nil, nil
+	}
+	return r.fakeRepository.SearchChunksExact(ctx, terms, filter, limit)
+}
+
+func (r *restrictiveFilterRepository) SearchChunksTitleSection(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	if r.reject(filter) {
+		return nil, nil
+	}
+	return r.fakeRepository.SearchChunksTitleSection(ctx, query, filter, limit)
+}
+
+func (r *restrictiveFilterRepository) SearchChunksPossibleQuestions(ctx context.Context, query string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+	if r.reject(filter) {
+		return nil, nil
+	}
+	return r.fakeRepository.SearchChunksPossibleQuestions(ctx, query, filter, limit)
+}
+
+type misleadingUnderstandingClient struct {
+	chatCalls int
+}
+
+func (c *misleadingUnderstandingClient) Chat(_ context.Context, req llmsvc.ChatRequest) (*llmsvc.ChatResult, error) {
+	c.chatCalls++
+	if c.chatCalls == 1 {
+		return &llmsvc.ChatResult{Model: req.Model, Content: `{"normalizedQuery":"数据库连接池排查","keywords":["数据库连接池"],"entities":[],"systemName":"invented-system","componentName":"invented-component","environment":"prod","docTypes":[],"timeSensitivity":"","mustHaveTerms":["不存在的硬条件"],"negativeTerms":[]}`}, nil
+	}
+	return &llmsvc.ChatResult{Model: req.Model, Content: "请先查看活跃连接和慢查询。"}, nil
 }
 
 type rerankFailureClient struct{}

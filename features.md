@@ -8477,6 +8477,7 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - 正式问答仅检索 Published 文档的当前发布版本，仅上传或仅生成 Chunk 的草稿不会进入召回；
 - 问题 Embedding 仅在存在匹配模型的 Ready Chunk Embedding Index 时调用；无 Ready 索引时跳过向量调用并降级到 lexical；
 - 中文问题的本地 Query Understanding 生成有限二至四字词组，exact 通道按任一关键词匹配，避免整句匹配导致零召回。
+- LLM Query Understanding 生成的元数据或 must-have 条件导致零召回时，自动移除模型推断的硬过滤并使用本地关键词重试；兼容质检流程即使尚未构建 Ready Embedding Index，也必须能够通过 lexical/exact 通道查询已发布 Chunk。
 
 验收：
 
@@ -8487,6 +8488,7 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 5. RRF 单测；
 6. 仅存在 Draft Chunk 时快速返回无 Published Evidence，且不调用外部模型；
 7. 无 Ready Chunk Embedding Index 时不发送问题 Embedding 请求。
+8. LLM 推断错误过滤条件导致零候选时，本地宽松重试仍可召回已发布内容。
 
 ### Task 1.9B：Rerank 与 Context Builder
 

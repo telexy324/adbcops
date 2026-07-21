@@ -128,6 +128,20 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
 	rewritten := understood.NormalizedQuery
 	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
+	if len(chunks) == 0 && llmReady {
+		fallbackUnderstanding := broadQueryUnderstanding(question)
+		if !sameQueryUnderstanding(understood, fallbackUnderstanding) {
+			fallbackChunks, fallbackTrace := s.hybridRetrieve(ctx, fallbackUnderstanding, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
+			fallbackTrace.Channels = append([]ChannelTrace{{
+				Channel:  "local_query_fallback",
+				Count:    len(fallbackChunks),
+				Degraded: true,
+				Error:    "LLM query filters returned no candidates; retried with local terms",
+			}}, fallbackTrace.Channels...)
+			chunks, retrievalTrace = fallbackChunks, fallbackTrace
+			understood, rewritten = fallbackUnderstanding, fallbackUnderstanding.NormalizedQuery
+		}
+	}
 	retrievalTrace.Configuration = retrievalConfiguration(embeddingConfig, embeddingReady, embeddingRevision, rerankConfig, rerankReady, nil)
 	documents, documentErr := s.loadRetrievalDocuments(ctx, chunks)
 	if documentErr != nil {
@@ -413,6 +427,12 @@ func containsHan(value []rune) bool {
 		}
 	}
 	return false
+}
+
+func sameQueryUnderstanding(left, right QueryUnderstanding) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func buildContextCitations(blocks []ContextBlock) []Citation {
