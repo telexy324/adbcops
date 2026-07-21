@@ -601,22 +601,14 @@ func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id i
 	if err != nil {
 		return nil, err
 	}
-	if s.publication != nil && action == model.DocumentReviewActionPublish {
-		version, findErr := s.documents.FindLatestDocumentVersion(ctx, document.ID)
-		if findErr != nil {
-			return nil, findErr
-		}
-		published, _, publishErr := s.PublishVersion(ctx, actor, version.ID, input.Comment)
-		return published, publishErr
+	if action == model.DocumentReviewActionPublish && !s.CanPublish(document) {
+		return nil, ErrCannotPublish
 	}
 	if s.publication != nil && action == model.DocumentReviewActionDeprecate && document.CurrentPublishedVersionID != nil {
 		if _, deprecateErr := s.DeprecateVersion(ctx, actor, *document.CurrentPublishedVersionID, input.Comment); deprecateErr != nil {
 			return nil, deprecateErr
 		}
 		return s.documents.FindDocumentByID(ctx, document.ID)
-	}
-	if action == model.DocumentReviewActionPublish && !s.CanPublish(document) {
-		return nil, ErrCannotPublish
 	}
 	comment := optionalReviewComment(input.Comment)
 	return s.documents.RecordDocumentReview(ctx, document.ID, actor.ID, action, toStatus, comment)

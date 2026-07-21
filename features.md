@@ -4960,6 +4960,7 @@ GET /api/health
 - 已配置默认 chat LLM 时，自动评分必须调用 LLM 接口完成评分；
 - 旧版文档质检以 `KNOWLEDGE_DOCUMENT_PASS_SCORE` 作为可进入发布审核的最低分，默认 70；
 - 结构化评分以 Quality Profile 的 `passScore` 为准，管理员可在 Standard Builder 中配置通过分数和警告分数。
+- 知识中心主页面的“解析切片 -> 自动评分/提交质检 -> 发布”属于兼容质检流程；文档达到配置分数并进入 `reviewing` 后可直接审核发布，同时原子更新最新文档版本、`currentPublishedVersionId`、审核记录与发布历史，不要求重复执行结构化 Publication Gate。
 
 ### Task 1.8：检索增强
 

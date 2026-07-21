@@ -367,6 +367,25 @@ func TestReviewDecisionRequiresAdminAndPublishableDocument(t *testing.T) {
 	}
 }
 
+func TestLegacyReviewPublishDoesNotRequireStructuredPublicationGate(t *testing.T) {
+	base := newFakeRepository()
+	ownerID := int64(7)
+	base.documents[1] = &model.KBDocument{ID: 1, CreatedBy: &ownerID, Status: model.DocumentStatusReviewing, QualityScore: 85}
+	base.versions[1] = &model.KBDocumentVersion{ID: 1, DocumentID: 1, Status: model.DocumentVersionStatusReviewing}
+	store := &publicationTestRepository{fakeRepository: base}
+	service, err := NewService(store, t.TempDir(), 1024, 80, 10)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	published, err := service.ReviewDecision(context.Background(), &model.AppUser{ID: 1, Role: model.RoleAdmin}, 1, ReviewDecision{Action: model.DocumentReviewActionPublish})
+	if err != nil {
+		t.Fatalf("ReviewDecision(publish) error = %v", err)
+	}
+	if published.Status != model.DocumentStatusPublished {
+		t.Fatalf("published status = %q", published.Status)
+	}
+}
+
 func TestSearchOnlyReturnsPublishedDocumentChunks(t *testing.T) {
 	store := newFakeRepository()
 	service := newTestServiceWithChunk(t, store, t.TempDir(), 1024, 50, 5)

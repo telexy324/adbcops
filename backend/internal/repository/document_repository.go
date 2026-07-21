@@ -314,7 +314,7 @@ func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64,
 	var updated model.KBDocument
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var document model.KBDocument
-		if err := tx.First(&document, id).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&document, id).Error; err != nil {
 			return mapRepositoryError(err)
 		}
 		review := &model.KBDocumentReview{
@@ -331,6 +331,55 @@ func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64,
 			"reviewed_by": reviewerID,
 			"reviewed_at": now,
 			"updated_at":  now,
+		}
+		if action == model.DocumentReviewActionPublish {
+			var version model.KBDocumentVersion
+			if err := tx.Where("document_id = ?", document.ID).
+				Order("created_at DESC, id DESC").
+				Clauses(clause.Locking{Strength: "UPDATE"}).
+				First(&version).Error; err != nil {
+				return mapRepositoryError(err)
+			}
+			if version.Status == model.DocumentVersionStatusFailed || version.Status == model.DocumentVersionStatusDeprecated {
+				return ErrImmutable
+			}
+			gateSnapshot, err := json.Marshal(map[string]any{
+				"mode":         "legacy_quality_review",
+				"qualityScore": document.QualityScore,
+				"checks": []map[string]any{
+					{"name": "parse", "passed": true},
+					{"name": "quality", "passed": true},
+					{"name": "review", "passed": true},
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("encode legacy publication gate: %w", err)
+			}
+			if document.CurrentPublishedVersionID != nil && *document.CurrentPublishedVersionID != version.ID {
+				oldID := *document.CurrentPublishedVersionID
+				if err := tx.Model(&model.KBDocumentVersion{}).
+					Where("id = ? AND status = ?", oldID, model.DocumentVersionStatusPublished).
+					Updates(map[string]any{"status": model.DocumentVersionStatusSuperseded, "superseded_at": now, "updated_at": now}).Error; err != nil {
+					return fmt.Errorf("supersede legacy document version: %w", err)
+				}
+				if err := tx.Exec("INSERT INTO kb_document_version_publication (document_id, document_version_id, action, actor_id, created_at) VALUES (?, ?, 'supersede', ?, ?)", document.ID, oldID, reviewerID, now).Error; err != nil {
+					return fmt.Errorf("record legacy superseded version: %w", err)
+				}
+			}
+			if err := tx.Model(&model.KBDocumentVersion{}).Where("id = ?", version.ID).Updates(map[string]any{
+				"status": model.DocumentVersionStatusPublished, "published_by": reviewerID, "published_at": now,
+				"reviewed_by": reviewerID, "reviewed_at": now, "publication_gate": json.RawMessage(gateSnapshot), "updated_at": now,
+			}).Error; err != nil {
+				return fmt.Errorf("publish legacy document version: %w", err)
+			}
+			if err := tx.Exec("INSERT INTO kb_document_version_publication (document_id, document_version_id, action, gate_snapshot, actor_id, comment, created_at) VALUES (?, ?, 'publish', ?::jsonb, ?, ?, ?)", document.ID, version.ID, string(gateSnapshot), reviewerID, comment, now).Error; err != nil {
+				return fmt.Errorf("record legacy document publication: %w", err)
+			}
+			updates["current_published_version_id"] = version.ID
+			updates["version"] = version.Version
+			updates["file_name"] = version.FileName
+			updates["file_path"] = version.FilePath
+			updates["file_type"] = version.FileType
 		}
 		result := tx.Model(&model.KBDocument{}).Where("id = ?", id).Updates(updates)
 		if result.Error != nil {
