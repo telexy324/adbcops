@@ -286,7 +286,7 @@ export function SettingsPage() {
       setTestNotification({
         success: result.ok,
         message: result.ok
-          ? `模型配置“${input.name}”测试成功：${result.model}`
+          ? `模型配置“${input.name}”测试成功：${result.model}${result.content ? ` · ${result.content}` : ""}`
           : `模型配置“${input.name}”测试失败：${result.content || "服务未返回有效结果"}`,
       });
     },
@@ -656,7 +656,7 @@ export function SettingsPage() {
                     placeholder="保存后不回显"
                   />
                 </Field>
-                <Field label="App Key（Qwen 网关可选）">
+                <Field label="App Key（模型网关可选）">
                   <Input
                     type="password"
                     value={llmForm.appKey}

@@ -614,6 +614,14 @@ export async function buildEmbeddingIndex(id: number) {
   return response.data.data;
 }
 
+export async function retryEmbeddingIndex(id: number) {
+  const response = await apiClient.post<ApiEnvelope<EmbeddingIndex>>(
+    `/api/knowledge/index-jobs/${id}/retry`,
+    { batchSize: 50 },
+  );
+  return response.data.data;
+}
+
 export async function getPublicationGate(versionId: number) {
   const response = await apiClient.get<ApiEnvelope<PublicationGate>>(
     `/api/knowledge/document-versions/${versionId}/publication-gate`,

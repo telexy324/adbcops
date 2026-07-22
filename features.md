@@ -4880,6 +4880,10 @@ GET /api/health
 - 每种用途独立默认模型；
 - OpenAI-compatible client；
 - Qwen3 Chat Completions 网关兼容：Bearer Token、`app_key`、`app_secret`、`stream=false`、`enable_thinking=false`；
+- Embedding 同时兼容 OpenAI `data[].embedding` 响应和模型网关顶层 `embedding` 响应；配置 App Key 后，请求体发送 `app_key`、`app_secret`，Bearer Token 仍通过 Authorization 发送；
+- Rerank 同时兼容原有 OpenAI-compatible `top_n` 协议和 bge-reranker-large 网关协议；配置 App Key 后，请求体发送 `app_key`、`app_secret`、`top_k`，并兼容 `results[].index`、`document.text`、`relevance_score` 响应；
+- Embedding/Rerank 对 HTTP 2xx 中非零 `code` 业务错误进行失败判定并返回业务码和消息，不再把参数错误误判为空结果；
+- Embedding 兼容 `data[]` 未返回 `index` 的响应，按数组顺序映射批量输入，避免后续 Chunk 被误判为空向量；
 - Base URL 支持服务根路径、`/v1` 路径和完整模型接口路径，避免重复拼接 `/v1`；
 - LLM HTTP 调用默认超时 180 秒，支持 Qwen3 等长耗时模型返回完整结果；
 - HTTP Server 写超时通过 `HTTP_SERVER_WRITE_TIMEOUT_SECONDS` 配置，默认 300 秒、有效范围 1–3600 秒，避免长耗时 LLM 响应被固定 30 秒写超时截断；
@@ -8458,6 +8462,10 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - batch build；
 - stale/rebuild；
 - HNSW 可配置。
+- 上传和解析切片是本地确定性处理，不调用模型；创建并执行 Embedding Index Build 时，才批量把 Chunk 发送到 Embedding 接口并持久化向量；
+- Embedding Index 构建、问答 Query Embedding 和配置 Test 均透传 Bearer Token、App Key、App Secret，并支持网关顶层单向量或多向量响应；
+- Embedding 配置 Test 的页面成功通知显示 `embedding dimension=N`；索引构建失败后刷新失败状态、展示具体错误并提供“重试”操作；
+- 普通知识文档重复解析产生新 revision 后同步刷新管理工作台的 Document Versions，避免下拉框继续显示旧 revision；
 
 验收：
 
@@ -8500,6 +8508,7 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 
 - Rerank Adapter；
 - TopN；
+- Rerank Adapter 自动兼容原有 `top_n` 和配置 App Key 后的网关 `top_k` 请求格式；
 - 降级；
 - 去重；
 - 邻接合并；

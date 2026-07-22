@@ -224,7 +224,7 @@ func (s *Service) build(ctx context.Context, actor *model.AppUser, id int64, bat
 		for _, chunk := range chunks[start:end] {
 			inputs = append(inputs, chunk.Content)
 		}
-		result, callErr := s.client.Embed(ctx, llmsvc.EmbeddingRequest{BaseURL: config.BaseURL, APIKey: credential.apiKey, APISecret: credential.apiSecret, Model: config.Model, Input: inputs})
+		result, callErr := s.client.Embed(ctx, llmsvc.EmbeddingRequest{BaseURL: config.BaseURL, APIKey: credential.apiKey, AppKey: credential.appKey, APISecret: credential.apiSecret, Model: config.Model, Input: inputs})
 		if callErr != nil {
 			s.fail(ctx, id, callErr)
 			return nil, callErr
@@ -315,12 +315,12 @@ func (s *Service) accessScope(ctx context.Context, actor *model.AppUser, version
 	return version, document, nil
 }
 
-type embeddingCredential struct{ apiKey, apiSecret string }
+type embeddingCredential struct{ apiKey, appKey, apiSecret string }
 
 func (s *Service) embeddingCredential(config *model.LLMConfig) (embeddingCredential, error) {
 	credential := embeddingCredential{}
 	if s.secrets == nil {
-		if config.APIKeyRef != nil || config.APISecretRef != nil {
+		if config.APIKeyRef != nil || config.AppKeyRef != nil || config.APISecretRef != nil {
 			return credential, ErrInvalidInput
 		}
 		return credential, nil
@@ -328,6 +328,12 @@ func (s *Service) embeddingCredential(config *model.LLMConfig) (embeddingCredent
 	var err error
 	if config.APIKeyRef != nil && *config.APIKeyRef != "" {
 		credential.apiKey, err = s.secrets.Decrypt(*config.APIKeyRef)
+		if err != nil {
+			return credential, err
+		}
+	}
+	if config.AppKeyRef != nil && *config.AppKeyRef != "" {
+		credential.appKey, err = s.secrets.Decrypt(*config.AppKeyRef)
 		if err != nil {
 			return credential, err
 		}

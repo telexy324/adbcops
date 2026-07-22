@@ -28,6 +28,7 @@ vi.mock("@/api/knowledge", () => ({
   getParsedStructure: vi.fn(),
   getPublicationGate: vi.fn(),
   buildEmbeddingIndex: vi.fn(),
+  retryEmbeddingIndex: vi.fn(),
   chunkDocumentVersion: vi.fn(),
   createEmbeddingIndex: vi.fn(),
   createStructuredQualityStandard: vi.fn(),
@@ -864,7 +865,7 @@ describe("SettingsPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Embedding 向量模型")).toBeInTheDocument();
     expect(screen.getByText("Rerank 精排模型")).toBeInTheDocument();
-    expect(screen.getByText("App Key（Qwen 网关可选）")).toBeInTheDocument();
+    expect(screen.getByText("App Key（模型网关可选）")).toBeInTheDocument();
     expect(
       screen.getByText("API Secret / App Secret（可选）"),
     ).toBeInTheDocument();
@@ -947,7 +948,7 @@ describe("SettingsPage", () => {
     const testButtons = screen.getAllByRole("button", { name: "Test" });
     await user.click(testButtons[0]);
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "模型配置“default-llm”测试成功：ops-model",
+      "模型配置“default-llm”测试成功：ops-model · ok",
     );
 
     await user.click(screen.getByRole("button", { name: "关闭测试通知" }));

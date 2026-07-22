@@ -147,9 +147,14 @@ export function KnowledgePage() {
     onSuccess: () => {
       setNotice("解析切片完成。");
       setError(null);
-      void queryClient.invalidateQueries({
-        queryKey: ["knowledge", "chunks", selectedID],
-      });
+      void Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["knowledge", "chunks", selectedID],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["knowledge", "versions", selectedID],
+        }),
+      ]);
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
   });

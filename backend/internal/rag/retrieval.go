@@ -219,7 +219,7 @@ func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstand
 	if embeddingReady && embeddingConfig != nil && strings.TrimSpace(options.EmbeddingModelRevision) != "" {
 		client := s.client.(llmsvc.EmbeddingClient)
 		result, err := client.Embed(ctx, llmsvc.EmbeddingRequest{
-			BaseURL: embeddingConfig.BaseURL, APIKey: credential.APIKey, APISecret: credential.APISecret,
+			BaseURL: embeddingConfig.BaseURL, APIKey: credential.APIKey, AppKey: credential.AppKey, APISecret: credential.APISecret,
 			Model: embeddingConfig.Model, Input: []string{query},
 		})
 		if err != nil || result == nil || len(result.Embeddings) != 1 || len(result.Embeddings[0]) == 0 {

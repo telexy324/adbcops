@@ -34,6 +34,7 @@ import {
   publishQualityEvaluation,
   publicationGateLabel,
   publishStructuredQualityStandard,
+  retryEmbeddingIndex,
   runRetrievalLab,
   runRetrievalSmoke,
   toAPIErrorMessage,
@@ -275,7 +276,21 @@ function DocumentPipeline({
       setMessage("Embedding Index 构建完成。");
       await refreshPipeline();
     },
-    onError: (error) => setMessage(toAPIErrorMessage(error)),
+    onError: async (error) => {
+      setMessage(toAPIErrorMessage(error));
+      await refreshPipeline();
+    },
+  });
+  const retryIndex = useMutation({
+    mutationFn: retryEmbeddingIndex,
+    onSuccess: async () => {
+      setMessage("Embedding Index 重试完成。");
+      await refreshPipeline();
+    },
+    onError: async (error) => {
+      setMessage(toAPIErrorMessage(error));
+      await refreshPipeline();
+    },
   });
   const evaluate = useMutation({
     mutationFn: () =>
@@ -454,21 +469,39 @@ function DocumentPipeline({
               {(embeddings.data?.indexes ?? []).map((index) => (
                 <div
                   key={index.id}
-                  className="flex items-center justify-between rounded-md bg-white/5 p-2 text-xs"
+                  className="space-y-2 rounded-md bg-white/5 p-2 text-xs"
                 >
-                  <span>
-                    #{index.id} {index.modelName}@{index.modelRevision}
-                  </span>
-                  <span>
-                    {index.status} · {index.embeddedCount}/{index.chunkCount}
-                  </span>
-                  {(index.status === "pending" || index.status === "stale") && (
-                    <Button
-                      size="sm"
-                      onClick={() => buildIndex.mutate(index.id)}
-                    >
-                      构建
-                    </Button>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      #{index.id} {index.modelName}@{index.modelRevision}
+                    </span>
+                    <span>
+                      {index.status} · {index.embeddedCount}/{index.chunkCount}
+                    </span>
+                    {(index.status === "pending" ||
+                      index.status === "stale") && (
+                      <Button
+                        size="sm"
+                        onClick={() => buildIndex.mutate(index.id)}
+                        disabled={buildIndex.isPending}
+                      >
+                        构建
+                      </Button>
+                    )}
+                    {index.status === "failed" && (
+                      <Button
+                        size="sm"
+                        onClick={() => retryIndex.mutate(index.id)}
+                        disabled={retryIndex.isPending}
+                      >
+                        重试
+                      </Button>
+                    )}
+                  </div>
+                  {index.errorMessage && (
+                    <p className="break-words text-rose-300">
+                      {index.errorMessage}
+                    </p>
                   )}
                 </div>
               ))}

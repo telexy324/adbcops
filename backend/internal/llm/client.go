@@ -52,6 +52,7 @@ type ChatRequest struct {
 type EmbeddingRequest struct {
 	BaseURL   string
 	APIKey    string
+	AppKey    string
 	APISecret string
 	Model     string
 	Input     []string
@@ -67,6 +68,7 @@ type EmbeddingResult struct {
 type RerankRequest struct {
 	BaseURL   string
 	APIKey    string
+	AppKey    string
 	APISecret string
 	Model     string
 	Query     string
@@ -221,71 +223,106 @@ func (c *OpenAICompatibleClient) Embed(ctx context.Context, req EmbeddingRequest
 		"model": req.Model,
 		"input": req.Input,
 	}
+	gatewayRequest := req.AppKey != ""
+	if gatewayRequest {
+		payload["app_key"] = req.AppKey
+		if req.APISecret != "" {
+			payload["app_secret"] = req.APISecret
+		}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode embedding request: %w", err)
 	}
-	c.logRequest(ctx, "embedding", endpoint, req.Model, body, req.APIKey, req.APISecret)
+	c.logRequest(ctx, "embedding", endpoint, req.Model, body, req.APIKey, req.AppKey, req.APISecret)
 	startedAt := time.Now()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("create embedding request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if req.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+req.APIKey)
 	}
-	if req.APISecret != "" {
+	if req.APISecret != "" && !gatewayRequest {
 		httpRequest.Header.Set("X-API-Secret", req.APISecret)
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("send embedding request: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
-		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("read embedding response: %w", err)
 	}
-	c.logResponse(ctx, "embedding", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.APISecret)
+	c.logResponse(ctx, "embedding", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, responseStatusError("embedding model", response.StatusCode, responseBody, req.APIKey, req.APISecret)
+		return nil, responseStatusError("embedding model", response.StatusCode, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	}
 	var decoded struct {
-		Model string `json:"model"`
-		Data  []struct {
-			Index     int       `json:"index"`
+		Code      *int            `json:"code"`
+		Message   string          `json:"message"`
+		Model     string          `json:"model"`
+		Embedding json.RawMessage `json:"embedding"`
+		Data      []struct {
+			Index     *int      `json:"index"`
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
 		Usage struct {
 			PromptTokens int `json:"prompt_tokens"`
 			TotalTokens  int `json:"total_tokens"`
 		} `json:"usage"`
+		PromptTokens int `json:"prompt_tokens"`
+		TotalTokens  int `json:"total_tokens"`
 	}
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		return nil, fmt.Errorf("decode embedding response: %w", err)
 	}
-	if len(decoded.Data) == 0 {
-		return nil, fmt.Errorf("embedding model returned no vectors")
+	if decoded.Code != nil && *decoded.Code != 0 {
+		err := businessResponseError("embedding model", *decoded.Code, decoded.Message, req.APIKey, req.AppKey, req.APISecret)
+		c.logFailure(ctx, "embedding", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
+		return nil, err
 	}
 	embeddings := make([][]float64, len(decoded.Data))
-	for _, item := range decoded.Data {
-		index := item.Index
-		if index < 0 || index >= len(embeddings) {
-			index = 0
+	for position, item := range decoded.Data {
+		index := position
+		if item.Index != nil && *item.Index >= 0 && *item.Index < len(embeddings) {
+			index = *item.Index
 		}
 		embeddings[index] = item.Embedding
+	}
+	if len(embeddings) == 0 && len(decoded.Embedding) > 0 {
+		var vector []float64
+		if err := json.Unmarshal(decoded.Embedding, &vector); err == nil && len(vector) > 0 {
+			embeddings = [][]float64{vector}
+		} else {
+			var vectors [][]float64
+			if err := json.Unmarshal(decoded.Embedding, &vectors); err == nil {
+				embeddings = vectors
+			}
+		}
+	}
+	if len(embeddings) == 0 {
+		return nil, fmt.Errorf("embedding model returned no vectors")
+	}
+	promptTokens, totalTokens := decoded.Usage.PromptTokens, decoded.Usage.TotalTokens
+	if promptTokens == 0 {
+		promptTokens = decoded.PromptTokens
+	}
+	if totalTokens == 0 {
+		totalTokens = decoded.TotalTokens
 	}
 	return &EmbeddingResult{
 		Model:      decoded.Model,
 		Embedding:  embeddings[0],
 		Embeddings: embeddings,
 		Usage: Usage{
-			PromptTokens: decoded.Usage.PromptTokens,
-			TotalTokens:  decoded.Usage.TotalTokens,
+			PromptTokens: promptTokens,
+			TotalTokens:  totalTokens,
 		},
 	}, nil
 }
@@ -297,43 +334,56 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 		"query":     req.Query,
 		"documents": req.Documents,
 	}
+	gatewayRequest := req.AppKey != ""
+	if gatewayRequest {
+		payload["app_key"] = req.AppKey
+		if req.APISecret != "" {
+			payload["app_secret"] = req.APISecret
+		}
+	}
 	if req.TopN > 0 {
-		payload["top_n"] = req.TopN
+		if gatewayRequest {
+			payload["top_k"] = req.TopN
+		} else {
+			payload["top_n"] = req.TopN
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode rerank request: %w", err)
 	}
-	c.logRequest(ctx, "rerank", endpoint, req.Model, body, req.APIKey, req.APISecret)
+	c.logRequest(ctx, "rerank", endpoint, req.Model, body, req.APIKey, req.AppKey, req.APISecret)
 	startedAt := time.Now()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("create rerank request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	if req.APIKey != "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+req.APIKey)
 	}
-	if req.APISecret != "" {
+	if req.APISecret != "" && !gatewayRequest {
 		httpRequest.Header.Set("X-API-Secret", req.APISecret)
 	}
 	response, err := c.httpClient.Do(httpRequest)
 	if err != nil {
-		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("send rerank request: %w", err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
-		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.APISecret)
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
 		return nil, fmt.Errorf("read rerank response: %w", err)
 	}
-	c.logResponse(ctx, "rerank", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.APISecret)
+	c.logResponse(ctx, "rerank", endpoint, req.Model, response.StatusCode, startedAt, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, responseStatusError("rerank model", response.StatusCode, responseBody, req.APIKey, req.APISecret)
+		return nil, responseStatusError("rerank model", response.StatusCode, responseBody, req.APIKey, req.AppKey, req.APISecret)
 	}
 	var decoded struct {
+		Code    *int   `json:"code"`
+		Message string `json:"message"`
 		Model   string `json:"model"`
 		Results []struct {
 			Index          int     `json:"index"`
@@ -346,6 +396,11 @@ func (c *OpenAICompatibleClient) Rerank(ctx context.Context, req RerankRequest) 
 	}
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		return nil, fmt.Errorf("decode rerank response: %w", err)
+	}
+	if decoded.Code != nil && *decoded.Code != 0 {
+		err := businessResponseError("rerank model", *decoded.Code, decoded.Message, req.APIKey, req.AppKey, req.APISecret)
+		c.logFailure(ctx, "rerank", endpoint, req.Model, startedAt, err, req.APIKey, req.AppKey, req.APISecret)
+		return nil, err
 	}
 	items := make([]RerankItem, 0, len(decoded.Results))
 	for _, item := range decoded.Results {
@@ -483,4 +538,12 @@ func responseStatusError(service string, status int, body []byte, secrets ...str
 		return fmt.Errorf("%s returned status %d", service, status)
 	}
 	return fmt.Errorf("%s returned status %d: %s", service, status, detail)
+}
+
+func businessResponseError(service string, code int, message string, secrets ...string) error {
+	detail := strings.TrimSpace(sanitizeLogText(message, secrets...))
+	if detail == "" {
+		return fmt.Errorf("%s returned business code %d", service, code)
+	}
+	return fmt.Errorf("%s returned business code %d: %s", service, code, detail)
 }

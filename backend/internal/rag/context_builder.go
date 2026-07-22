@@ -124,7 +124,7 @@ func (s *Service) rerankCandidates(ctx context.Context, query string, chunks []m
 		documentsInput = append(documentsInput, rerankDocument(chunk, document))
 	}
 	result, err := client.Rerank(ctx, llmsvc.RerankRequest{
-		BaseURL: config.BaseURL, APIKey: credential.APIKey, APISecret: credential.APISecret,
+		BaseURL: config.BaseURL, APIKey: credential.APIKey, AppKey: credential.AppKey, APISecret: credential.APISecret,
 		Model: config.Model, Query: query, Documents: documentsInput, TopN: len(chunks),
 	})
 	if err != nil || result == nil || len(result.Results) == 0 {

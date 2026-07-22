@@ -278,6 +278,7 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 		result, err := client.Embed(ctx, EmbeddingRequest{
 			BaseURL:   config.BaseURL,
 			APIKey:    apiKey,
+			AppKey:    appKey,
 			APISecret: apiSecret,
 			Model:     config.Model,
 			Input:     []string{prompt},
@@ -304,6 +305,7 @@ func (s *Service) Test(ctx context.Context, id int64, prompt string) (*TestResul
 		result, err := client.Rerank(ctx, RerankRequest{
 			BaseURL:   config.BaseURL,
 			APIKey:    apiKey,
+			AppKey:    appKey,
 			APISecret: apiSecret,
 			Model:     config.Model,
 			Query:     prompt,
