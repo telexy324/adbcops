@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
+
+	"aiops-platform/backend/internal/auditutil"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 )
 
 type Tool struct {
@@ -79,6 +83,9 @@ func (t *Tool) DetectPlatform(ctx context.Context, conn LinuxServerConnection) (
 }
 
 func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request LinuxCollectRequest) (*LinuxCollectResult, error) {
+	startedAt := t.now()
+	requestID := appmiddleware.GetRequestIDFromContext(ctx)
+	slog.InfoContext(ctx, "linux collector started", "request_id", requestID, "host_id", request.HostID, "collector", request.Collector)
 	if strings.TrimSpace(request.Collector) == "" {
 		return nil, ErrCollectorNotFound
 	}
@@ -91,6 +98,8 @@ func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request 
 	}
 	lease, err := t.pool.Acquire(ctx, conn, false)
 	if err != nil {
+		slog.WarnContext(ctx, "linux collector connection failed", "request_id", requestID, "host_id", request.HostID,
+			"collector", request.Collector, "error_code", connectionErrorCode(err), "latency_ms", t.now().Sub(startedAt).Milliseconds())
 		return nil, err
 	}
 	discard := false
@@ -98,6 +107,8 @@ func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request 
 	platform, failed := t.detectWithClient(ctx, lease.Client())
 	if failed {
 		discard = true
+		slog.WarnContext(ctx, "linux platform detection failed", "request_id", requestID, "host_id", request.HostID,
+			"collector", request.Collector, "latency_ms", t.now().Sub(startedAt).Milliseconds())
 		return nil, errors.New("detect linux platform failed")
 	}
 	executor, _ := NewExecutor(t.catalog, lease.Client())
@@ -117,9 +128,15 @@ func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request 
 		}
 		result, executeErr := executor.Execute(ctx, CommandRequest{Key: command.Key, Parameters: command.Parameters, Platform: platform})
 		if executeErr != nil {
+			slog.WarnContext(ctx, "linux collector command failed", "request_id", requestID, "host_id", request.HostID,
+				"collector", request.Collector, "command_key", command.Key, "error_code", safeCommandErrorCode(executeErr))
 			return nil, executeErr
 		}
 		results[command.Alias] = result
+		slog.DebugContext(ctx, "linux collector command completed", "request_id", requestID, "host_id", request.HostID,
+			"collector", request.Collector, "command_key", command.Key, "command_alias", command.Alias,
+			"status", result.Status, "duration_ms", result.DurationMS, "output_bytes", len(result.Output),
+			"warning_count", len(result.Warnings), "truncated", result.Truncated)
 		versions[result.CommandVersion] = true
 		if result.Status == CommandStatusTimeout {
 			discard = true
@@ -138,10 +155,36 @@ func (t *Tool) Collect(ctx context.Context, conn LinuxServerConnection, request 
 	if err != nil {
 		return nil, fmt.Errorf("marshal collector result: %w", err)
 	}
-	return &LinuxCollectResult{
+	collected := &LinuxCollectResult{
 		Collector: request.Collector, CommandVersion: combineVersions(versions), Status: status, Data: data,
 		Warnings: warnings, CollectedAt: t.now().UTC(), DurationMs: duration.Milliseconds(), Truncated: truncated,
-	}, nil
+	}
+	slog.InfoContext(ctx, "linux collector completed", "request_id", requestID, "host_id", request.HostID,
+		"collector", request.Collector, "status", status, "latency_ms", t.now().Sub(startedAt).Milliseconds(),
+		"warning_count", len(warnings), "data_bytes", len(data), "truncated", truncated)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "linux collector structured result", "request_id", requestID, "host_id", request.HostID,
+			"collector", request.Collector, "result", string(sanitizedCollectorResult(collected)))
+	}
+	return collected, nil
+}
+
+func safeCommandErrorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrRunnerPermission):
+		return ErrorPermissionDenied
+	case errors.Is(err, ErrRunnerCommandNotFound):
+		return ErrorCommandNotFound
+	case errors.Is(err, context.DeadlineExceeded):
+		return ErrorCommandTimeout
+	default:
+		return ErrorUnknown
+	}
+}
+
+func sanitizedCollectorResult(result *LinuxCollectResult) []byte {
+	raw, _ := json.Marshal(result)
+	return auditutil.SanitizeJSON(raw, 64<<10)
 }
 
 func combineVersions(versions map[string]bool) string {

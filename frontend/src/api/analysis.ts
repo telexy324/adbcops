@@ -22,12 +22,10 @@ export type AnalysisTask = {
 };
 
 export type EvidenceItem = {
-  sourceType?: string;
-  sourceId?: string;
-  observedAt?: string;
+  type?: string;
+  source?: string;
   summary?: string;
-  rawReference?: unknown;
-  confidence?: number;
+  reference?: string;
 };
 
 export type CitationItem = {
@@ -40,13 +38,36 @@ export type CitationItem = {
 
 export type GeneralAnalysisResponse = {
   taskId?: number;
+  status?: string;
   summary?: string;
   facts?: string[];
   evidence?: EvidenceItem[];
   citations?: CitationItem[];
   rootCauseCandidates?: string[];
   missingEvidence?: string[];
-  confidence?: number;
+  confidence?: {
+    level: string;
+    score: number;
+    reasons: string[];
+  };
+};
+
+export type GeneralAnalysisRunResponse = {
+  task: AnalysisTask;
+  result: GeneralAnalysisResponse;
+};
+
+export type GeneralAnalysisInput = {
+  conversationId?: number;
+  question: string;
+  dataSourceIds: number[];
+  scope: {
+    environment?: string;
+    systemName?: string;
+    componentName?: string;
+    timeStart: string;
+    timeEnd: string;
+  };
 };
 
 export type K8sRuleFinding = {
@@ -118,17 +139,11 @@ export type AlertmanagerResponse = {
   }>;
 };
 
-export async function runGeneralAnalysis(input: {
-  conversationId?: number;
-  question: string;
-  dataSourceIds: number[];
-  scope?: Record<string, unknown>;
-}) {
-  const response = await apiClient.post<ApiEnvelope<GeneralAnalysisResponse>>(
-    "/api/analysis/general",
-    input,
-  );
-  return response.data.data;
+export async function runGeneralAnalysis(input: GeneralAnalysisInput) {
+  const response = await apiClient.post<
+    ApiEnvelope<GeneralAnalysisRunResponse>
+  >("/api/analysis/general", input);
+  return response.data.data.result;
 }
 
 export async function listAnalysisTasks() {

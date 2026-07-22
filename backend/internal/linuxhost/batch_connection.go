@@ -470,7 +470,17 @@ func (s *Service) connectionForHost(host *model.LinuxHost) (linuxserver.LinuxSer
 	if username == "" {
 		username = credential["username"]
 	}
-	return linuxserver.LinuxServerConnection{Host: host.Host, Port: host.Port, Username: username, AuthType: authType, Password: credential["password"], PrivateKey: credential["privateKey"], PrivateKeyPassword: credential["privateKeyPassphrase"], HostKeyPolicy: host.HostKeyPolicy, HostKeyAlgorithm: pointerValue(host.HostKeyAlgorithm), HostKeyFingerprint: pointerValue(host.HostKeyFingerprint), CredentialVersion: version}, nil
+	hostKeyAlgorithm := pointerValue(host.HostKeyAlgorithm)
+	hostKeyFingerprint := pointerValue(host.HostKeyFingerprint)
+	// A key observed by a successful connection test is safe to pin for the
+	// first formal collection without a separate confirmation click. A later
+	// key change still fails in the SSH callback because the observed key must
+	// match this exact candidate.
+	if hostKeyFingerprint == "" && host.HostKeyStatus == model.LinuxHostKeyStatusPending {
+		hostKeyAlgorithm = pointerValue(host.PendingHostKeyAlgorithm)
+		hostKeyFingerprint = pointerValue(host.PendingHostKeyFingerprint)
+	}
+	return linuxserver.LinuxServerConnection{Host: host.Host, Port: host.Port, Username: username, AuthType: authType, Password: credential["password"], PrivateKey: credential["privateKey"], PrivateKeyPassword: credential["privateKeyPassphrase"], HostKeyPolicy: host.HostKeyPolicy, HostKeyAlgorithm: hostKeyAlgorithm, HostKeyFingerprint: hostKeyFingerprint, CredentialVersion: version}, nil
 }
 
 func matchesBatchFilter(host model.LinuxHost, filter BatchTestFilter) bool {

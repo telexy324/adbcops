@@ -27,8 +27,6 @@ func linuxBasicHostDiagnosisWorkflow() Definition {
 		linuxKnowledgeNode("search_knowledge", "Search Linux knowledge", "Linux host diagnosis"),
 		controlNode("get_host_topology", "Get host topology"),
 		linuxAgentNode("linux_server_agent", "Linux Server Agent"),
-		controlNode("build_evidence", "Build evidence"),
-		controlNode("report", "Generate report"),
 		Node{ID: "end", Type: NodeTypeEnd, Name: "End"},
 	)
 	edges := []Edge{
@@ -44,9 +42,7 @@ func linuxBasicHostDiagnosisWorkflow() Definition {
 		Edge{From: "run_linux_rules", To: "search_knowledge"},
 		Edge{From: "search_knowledge", To: "get_host_topology"},
 		Edge{From: "get_host_topology", To: "linux_server_agent"},
-		Edge{From: "linux_server_agent", To: "build_evidence"},
-		Edge{From: "build_evidence", To: "report"},
-		Edge{From: "report", To: "end"},
+		Edge{From: "linux_server_agent", To: "end"},
 	)
 	return linuxWorkflow("linux_basic_host_diagnosis_workflow", "Basic Host Diagnosis", "Collect Linux host context in parallel, run rules and build an evidence-backed report.", nodes, edges)
 }
@@ -128,7 +124,6 @@ func linuxDiagnosisDAG(name, title, description string, parallel, rules []Node) 
 		linuxKnowledgeNode("search_knowledge", "Search Linux knowledge", title),
 		controlNode("correlate", "Correlate evidence"),
 		linuxAgentNode("linux_server_agent", "Linux Server Agent"),
-		controlNode("report", "Generate report"),
 		Node{ID: "end", Type: NodeTypeEnd, Name: "End"},
 	)
 	edges := []Edge{{From: "start", To: "test_connection"}}
@@ -142,8 +137,7 @@ func linuxDiagnosisDAG(name, title, description string, parallel, rules []Node) 
 		Edge{From: "merge_rules", To: "search_knowledge"},
 		Edge{From: "search_knowledge", To: "correlate"},
 		Edge{From: "correlate", To: "linux_server_agent"},
-		Edge{From: "linux_server_agent", To: "report"},
-		Edge{From: "report", To: "end"},
+		Edge{From: "linux_server_agent", To: "end"},
 	)
 	return linuxWorkflow(name, title, description, nodes, edges)
 }

@@ -2,6 +2,7 @@ package auditutil
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -15,11 +16,20 @@ var sensitiveKeys = []string{
 	"credential",
 	"jwt",
 	"key",
+	"argv",
+	"commandline",
+	"executable",
 	"password",
 	"private_key",
+	"raw_output",
+	"rawcommandoutput",
 	"secret",
+	"stderr",
+	"stdout",
 	"token",
 }
+
+var sensitiveAssignment = regexp.MustCompile(`(?i)(password|passwd|pwd|token|secret|authorization|cookie|jwt|api[_-]?key)(\s*[:=]\s*)(bearer\s+)?[^\s,;]+`)
 
 func SanitizeJSON(raw []byte, maxBytes int) []byte {
 	if len(raw) == 0 || !json.Valid(raw) {
@@ -55,10 +65,14 @@ func ContainsSensitiveToken(value string) bool {
 	return false
 }
 
+func SanitizeText(value string) string {
+	return sensitiveAssignment.ReplaceAllString(value, "$1$2"+RedactedValue)
+}
+
 func IsSensitiveKey(key string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
 	for _, sensitive := range sensitiveKeys {
-		if normalized == sensitive || strings.Contains(normalized, sensitive) {
+		if normalized == sensitive || (sensitive != "key" && strings.Contains(normalized, sensitive)) {
 			return true
 		}
 	}
@@ -83,6 +97,8 @@ func sanitize(value any) any {
 			result = append(result, sanitize(item))
 		}
 		return result
+	case string:
+		return SanitizeText(typed)
 	default:
 		return typed
 	}

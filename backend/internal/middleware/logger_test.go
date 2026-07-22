@@ -60,3 +60,36 @@ func TestLoggerSkipsReadinessProbe(t *testing.T) {
 		t.Fatalf("readiness probe produced access logs: %s", logs.String())
 	}
 }
+
+func TestLoggerDebugCapturesSanitizedJSONExchange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	router := gin.New()
+	router.Use(RequestID(), Logger(logger))
+	router.POST("/debug", func(c *gin.Context) {
+		var body map[string]any
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"token": "response-secret", "echo": body["name"]})
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/debug?token=query-secret&hostId=7", strings.NewReader(`{"name":"linux","password":"request-secret"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	output := logs.String()
+	for _, expected := range []string{"http request exchange", `\"name\":\"linux\"`, `\"password\":\"[REDACTED]\"`, `\"token\":\"[REDACTED]\"`, `"hostId":["7"]`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("debug log missing %q:\n%s", expected, output)
+		}
+	}
+	for _, secret := range []string{"request-secret", "response-secret", "query-secret"} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("debug log leaked %q:\n%s", secret, output)
+		}
+	}
+}

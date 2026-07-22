@@ -4,8 +4,13 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
+import { listAnalysisTasks, runGeneralAnalysis } from "@/api/analysis";
 import { testDataSource, testLLMConfig, updateDataSource } from "@/api/config";
-import { createTopologySource, runTopologySourceSync } from "@/api/operations";
+import {
+  createTopologySource,
+  getTopologyGraph,
+  runTopologySourceSync,
+} from "@/api/operations";
 import { AnalysisPage } from "@/pages/analysis-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { KnowledgePage } from "@/pages/knowledge-page";
@@ -588,13 +593,13 @@ vi.mock("@/api/config", () => ({
   updateLLMConfig: vi.fn(),
 }));
 
-function renderWithQueryClient(element: ReactElement) {
+function renderWithQueryClient(element: ReactElement, path = "/") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>{element}</MemoryRouter>
+      <MemoryRouter initialEntries={[path]}>{element}</MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -707,6 +712,84 @@ describe("AnalysisPage", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText("普通用户只会看到自己的分析任务。", { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it("submits the required time range, renders the unwrapped result, and refreshes tasks", async () => {
+    const user = userEvent.setup();
+    const taskCallsBefore = vi.mocked(listAnalysisTasks).mock.calls.length;
+    vi.mocked(runGeneralAnalysis).mockResolvedValueOnce({
+      taskId: 42,
+      status: "success",
+      summary: "关联日志分析完成",
+      evidence: [
+        {
+          type: "log_cluster",
+          source: "elasticsearch:1",
+          summary: "timeout 模板增加",
+          reference: "cluster:timeout",
+        },
+      ],
+      citations: [],
+    });
+
+    renderWithQueryClient(<AnalysisPage />);
+    await user.click(screen.getByRole("button", { name: /运行日志分析/ }));
+
+    expect(await screen.findByText("关联日志分析完成")).toBeInTheDocument();
+    expect(screen.getByText("timeout 模板增加")).toBeInTheDocument();
+    expect(
+      screen.getByText(/log_cluster · elasticsearch:1/),
+    ).toBeInTheDocument();
+    expect(vi.mocked(runGeneralAnalysis)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({
+          timeStart: expect.any(String),
+          timeEnd: expect.any(String),
+        }),
+      }),
+      expect.any(Object),
+    );
+    await vi.waitFor(() =>
+      expect(vi.mocked(listAnalysisTasks).mock.calls.length).toBeGreaterThan(
+        taskCallsBefore + 1,
+      ),
+    );
+  });
+
+  it("loads a topology node from nodeKey and applies its analysis context", async () => {
+    vi.mocked(getTopologyGraph).mockResolvedValueOnce({
+      nodes: [
+        {
+          id: 9,
+          nodeKey: "pod:prod:payments:payment-api-7f9",
+          kind: "pod",
+          name: "payment-api-7f9",
+          environment: "prod",
+          namespace: "payments",
+          labels: { system: "payment", service: "payment-api" },
+          properties: { dataSourceId: 2 },
+          sourceType: "kubernetes",
+          createdAt: "2026-07-22T10:00:00Z",
+          updatedAt: "2026-07-22T10:00:00Z",
+        },
+      ],
+      edges: [],
+    });
+
+    renderWithQueryClient(
+      <AnalysisPage />,
+      "/analysis?nodeKey=pod%3Aprod%3Apayments%3Apayment-api-7f9",
+    );
+
+    expect(
+      await screen.findByText(/已从拓扑节点 pod:prod:payments:payment-api-7f9/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("payments")).toBeInTheDocument();
+    expect(screen.getByText("payment-api-7f9")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("2")).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue(/container_cpu_usage_seconds_total/),
     ).toBeInTheDocument();
   });
 });

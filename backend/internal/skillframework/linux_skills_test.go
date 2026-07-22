@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -115,6 +116,25 @@ func TestLinuxConnectionFailureNeverReturnsHealthy(t *testing.T) {
 	}
 	if strings.Contains(string(output), "password=secret") || strings.Contains(string(output), `"status":"healthy"`) {
 		t.Fatalf("connection failure leaked credential or returned healthy: %s", output)
+	}
+}
+
+func TestSafeLinuxSkillErrorKeepsActionableCategoryWithoutDetails(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{linuxserver.ErrAuthenticationFailed, "authentication failed"},
+		{linuxserver.ErrHostKeyConfirmationRequired, "confirmation is required"},
+		{fmt.Errorf("%s: private address", linuxserver.ErrorDNSFailed), "DNS lookup failed"},
+		{fmt.Errorf("%s: 10.0.0.7", linuxserver.ErrorConnectionRefused), "connection was refused"},
+		{errors.New("detect linux platform failed: raw detail"), "platform detection failed"},
+	}
+	for _, test := range tests {
+		got := safeLinuxSkillError(test.err)
+		if !strings.Contains(got, test.want) || strings.Contains(got, "10.0.0.7") || strings.Contains(got, "raw detail") {
+			t.Fatalf("safeLinuxSkillError(%v) = %q, want category %q", test.err, got, test.want)
+		}
 	}
 }
 

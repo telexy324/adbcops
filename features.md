@@ -3792,27 +3792,41 @@ GET  /api/analysis/tasks/{id}
 
 ### 84.2 分析结果
 
+`POST /api/analysis/general` 使用统一 API envelope，`data` 同时返回持久化任务和结构化结果。前端必须读取 `data.result`，并在成功后刷新“我的分析任务”。
+
 ```json
 {
-  "taskId": 1001,
-  "workflowRunId": 2001,
-  "incidentId": 3001,
-  "status": "success",
-  "summary": "...",
-  "impact": {},
-  "timeline": [],
-  "facts": [],
-  "rootCauseCandidates": [],
-  "suggestions": [],
-  "riskTips": [],
-  "evidence": [],
-  "citations": [],
-  "confidence": {
-    "level": "medium",
-    "score": 0.72,
-    "reasons": []
+  "task": {
+    "id": 1001,
+    "taskType": "general",
+    "status": "success"
   },
-  "missingEvidence": []
+  "result": {
+    "taskId": 1001,
+    "status": "success",
+    "summary": "...",
+    "impact": {},
+    "timeline": [],
+    "facts": [],
+    "rootCauseCandidates": [],
+    "suggestions": [],
+    "riskTips": [],
+    "evidence": [
+      {
+        "type": "log_cluster",
+        "source": "elasticsearch:1",
+        "summary": "...",
+        "reference": "..."
+      }
+    ],
+    "citations": [],
+    "confidence": {
+      "level": "medium",
+      "score": 0.72,
+      "reasons": []
+    },
+    "missingEvidence": []
+  }
 }
 ```
 
@@ -4888,6 +4902,8 @@ GET /api/health
 - LLM HTTP 调用默认超时 180 秒，支持 Qwen3 等长耗时模型返回完整结果；
 - HTTP Server 写超时通过 `HTTP_SERVER_WRITE_TIMEOUT_SECONDS` 配置，默认 300 秒、有效范围 1–3600 秒，避免长耗时 LLM 响应被固定 30 秒写超时截断；
 - 服务日志级别通过 `LOG_LEVEL` 独立配置，支持 `debug`、`info`、`warn`、`error`，默认 `info`，不再由 `APP_ENV` 隐式决定；`info` 保留外部模型调用类型、目标、模型、状态与耗时，`debug` 额外打印经过凭据脱敏和长度限制的 Chat/Embedding/Rerank 请求体与响应体；
+- `LOG_LEVEL=debug` 时记录入站 JSON 请求体、查询参数和 JSON 响应体，最大 64 KiB，超出后必须标记截断；Password、Private Key、Credential、Authorization、Cookie、JWT、Token、Secret、API Key 等字段必须统一替换为 `[REDACTED]`，multipart、文件、流和非 JSON 正文不得写入日志；
+- Workflow、Skill 和 Linux Collector 在 `info` 级别记录 run/node/skill/collector 标识、状态、耗时和安全错误分类，在 `debug` 级别记录脱敏后的结构化输入输出；严禁记录 SSH 原始 stdout/stderr、完整命令行、argv、密码和私钥；
 - `/api/ready` 健康探针不写 HTTP 访问日志和审计日志，避免 Docker/K8s 周期探测产生无效日志；就绪检查、HTTP 指标和异常恢复保持启用；
 - Chat、Embedding、Rerank 调用统一打印结构化请求、响应和异常日志，`info` 包含 request ID、模型、接口、HTTP 状态和耗时；
 - 仅在 `debug` 级别写入模型请求与响应正文，单个日志正文最多 64 KiB，超限明确标记截断；Bearer Token、API Key、App Key、App Secret 和 URL 查询参数必须脱敏；
@@ -5208,13 +5224,27 @@ GET /api/health
 
 - 日志分析；
 - K8s 诊断；
+- Prometheus instant/range 指标查询；
 - 告警输入；
 - 证据面板；
-- 引用面板。
+- 引用面板；
+- 日志分析必须提供 `timeStart`、`timeEnd`，并与指标查询共享时间范围；
+- 前端按后端 `{ task, result }` 契约解包通用分析结果；
+- Evidence 使用后端统一字段 `type`、`source`、`summary`、`reference`；
+- 通用分析成功后立即刷新“我的分析任务”；
+- 页面维护关联分析上下文，统一环境、系统、组件、Namespace、Pod 和时间范围；
+- Alertmanager labels/annotations 自动预填日志、K8s 和指标条件；
+- K8s Pod 诊断完成后自动生成该 Pod 的基础 PromQL；
+- `/analysis?nodeKey=...` 读取拓扑节点及 labels/properties，自动预填分析上下文；
+- 页面不得使用已过期的固定演示时间，默认查询最近一小时。
 
 验收：
 
-- user 只能查看自己的任务。
+- user 只能查看自己的任务；
+- 日志分析请求包含合法起止时间，成功后能显示 summary、evidence、citations；
+- 新建分析任务无需刷新浏览器即可出现在任务列表；
+- 从告警或拓扑进入后，各诊断模块共享同一故障对象与时间范围；
+- K8s、指标或部分日志不可用时保留已成功模块结果和可见错误信息。
 
 ### Task 2.12：配置前端
 
@@ -11285,6 +11315,8 @@ frontend/src/features/linux/
 - Evidence Builder；
 - Timeline；
 - Incident 关联。
+- 每次 Linux Collector 成功或部分成功后，将脱敏后的结构化结果持久化为 `sourceType=linux_server` 的 Evidence；`sourceRef` 至少包含 hostId、collector、requestId 和 collectedAt；
+- Evidence 持久化失败不得伪造健康结论，必须写入安全的结构化告警日志。
 
 验收：
 
@@ -11323,6 +11355,10 @@ frontend/src/features/linux/
 - Evidence；
 - History；
 - Batch Report。
+- Workflow 为 `partial_success` 时显示显著提示；
+- 展示失败节点的安全错误信息和聚合后的 `missingEvidence`；
+- Agent 的结构化输出即为最终诊断报告，不使用只返回 `status=ok` 的占位 Report/Evidence 节点。
+- 运行诊断前检查所选主机 `hostKeyStatus`；`unverified` 主机在首次诊断时自动执行受控 SSH 握手并按 TOFU（首次使用信任）方式记录、固定指纹后继续采集，已观察到的 `pending` 指纹直接用于正式 Collector，均无需人工确认；`mismatch` 仍必须阻止采集并人工核对，禁止静默接受发生变化的 Host Key。
 
 验收：
 
@@ -11331,6 +11367,11 @@ frontend/src/features/linux/
 3. 批量统计包含失败主机；
 4. 可从 Host 发起 Incident；
 5. 不展示原始凭据和敏感命令行。
+6. HTTP 200 不得被前端解释为诊断成功，必须同时检查 Workflow Run status；
+7. SSH 认证、Host Key、DNS、超时、连接拒绝和平台检测错误可区分但不泄露底层凭据；
+8. Collector Evidence 无需刷新即可在 Evidence 页签中查询；
+9. partial、失败节点和证据缺口必须可见。
+10. Host Key 为 `unverified` 或 `pending` 时无需确认即可采集，首次握手或采集连接必须固定观察到的候选指纹；`mismatch` 不得发起正式诊断。
 
 ---
 

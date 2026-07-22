@@ -3,6 +3,7 @@ package skillframework
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -306,8 +307,31 @@ func linuxFailureOutput(skill string, hostID int64, message string) json.RawMess
 	return output
 }
 
-func safeLinuxSkillError(_ error) string {
-	return "Linux collector request failed"
+func safeLinuxSkillError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToUpper(err.Error())
+	switch {
+	case errors.Is(err, linuxserver.ErrAuthenticationFailed), strings.Contains(message, linuxserver.ErrorAuthFailed):
+		return "Linux SSH authentication failed"
+	case errors.Is(err, linuxserver.ErrHostKeyConfirmationRequired):
+		return "Linux SSH host key confirmation is required"
+	case errors.Is(err, linuxserver.ErrHostKeyMismatch), strings.Contains(message, linuxserver.ErrorHostKeyMismatch):
+		return "Linux SSH host key verification failed"
+	case strings.Contains(message, linuxserver.ErrorDNSFailed):
+		return "Linux host DNS lookup failed"
+	case strings.Contains(message, linuxserver.ErrorConnectTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "Linux SSH connection timed out"
+	case strings.Contains(message, linuxserver.ErrorConnectionRefused):
+		return "Linux SSH connection was refused"
+	case errors.Is(err, linuxserver.ErrInsecureHostKeyPolicy):
+		return "Linux SSH host key policy is not allowed"
+	case strings.Contains(strings.ToLower(err.Error()), "detect linux platform"):
+		return "Linux platform detection failed"
+	default:
+		return "Linux collector request failed"
+	}
 }
 
 func uniqueLinuxStrings(values []string) []string {

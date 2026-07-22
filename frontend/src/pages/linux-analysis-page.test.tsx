@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -84,6 +84,7 @@ const partialRun = {
       status: "success",
       attempt: 1,
       output: {
+        missingEvidence: ["memory: permission denied"],
         facts: [
           {
             type: "FACT",
@@ -214,6 +215,9 @@ describe("LinuxAnalysisPage", () => {
     expect(screen.getAllByText("FACT").length).toBeGreaterThan(0);
     expect(screen.getAllByText("RULE").length).toBeGreaterThan(0);
     expect(screen.getAllByText("HYPOTHESIS").length).toBeGreaterThan(0);
+    expect(screen.getByText("证据缺口")).toBeInTheDocument();
+    expect(screen.getByText(/memory: permission denied/)).toBeInTheDocument();
+    expect(screen.getByText(/本次 Workflow 仅部分成功/)).toBeInTheDocument();
   });
 
   it("shows collected host system details separately from optional metadata", async () => {
@@ -303,6 +307,26 @@ describe("LinuxAnalysisPage", () => {
     expect(screen.getByText("CPU threshold is normal")).toBeInTheDocument();
     expect(screen.getByText("Load may be transient")).toBeInTheDocument();
     expect(screen.getByText(/Workflow Run #23 已完成/)).toBeInTheDocument();
+  });
+
+  it("allows collection with an observed first-use Host Key without confirmation", async () => {
+    const pendingHost = {
+      ...hosts[0],
+      hostKeyStatus: "pending" as const,
+      pendingHostKeyAlgorithm: "ssh-ed25519",
+      pendingHostKeyFingerprint: "SHA256:observed",
+    };
+    vi.mocked(listLinuxHosts).mockResolvedValue([pendingHost]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "运行主机诊断" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "确认当前 Host Key 指纹" }),
+    ).not.toBeInTheDocument();
   });
 
   it("never renders raw command output or credential fields", async () => {

@@ -151,6 +151,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize linux skill collector: %w", err)
 	}
+	linuxSkillCollector.WithEvidenceRecorder(evidenceService)
 	toolRegistry := toolregistry.NewBuiltinRegistry()
 	skills := []skillframework.Skill{skillframework.EchoSkill{}}
 	skills = append(skills, skillframework.ComponentDiagnosisSkillsWithServices(nacosService, redisService, tidbService, nginxService)...)

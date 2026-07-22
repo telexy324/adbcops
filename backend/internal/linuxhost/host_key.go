@@ -56,8 +56,8 @@ func (s *Service) WithHostKeySecurityRecorders(events HostKeyEventRecorder, audi
 	return s
 }
 
-// PreflightHostKey prevents formal collection from opening an SSH connection
-// before an administrator has explicitly trusted the server key.
+// PreflightHostKey allows a first-use candidate observed by a successful test
+// to be pinned automatically. A changed key remains blocked.
 func (s *Service) PreflightHostKey(ctx context.Context, hostID int64, operation string) error {
 	if !validHostKeyOperation(operation) || hostID <= 0 {
 		return ErrInvalidHostKey
@@ -75,7 +75,7 @@ func (s *Service) PreflightHostKey(ctx context.Context, hostID int64, operation 
 	if host.HostKeyStatus == model.LinuxHostKeyStatusMismatch {
 		return ErrHostKeyMismatch
 	}
-	if operation == HostKeyOperationCollect && !trustedHostKeyConfigured(host) {
+	if operation == HostKeyOperationCollect && !usableHostKeyConfigured(host) {
 		return ErrHostKeyConfirmationRequired
 	}
 	return nil
@@ -128,12 +128,9 @@ func (s *Service) VerifyObservedHostKey(ctx context.Context, hostID int64, opera
 			*host.PendingHostKeyAlgorithm != algorithm || *host.PendingHostKeyFingerprint != fingerprint {
 			return nil, s.recordHostKeyMismatch(ctx, host, algorithm, fingerprint)
 		}
-		if operation == HostKeyOperationCollect {
-			return nil, ErrHostKeyConfirmationRequired
-		}
 		return &HostKeyVerification{
 			Allowed: true, Status: model.LinuxHostKeyStatusPending,
-			Algorithm: algorithm, Fingerprint: fingerprint, ConfirmationRequired: true,
+			Algorithm: algorithm, Fingerprint: fingerprint,
 		}, nil
 	}
 
@@ -147,7 +144,7 @@ func (s *Service) VerifyObservedHostKey(ctx context.Context, hostID int64, opera
 	}
 	return &HostKeyVerification{
 		Allowed: true, Status: updated.HostKeyStatus,
-		Algorithm: algorithm, Fingerprint: fingerprint, ConfirmationRequired: true,
+		Algorithm: algorithm, Fingerprint: fingerprint,
 	}, nil
 }
 
@@ -260,6 +257,14 @@ func (s *Service) recordHostKeyAudit(ctx context.Context, host *model.LinuxHost,
 func trustedHostKeyConfigured(host *model.LinuxHost) bool {
 	return host.HostKeyStatus == model.LinuxHostKeyStatusTrusted &&
 		host.HostKeyAlgorithm != nil && host.HostKeyFingerprint != nil
+}
+
+func usableHostKeyConfigured(host *model.LinuxHost) bool {
+	if trustedHostKeyConfigured(host) {
+		return true
+	}
+	return host.HostKeyStatus == model.LinuxHostKeyStatusPending &&
+		host.PendingHostKeyAlgorithm != nil && host.PendingHostKeyFingerprint != nil
 }
 
 func validHostKeyOperation(operation string) bool {

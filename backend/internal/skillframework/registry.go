@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -185,6 +186,13 @@ func (r *Registry) Execute(ctx context.Context, input ExecuteInput) (*ExecuteRes
 			return nil, err
 		}
 	}
+	slog.InfoContext(ctx, "skill execution started", "request_id", requestID, "skill", normalized,
+		"workflow_run_id", input.WorkflowRunID, "node_run_id", input.NodeRunID, "run_id", run.ID)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "skill execution input", "request_id", requestID, "skill", normalized,
+			"workflow_run_id", input.WorkflowRunID, "node_run_id", input.NodeRunID,
+			"input", string(auditutil.SanitizeJSON(input.Payload, 64<<10)))
+	}
 	timeout := time.Duration(definition.TimeoutSecond) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -210,10 +218,28 @@ func (r *Registry) Execute(ctx context.Context, input ExecuteInput) (*ExecuteRes
 		})
 	}
 	observability.ObserveSkill(normalized, status, finishedAt.Sub(startedAt))
+	slog.InfoContext(ctx, "skill execution completed", "request_id", requestID, "skill", normalized,
+		"workflow_run_id", input.WorkflowRunID, "node_run_id", input.NodeRunID, "run_id", run.ID,
+		"status", status, "latency_ms", finishedAt.Sub(startedAt).Milliseconds(), "error", safeSkillLogError(executeErr))
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "skill execution output", "request_id", requestID, "skill", normalized,
+			"workflow_run_id", input.WorkflowRunID, "node_run_id", input.NodeRunID,
+			"output", string(auditutil.SanitizeJSON(output, 64<<10)))
+	}
 	if executeErr != nil {
 		return nil, executeErr
 	}
 	return &ExecuteResult{SkillName: normalized, RunID: run.ID, Output: output}, nil
+}
+
+func safeSkillLogError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if auditutil.ContainsSensitiveToken(err.Error()) {
+		return auditutil.RedactedValue
+	}
+	return err.Error()
 }
 
 func (r *Registry) ListRuns(ctx context.Context, limit int) ([]model.SkillRun, error) {

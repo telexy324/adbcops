@@ -183,6 +183,14 @@ export function LinuxAnalysisPage() {
   const primaryHost = (hostsQuery.data ?? []).find(
     (host) => host.id === selectedHostIDs[0],
   );
+  const selectedHosts = (hostsQuery.data ?? []).filter((host) =>
+    selectedHostIDs.includes(host.id),
+  );
+  const blockedHosts = selectedHosts.filter(
+    (host) => host.hostKeyStatus === "mismatch",
+  );
+  const hostSelectionReady =
+    !hostsQuery.isLoading && selectedHosts.length === selectedHostIDs.length;
   const evidenceQuery = useQuery({
     queryKey: ["linux", "analysis", "evidence", primaryHost?.id],
     queryFn: () => listLinuxEvidence(),
@@ -239,6 +247,10 @@ export function LinuxAnalysisPage() {
     return undefined;
   }, [currentRun, hostRuns]);
   const findings = useMemo(() => extractFindings(displayRun), [displayRun]);
+  const missingEvidence = useMemo(
+    () => extractMissingEvidence(displayRun),
+    [displayRun],
+  );
   const health = deriveHealth(displayRun, findings);
   const selectedDiagnosis = diagnosisOptions.find(
     (item) => item.id === diagnosis,
@@ -391,9 +403,35 @@ export function LinuxAnalysisPage() {
                 ))}
               </div>
             </div>
+            {blockedHosts.length > 0 && (
+              <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    检测到 Host Key 已发生变化：
+                    {blockedHosts.map((host) => host.name).join("、")} 当前为
+                    {blockedHosts
+                      .map((host) => ` ${host.hostKeyStatus}`)
+                      .join("、")}
+                    。为避免静默连接到错误主机，本次采集已停止，请人工核对变更。
+                  </p>
+                </div>
+                <Link
+                  to="/linux-hosts"
+                  className="block text-center text-xs font-semibold text-amber-800 underline"
+                >
+                  返回主机配置核对变更
+                </Link>
+              </div>
+            )}
             <Button
               className="w-full"
-              disabled={runMutation.isPending || selectedHostIDs.length === 0}
+              disabled={
+                runMutation.isPending ||
+                selectedHostIDs.length === 0 ||
+                !hostSelectionReady ||
+                blockedHosts.length > 0
+              }
               onClick={() => runMutation.mutate()}
             >
               {runMutation.isPending ? (
@@ -462,6 +500,7 @@ export function LinuxAnalysisPage() {
                 run={displayRun}
                 systemOverview={systemOverview}
                 findings={findings}
+                missingEvidence={missingEvidence}
                 health={health}
                 evidence={hostEvidence}
                 events={hostEvents}
@@ -583,6 +622,12 @@ function WorkflowProgress({
         {pending && <Loader2 className="size-5 animate-spin text-cyan-600" />}
       </CardHeader>
       <CardContent>
+        {(run.status === "partial_success" || run.errorMessage) && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            本次 Workflow 仅部分成功。
+            {run.errorMessage || "请检查失败节点和证据缺口。"}
+          </div>
+        )}
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {nodes.map((node) => (
             <div
@@ -597,6 +642,11 @@ function WorkflowProgress({
                 <p className="text-xs text-slate-500">
                   {node.nodeType} · {node.status}
                 </p>
+                {node.errorMessage && (
+                  <p className="mt-1 line-clamp-2 text-xs text-rose-600">
+                    {node.errorMessage}
+                  </p>
+                )}
               </div>
             </div>
           ))}
@@ -613,6 +663,7 @@ function DetailContent({
   run,
   systemOverview,
   findings,
+  missingEvidence,
   health,
   evidence,
   events,
@@ -623,6 +674,7 @@ function DetailContent({
   run: WorkflowRun | null;
   systemOverview?: Record<string, unknown>;
   findings: Finding[];
+  missingEvidence: string[];
   health: string;
   evidence: LinuxEvidence[];
   events: LinuxEvent[];
@@ -648,7 +700,13 @@ function DetailContent({
       <OverviewPanel host={host} run={run} systemOverview={systemOverview} />
     );
   if (tab === "health")
-    return <FindingsPanel findings={findings} health={health} />;
+    return (
+      <FindingsPanel
+        findings={findings}
+        health={health}
+        missingEvidence={missingEvidence}
+      />
+    );
   if (tab === "evidence") return <EvidencePanel records={evidence} />;
   if (tab === "history") return <HistoryPanel run={run} events={events} />;
   if (tab === "topology")
@@ -758,9 +816,11 @@ function OverviewValue({ label, value }: { label: string; value: string }) {
 function FindingsPanel({
   findings,
   health,
+  missingEvidence,
 }: {
   findings: Finding[];
   health: string;
+  missingEvidence: string[];
 }) {
   const groups: FindingType[] = ["FACT", "RULE", "HYPOTHESIS"];
   return (
@@ -771,6 +831,23 @@ function FindingsPanel({
           Workflow
           已完成，但没有返回可识别的结构化诊断结论。请查看上方节点状态；失败或被截断的节点不会被当作健康结果。
         </div>
+      )}
+      {missingEvidence.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardHeader>
+            <CardTitle className="text-base">证据缺口</CardTitle>
+            <CardDescription>
+              以下信息未成功采集，因此不会将主机判定为健康。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {missingEvidence.map((item) => (
+              <p key={item} className="text-sm text-amber-900">
+                • {item}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
       )}
       <div className="grid gap-4 xl:grid-cols-3">
         {groups.map((type) => (
@@ -1312,6 +1389,37 @@ export function extractFindings(run: WorkflowRun | null): Finding[] {
   visit(run.output);
   run.nodeRuns?.forEach((node) => visit(node.output));
   return findings;
+}
+
+export function extractMissingEvidence(run: WorkflowRun | null): string[] {
+  if (!run) return [];
+  const result = new Set<string>();
+  const visit = (value: unknown) => {
+    if (typeof value === "string") {
+      const parsed = parseStructuredJSON(value);
+      if (parsed !== undefined) visit(parsed);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const object = value as Record<string, unknown>;
+    if (Array.isArray(object.missingEvidence)) {
+      object.missingEvidence.forEach((item) => {
+        if (typeof item === "string" && item.trim()) result.add(item.trim());
+      });
+    }
+    Object.values(object).forEach(visit);
+  };
+  visit(run.output);
+  run.nodeRuns?.forEach((node) => {
+    visit(node.output);
+    if (node.errorMessage?.trim()) result.add(node.errorMessage.trim());
+  });
+  if (run.errorMessage?.trim()) result.add(run.errorMessage.trim());
+  return Array.from(result);
 }
 
 function parseStructuredJSON(value: string): unknown | undefined {

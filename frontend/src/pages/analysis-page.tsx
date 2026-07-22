@@ -1,5 +1,6 @@
-import { FormEvent, ReactNode, useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
@@ -29,6 +30,7 @@ import {
   type MetricQueryResponse,
   type PodDiagnosisResponse,
 } from "@/api/analysis";
+import { getTopologyGraph, type TopologyNode } from "@/api/operations";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -60,7 +62,7 @@ const defaultAlertJSON = JSON.stringify(
         annotations: {
           summary: "payment api error rate is high",
         },
-        startsAt: "2026-07-12T10:00:00Z",
+        startsAt: new Date().toISOString(),
         fingerprint: "demo-fingerprint",
       },
     ],
@@ -69,7 +71,22 @@ const defaultAlertJSON = JSON.stringify(
   2,
 );
 
+type LinkedAnalysisContext = {
+  source: "manual" | "alert" | "k8s" | "metrics" | "topology";
+  nodeKey?: string;
+  environment?: string;
+  systemName?: string;
+  componentName?: string;
+  namespace?: string;
+  podName?: string;
+  summary?: string;
+};
+
 export function AnalysisPage() {
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const topologyNodeKey = searchParams.get("nodeKey")?.trim() ?? "";
+  const initialTimeRange = useMemo(createInitialTimeRange, []);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
@@ -83,12 +100,17 @@ export function AnalysisPage() {
   const [alertResult, setAlertResult] = useState<AlertmanagerResponse | null>(
     null,
   );
+  const [linkedContext, setLinkedContext] = useState<LinkedAnalysisContext>({
+    source: "manual",
+  });
   const [logForm, setLogForm] = useState({
     question: "支付接口 9 点后超时增多，可能是什么原因？",
     dataSourceIds: "1",
     environment: "prod",
     systemName: "payment",
     componentName: "payment-api",
+    timeStart: initialTimeRange.start,
+    timeEnd: initialTimeRange.end,
   });
   const [k8sForm, setK8sForm] = useState({
     dataSourceId: "1",
@@ -103,8 +125,8 @@ export function AnalysisPage() {
     dataSourceId: "1",
     query: "rate(http_requests_total[5m])",
     range: true,
-    start: "2026-07-12T10:00:00+08:00",
-    end: "2026-07-12T11:00:00+08:00",
+    start: initialTimeRange.start,
+    end: initialTimeRange.end,
     stepSeconds: "60",
     maxSeries: "20",
     maxPoints: "500",
@@ -115,6 +137,54 @@ export function AnalysisPage() {
     queryKey: ["analysis", "tasks"],
     queryFn: listAnalysisTasks,
   });
+
+  const topologyQuery = useQuery({
+    queryKey: ["analysis", "topology-node", topologyNodeKey],
+    queryFn: () => getTopologyGraph(200),
+    enabled: Boolean(topologyNodeKey),
+  });
+
+  useEffect(() => {
+    if (!topologyNodeKey || !topologyQuery.data) {
+      return;
+    }
+    const node = topologyQuery.data.nodes.find(
+      (item) => item.nodeKey === topologyNodeKey,
+    );
+    if (node) {
+      const context = contextFromTopologyNode(node);
+      setLogForm((current) => ({
+        ...current,
+        environment: context.environment || current.environment,
+        systemName: context.systemName || current.systemName,
+        componentName: context.componentName || current.componentName,
+      }));
+      setK8sForm((current) => ({
+        ...current,
+        dataSourceId: topologyDataSourceID(node) || current.dataSourceId,
+        namespace: context.namespace || current.namespace,
+        podName: context.podName || current.podName,
+      }));
+      setMetricsForm((current) => ({
+        ...current,
+        query:
+          context.namespace && context.podName
+            ? buildPodMetricQuery(context.namespace, context.podName)
+            : current.query,
+      }));
+      setLinkedContext(context);
+      setNotice(`已从拓扑节点 ${node.nodeKey} 带入关联分析上下文。`);
+      setError(null);
+    } else {
+      setError(`拓扑节点 ${topologyNodeKey} 不存在或不在当前可见范围内。`);
+    }
+  }, [topologyNodeKey, topologyQuery.data]);
+
+  useEffect(() => {
+    if (topologyNodeKey && topologyQuery.isError) {
+      setError(`加载拓扑节点失败：${toAPIErrorMessage(topologyQuery.error)}`);
+    }
+  }, [topologyNodeKey, topologyQuery.error, topologyQuery.isError]);
 
   const sortedTasks = useMemo(
     () => (tasksQuery.data ?? []).slice(0, 6),
@@ -127,6 +197,7 @@ export function AnalysisPage() {
       setGeneralResult(response);
       setEvidence(response.evidence ?? []);
       setCitations(response.citations ?? []);
+      void queryClient.invalidateQueries({ queryKey: ["analysis", "tasks"] });
       setNotice("日志分析完成，已刷新证据和引用面板。");
       setError(null);
     },
@@ -138,6 +209,22 @@ export function AnalysisPage() {
     onSuccess: (response) => {
       setPodResult(response);
       setRules(response.rules ?? []);
+      setLinkedContext((current) => ({
+        ...current,
+        source: "k8s",
+        namespace: response.namespace,
+        podName: response.pod.name,
+        componentName: current.componentName || response.pod.name,
+        summary: `${response.pod.name} · ${response.pod.phase} · ${response.rules?.length ?? 0} 条规则判断`,
+      }));
+      setLogForm((current) => ({
+        ...current,
+        componentName: current.componentName || response.pod.name,
+      }));
+      setMetricsForm((current) => ({
+        ...current,
+        query: buildPodMetricQuery(response.namespace, response.pod.name),
+      }));
       setNotice(
         response.warnings?.length
           ? `K8s 诊断完成，${response.warnings.length} 项日志不可用，其他诊断结果已返回。`
@@ -152,6 +239,11 @@ export function AnalysisPage() {
     mutationFn: queryMetrics,
     onSuccess: (response) => {
       setMetricsResult(response);
+      setLinkedContext((current) => ({
+        ...current,
+        source: "metrics",
+        summary: `${response.query} 返回 ${response.series.length} 条时序`,
+      }));
       setNotice("指标查询完成。");
       setError(null);
     },
@@ -177,6 +269,8 @@ export function AnalysisPage() {
         environment: logForm.environment,
         systemName: logForm.systemName,
         componentName: logForm.componentName,
+        timeStart: logForm.timeStart,
+        timeEnd: logForm.timeEnd,
       },
     });
   }
@@ -211,10 +305,61 @@ export function AnalysisPage() {
   function submitAlert(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
-      alertMutation.mutate(JSON.parse(alertJSON));
+      const payload = JSON.parse(alertJSON) as Record<string, unknown>;
+      applyAlertContext(payload);
+      alertMutation.mutate(payload);
     } catch {
       setError("Alertmanager JSON 格式不正确。");
     }
+  }
+
+  function applyAlertContext(payload: Record<string, unknown>) {
+    const alerts = Array.isArray(payload.alerts) ? payload.alerts : [];
+    const alert = asRecord(alerts[0]);
+    const labels = asRecord(alert.labels);
+    const annotations = asRecord(alert.annotations);
+    const environment = stringField(labels, "environment");
+    const systemName = stringField(labels, "system", "systemName");
+    const componentName = stringField(labels, "service", "component");
+    const namespace = stringField(labels, "namespace");
+    const podName = stringField(labels, "pod");
+    const summary =
+      stringField(annotations, "summary", "description") ||
+      stringField(labels, "alertname");
+    const range = timeRangeFromAlert(stringField(alert, "startsAt"));
+
+    setLinkedContext({
+      source: "alert",
+      environment,
+      systemName,
+      componentName,
+      namespace,
+      podName,
+      summary,
+    });
+    setLogForm((current) => ({
+      ...current,
+      question: summary || current.question,
+      environment: environment || current.environment,
+      systemName: systemName || current.systemName,
+      componentName: componentName || current.componentName,
+      timeStart: range?.start ?? current.timeStart,
+      timeEnd: range?.end ?? current.timeEnd,
+    }));
+    setK8sForm((current) => ({
+      ...current,
+      namespace: namespace || current.namespace,
+      podName: podName || current.podName,
+    }));
+    setMetricsForm((current) => ({
+      ...current,
+      query:
+        namespace && podName
+          ? buildPodMetricQuery(namespace, podName)
+          : current.query,
+      start: range?.start ?? current.start,
+      end: range?.end ?? current.end,
+    }));
   }
 
   return (
@@ -250,6 +395,29 @@ export function AnalysisPage() {
           {error ?? notice}
         </div>
       )}
+
+      <Card className="border-cyan-200 bg-cyan-50/40 shadow-none">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Network className="size-5 text-cyan-700" />
+            关联分析上下文
+          </CardTitle>
+          <CardDescription>
+            告警或拓扑节点会自动预填日志、K8s 和指标条件；K8s 诊断会生成对应 Pod
+            的指标查询。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2 text-sm text-slate-700">
+          <ContextPill label="来源" value={linkedContext.source} />
+          <ContextPill label="节点" value={linkedContext.nodeKey} />
+          <ContextPill label="环境" value={linkedContext.environment} />
+          <ContextPill label="系统" value={linkedContext.systemName} />
+          <ContextPill label="组件" value={linkedContext.componentName} />
+          <ContextPill label="Namespace" value={linkedContext.namespace} />
+          <ContextPill label="Pod" value={linkedContext.podName} />
+          <ContextPill label="观察" value={linkedContext.summary} />
+        </CardContent>
+      </Card>
 
       <section className="grid gap-6 2xl:grid-cols-[1.15fr_0.85fr]">
         <div className="grid gap-6 xl:grid-cols-2">
@@ -316,6 +484,42 @@ export function AnalysisPage() {
                           componentName: event.target.value,
                         }))
                       }
+                    />
+                  </Field>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="开始时间">
+                    <Input
+                      aria-label="日志分析开始时间"
+                      value={logForm.timeStart}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setLogForm((current) => ({
+                          ...current,
+                          timeStart: value,
+                        }));
+                        setMetricsForm((current) => ({
+                          ...current,
+                          start: value,
+                        }));
+                      }}
+                    />
+                  </Field>
+                  <Field label="结束时间">
+                    <Input
+                      aria-label="日志分析结束时间"
+                      value={logForm.timeEnd}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setLogForm((current) => ({
+                          ...current,
+                          timeEnd: value,
+                        }));
+                        setMetricsForm((current) => ({
+                          ...current,
+                          end: value,
+                        }));
+                      }}
                     />
                   </Field>
                 </div>
@@ -466,23 +670,33 @@ export function AnalysisPage() {
                   <Field label="开始">
                     <Input
                       value={metricsForm.start}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.target.value;
                         setMetricsForm((current) => ({
                           ...current,
-                          start: event.target.value,
-                        }))
-                      }
+                          start: value,
+                        }));
+                        setLogForm((current) => ({
+                          ...current,
+                          timeStart: value,
+                        }));
+                      }}
                     />
                   </Field>
                   <Field label="结束">
                     <Input
                       value={metricsForm.end}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.target.value;
                         setMetricsForm((current) => ({
                           ...current,
-                          end: event.target.value,
-                        }))
-                      }
+                          end: value,
+                        }));
+                        setLogForm((current) => ({
+                          ...current,
+                          timeEnd: value,
+                        }));
+                      }}
                     />
                   </Field>
                 </div>
@@ -579,9 +793,9 @@ export function AnalysisPage() {
               ) : (
                 evidence.map((item, index) => (
                   <PanelItem
-                    key={`${item.sourceType}-${index}`}
+                    key={`${item.type}-${item.source}-${index}`}
                     title={item.summary ?? `Evidence #${index + 1}`}
-                    meta={`${item.sourceType ?? "unknown"} · ${item.confidence ?? "--"}`}
+                    meta={`${item.type ?? "unknown"} · ${item.source ?? "unknown"}${item.reference ? ` · ${item.reference}` : ""}`}
                   />
                 ))
               )}
@@ -770,6 +984,18 @@ function StatusPill({ label }: { label: string }) {
   );
 }
 
+function ContextPill({ label, value }: { label: string; value?: string }) {
+  if (!value) {
+    return null;
+  }
+  return (
+    <span className="rounded-full border border-cyan-200 bg-white px-3 py-1">
+      <span className="text-slate-400">{label}：</span>
+      {value}
+    </span>
+  );
+}
+
 function PanelItem({ title, meta }: { title: string; meta: string }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
@@ -810,4 +1036,79 @@ function parseIDs(value: string) {
     .split(",")
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isFinite(item) && item > 0);
+}
+
+function createInitialTimeRange() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function timeRangeFromAlert(startsAt: string) {
+  if (!startsAt) {
+    return null;
+  }
+  const startAt = new Date(startsAt);
+  if (Number.isNaN(startAt.getTime())) {
+    return null;
+  }
+  const start = new Date(startAt.getTime() - 15 * 60 * 1000);
+  const end = new Date(startAt.getTime() + 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringField(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function contextFromTopologyNode(node: TopologyNode): LinkedAnalysisContext {
+  const data = { ...node.labels, ...node.properties };
+  const componentName =
+    stringField(data, "componentName", "component", "service", "app") ||
+    (["service", "pod", "workload", "deployment"].includes(node.kind)
+      ? node.name
+      : "");
+  const podName =
+    stringField(data, "podName", "pod") ||
+    (node.kind.toLowerCase() === "pod" ? node.name : "");
+  return {
+    source: "topology",
+    nodeKey: node.nodeKey,
+    environment: node.environment || stringField(data, "environment", "env"),
+    systemName: stringField(data, "systemName", "system"),
+    componentName,
+    namespace: node.namespace || stringField(data, "namespace"),
+    podName,
+    summary: `${node.kind} · ${node.displayName || node.name}`,
+  };
+}
+
+function topologyDataSourceID(node: TopologyNode) {
+  const data = { ...node.labels, ...node.properties };
+  const value = data.dataSourceId ?? data.data_source_id;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? String(parsed) : "";
+}
+
+function buildPodMetricQuery(namespace: string, podName: string) {
+  const escapedNamespace = namespace
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"');
+  const escapedPod = podName.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return `sum(rate(container_cpu_usage_seconds_total{namespace="${escapedNamespace}",pod="${escapedPod}"}[5m])) by (pod)`;
 }

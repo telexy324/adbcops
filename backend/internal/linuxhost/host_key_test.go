@@ -9,7 +9,7 @@ import (
 	"aiops-platform/backend/internal/model"
 )
 
-func TestStrictHostKeyRequiresTestAndAdminConfirmation(t *testing.T) {
+func TestStrictHostKeyUsesObservedCandidateWithoutAdminConfirmation(t *testing.T) {
 	store := newFakeRepository()
 	store.hosts[1] = &model.LinuxHost{
 		ID: 1, Name: "strict-host", Host: "10.0.0.1", Enabled: true,
@@ -23,12 +23,19 @@ func TestStrictHostKeyRequiresTestAndAdminConfirmation(t *testing.T) {
 		t.Fatalf("PreflightHostKey(collect) error = %v", err)
 	}
 	observed, err := service.VerifyObservedHostKey(context.Background(), 1, HostKeyOperationTest, "ssh-ed25519", fingerprint)
-	if err != nil || !observed.Allowed || !observed.ConfirmationRequired || observed.Status != model.LinuxHostKeyStatusPending {
+	if err != nil || !observed.Allowed || observed.ConfirmationRequired || observed.Status != model.LinuxHostKeyStatusPending {
 		t.Fatalf("VerifyObservedHostKey(test) = %+v, error = %v", observed, err)
 	}
-	if err := service.PreflightHostKey(context.Background(), 1, HostKeyOperationCollect); !errors.Is(err, ErrHostKeyConfirmationRequired) {
+	if err := service.PreflightHostKey(context.Background(), 1, HostKeyOperationCollect); err != nil {
 		t.Fatalf("PreflightHostKey(pending collect) error = %v", err)
 	}
+	verified, err := service.VerifyObservedHostKey(context.Background(), 1, HostKeyOperationCollect, "ssh-ed25519", fingerprint)
+	if err != nil || !verified.Allowed || verified.ConfirmationRequired {
+		t.Fatalf("VerifyObservedHostKey(pending collect) = %+v, error = %v", verified, err)
+	}
+
+	// Manual promotion to trusted remains available but is no longer required
+	// before collection.
 	user := &model.AppUser{ID: 2, Role: model.RoleUser}
 	if _, err := service.ConfirmHostKey(context.Background(), user, 1, ConfirmHostKeyInput{Algorithm: "ssh-ed25519", Fingerprint: fingerprint}); !errors.Is(err, ErrAdminRequired) {
 		t.Fatalf("ConfirmHostKey(user) error = %v", err)
@@ -41,7 +48,7 @@ func TestStrictHostKeyRequiresTestAndAdminConfirmation(t *testing.T) {
 	if err := service.PreflightHostKey(context.Background(), 1, HostKeyOperationCollect); err != nil {
 		t.Fatalf("PreflightHostKey(trusted collect) error = %v", err)
 	}
-	verified, err := service.VerifyObservedHostKey(context.Background(), 1, HostKeyOperationCollect, "ssh-ed25519", fingerprint)
+	verified, err = service.VerifyObservedHostKey(context.Background(), 1, HostKeyOperationCollect, "ssh-ed25519", fingerprint)
 	if err != nil || !verified.Allowed || verified.ConfirmationRequired {
 		t.Fatalf("VerifyObservedHostKey(collect) = %+v, error = %v", verified, err)
 	}
@@ -84,7 +91,7 @@ func TestTrustedHostKeyChangeBlocksConnectionAndRecordsSecurityArtifacts(t *test
 	}
 }
 
-func TestTOFUOnlyAllowsTestBeforeConfirmation(t *testing.T) {
+func TestTOFUAllowsObservedCandidateForCollection(t *testing.T) {
 	store := newFakeRepository()
 	store.hosts[3] = &model.LinuxHost{
 		ID: 3, Name: "tofu-host", Host: "10.0.0.3", Enabled: true,
@@ -96,8 +103,12 @@ func TestTOFUOnlyAllowsTestBeforeConfirmation(t *testing.T) {
 		t.Fatalf("TOFU collect error = %v", err)
 	}
 	result, err := service.VerifyObservedHostKey(context.Background(), 3, HostKeyOperationTest, "ssh-rsa", fingerprint)
-	if err != nil || !result.Allowed || !result.ConfirmationRequired {
+	if err != nil || !result.Allowed || result.ConfirmationRequired {
 		t.Fatalf("TOFU test = %+v, error = %v", result, err)
+	}
+	result, err = service.VerifyObservedHostKey(context.Background(), 3, HostKeyOperationCollect, "ssh-rsa", fingerprint)
+	if err != nil || !result.Allowed || result.ConfirmationRequired {
+		t.Fatalf("TOFU collect after observation = %+v, error = %v", result, err)
 	}
 }
 

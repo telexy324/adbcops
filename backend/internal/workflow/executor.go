@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -293,6 +294,17 @@ func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *
 	if err := e.runs.CreateWorkflowNodeRun(ctx, nodeRun); err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, "workflow node started",
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx), "workflow_run_id", workflowRunID,
+		"node_run_id", nodeRun.ID, "node_id", node.ID, "node_type", node.Type,
+	)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "workflow node input",
+			"request_id", appmiddleware.GetRequestIDFromContext(ctx), "workflow_run_id", workflowRunID,
+			"node_run_id", nodeRun.ID, "node_id", node.ID,
+			"input", string(auditutil.SanitizeJSON(nodeInput, 64<<10)),
+		)
+	}
 	output, executeErr := e.dispatchNode(ctx, workflowRunID, nodeRun.ID, actor, node, nodeInput)
 	finishedAt := e.now()
 	status := model.WorkflowRunStatusSuccess
@@ -316,7 +328,30 @@ func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *
 	}); err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, "workflow node completed",
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx), "workflow_run_id", workflowRunID,
+		"node_run_id", nodeRun.ID, "node_id", node.ID, "node_type", node.Type,
+		"status", status, "latency_ms", finishedAt.Sub(startedAt).Milliseconds(), "error", safeWorkflowLogError(executeErr),
+	)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "workflow node output",
+			"request_id", appmiddleware.GetRequestIDFromContext(ctx), "workflow_run_id", workflowRunID,
+			"node_run_id", nodeRun.ID, "node_id", node.ID,
+			"output", string(auditutil.SanitizeJSON(output, 64<<10)),
+		)
+	}
 	return output, executeErr
+}
+
+func safeWorkflowLogError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if auditutil.ContainsSensitiveToken(message) {
+		return auditutil.RedactedValue
+	}
+	return message
 }
 
 func isPartialWorkflowOutput(output json.RawMessage) bool {
