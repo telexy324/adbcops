@@ -128,10 +128,12 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
 	rewritten := understood.NormalizedQuery
 	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
+	logRetrievalAttempt(ctx, "query_understanding", retrievalTrace, chunks)
 	if len(chunks) == 0 && llmReady {
-		fallbackUnderstanding := broadQueryUnderstanding(question)
+		fallbackUnderstanding := relaxedQueryUnderstanding(question, understood)
 		if !sameQueryUnderstanding(understood, fallbackUnderstanding) {
 			fallbackChunks, fallbackTrace := s.hybridRetrieve(ctx, fallbackUnderstanding, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
+			logRetrievalAttempt(ctx, "relaxed_fallback", fallbackTrace, fallbackChunks)
 			fallbackTrace.Channels = append([]ChannelTrace{{
 				Channel:  "local_query_fallback",
 				Count:    len(fallbackChunks),
@@ -155,6 +157,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	contextBlocks, contextTrace := s.buildContext(ctx, chunks, documents, buildContextEvidence(retrievalTrace, rerankTrace), limit, defaultContextBudget)
 	retrievalTrace.Rerank = rerankTrace
 	retrievalTrace.Context = contextTrace
+	logRAGPipelineResult(ctx, retrievalTrace)
 	citations := buildContextCitations(contextBlocks)
 	answer, err := s.answer(ctx, question, rewritten, contextBlocks, citations, llmConfig, llmCredential, llmReady)
 	if err != nil {

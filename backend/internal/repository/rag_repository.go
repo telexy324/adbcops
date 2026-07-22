@@ -73,7 +73,7 @@ func (r *GORMRAGRepository) retrievalScope(ctx context.Context, filter Knowledge
 			Where("(kb_document_version.valid_until IS NULL OR kb_document_version.valid_until > ?)", now)
 	}
 	if filter.SystemName != "" {
-		query = query.Where("lower(coalesce(kb_document.system_name, '')) = lower(?)", filter.SystemName)
+		query = query.Where("btrim(lower(coalesce(kb_document.system_name, ''))) IN ?", systemNameVariants(filter.SystemName))
 	}
 	if filter.ComponentName != "" {
 		query = query.Where("lower(coalesce(kb_document.component_name, '')) = lower(?)", filter.ComponentName)
@@ -98,6 +98,18 @@ func (r *GORMRAGRepository) retrievalScope(ctx context.Context, filter Knowledge
 		}
 	}
 	return query
+}
+
+func systemNameVariants(value string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	withoutSuffix := strings.TrimSpace(strings.TrimSuffix(normalized, "系统"))
+	variants := []string{normalized}
+	if withoutSuffix != "" && withoutSuffix != normalized {
+		variants = append(variants, withoutSuffix)
+	} else if withoutSuffix != "" {
+		variants = append(variants, withoutSuffix+"系统")
+	}
+	return variants
 }
 
 func (r *GORMRAGRepository) HasPublishedChunks(ctx context.Context) (bool, error) {
@@ -132,22 +144,27 @@ func (r *GORMRAGRepository) SearchChunksTrigram(ctx context.Context, query strin
 func (r *GORMRAGRepository) SearchChunksExact(ctx context.Context, terms []string, filter KnowledgeRetrievalFilter, limit int) ([]RankedKnowledgeChunk, error) {
 	query := r.retrievalScope(ctx, filter)
 	conditions := make([]string, 0, len(terms))
-	args := make([]any, 0, len(terms)*2)
+	conditionArgs := make([]any, 0, len(terms)*2)
+	scoreParts := make([]string, 0, len(terms))
+	scoreArgs := make([]any, 0, len(terms)*3)
 	for _, term := range terms {
 		term = strings.TrimSpace(term)
 		if term == "" {
 			continue
 		}
+		pattern := "%" + term + "%"
 		conditions = append(conditions, "(kb_chunk.content ILIKE ? OR coalesce(kb_chunk.search_text, '') ILIKE ?)")
-		args = append(args, "%"+term+"%", "%"+term+"%")
+		conditionArgs = append(conditionArgs, pattern, pattern)
+		scoreParts = append(scoreParts, "CASE WHEN (kb_chunk.content ILIKE ? OR coalesce(kb_chunk.search_text, '') ILIKE ?) THEN ?::float8 ELSE 0 END")
+		scoreArgs = append(scoreArgs, pattern, pattern, float64(len([]rune(term))))
 	}
 	if len(conditions) == 0 {
 		return nil, nil
 	}
-	query = query.Where("("+strings.Join(conditions, " OR ")+")", args...)
+	query = query.Where("("+strings.Join(conditions, " OR ")+")", conditionArgs...)
 	var rows []rankedKnowledgeChunkRow
-	if err := query.Select("kb_chunk.*, ?::float8 AS retrieval_score", float64(len(conditions))).
-		Order("kb_chunk.id ASC").Limit(limit).Scan(&rows).Error; err != nil {
+	if err := query.Select("kb_chunk.*, ("+strings.Join(scoreParts, " + ")+") AS retrieval_score", scoreArgs...).
+		Order("retrieval_score DESC, kb_chunk.id ASC").Limit(limit).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("exact search kb chunks: %w", err)
 	}
 	return rowsToRankedKnowledgeChunks(rows), nil

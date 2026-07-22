@@ -3,11 +3,13 @@ package rag
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	llmsvc "aiops-platform/backend/internal/llm"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 )
@@ -158,6 +160,13 @@ func broadQueryUnderstanding(question string) QueryUnderstanding {
 	return QueryUnderstanding{NormalizedQuery: normalized, Keywords: tokenize(normalized)}
 }
 
+func relaxedQueryUnderstanding(question string, original QueryUnderstanding) QueryUnderstanding {
+	relaxed := broadQueryUnderstanding(question)
+	relaxed.Keywords = cleanTerms(append(append([]string{}, original.Keywords...), relaxed.Keywords...))
+	relaxed.MustHaveTerms = cleanTerms(original.MustHaveTerms)
+	return relaxed
+}
+
 func cleanTerms(values []string) []string {
 	seen := map[string]struct{}{}
 	result := make([]string, 0, len(values))
@@ -181,7 +190,7 @@ func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstand
 		DocumentVersionID: options.DocumentVersionID,
 		SystemName:        understood.SystemName, ComponentName: understood.ComponentName,
 		Environment: understood.Environment, DocTypes: understood.DocTypes,
-		MustHaveTerms: understood.MustHaveTerms, NegativeTerms: understood.NegativeTerms, Now: time.Now().UTC(),
+		NegativeTerms: understood.NegativeTerms, Now: time.Now().UTC(),
 		StrategyID: options.StrategyID, EmbeddingModelRevision: options.EmbeddingModelRevision,
 	}
 	trace := RetrievalTrace{Understanding: understood, Filters: filter, RRFK: defaultRRFK}
@@ -249,6 +258,54 @@ func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstand
 		trace.Candidates = append(trace.Candidates, RetrievalCandidateTrace{ChunkID: candidate.Chunk.ID, RRFScore: candidate.Score, ChannelRanks: candidate.Ranks})
 	}
 	return chunks, trace
+}
+
+type retrievalCandidateLog struct {
+	ChunkID           int64   `json:"chunkId"`
+	DocumentID        int64   `json:"documentId"`
+	DocumentVersionID int64   `json:"documentVersionId"`
+	StrategyID        int64   `json:"strategyId"`
+	ChunkIndex        int     `json:"chunkIndex"`
+	SourceTitle       *string `json:"sourceTitle,omitempty"`
+	SourceSection     *string `json:"sourceSection,omitempty"`
+	ContentPreview    string  `json:"contentPreview"`
+}
+
+func logRetrievalAttempt(ctx context.Context, stage string, trace RetrievalTrace, chunks []model.KBChunk) {
+	logger := slog.Default()
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	candidates := make([]retrievalCandidateLog, 0, len(chunks))
+	for _, chunk := range chunks {
+		candidates = append(candidates, retrievalCandidateLog{
+			ChunkID: chunk.ID, DocumentID: chunk.DocumentID, DocumentVersionID: chunk.DocumentVersionID,
+			StrategyID: chunk.StrategyID, ChunkIndex: chunk.ChunkIndex, SourceTitle: chunk.SourceTitle,
+			SourceSection: chunk.SourceSection, ContentPreview: snippet(chunk.Content),
+		})
+	}
+	logger.DebugContext(ctx, "rag retrieval attempt",
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+		"stage", stage,
+		"query_understanding", trace.Understanding,
+		"filters", trace.Filters,
+		"channels", trace.Channels,
+		"candidate_count", len(candidates),
+		"candidates", candidates,
+	)
+}
+
+func logRAGPipelineResult(ctx context.Context, trace RetrievalTrace) {
+	logger := slog.Default()
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	logger.DebugContext(ctx, "rag pipeline result",
+		"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+		"configuration", trace.Configuration,
+		"rerank", trace.Rerank,
+		"context_builder", trace.Context,
+	)
 }
 
 func fuseRRF(channels map[string][]repository.RankedKnowledgeChunk, k, limit int) []rankedCandidate {

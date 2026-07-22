@@ -8490,6 +8490,9 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - 问题 Embedding 仅在存在匹配模型的 Ready Chunk Embedding Index 时调用；无 Ready 索引时跳过向量调用并降级到 lexical；
 - 中文问题的本地 Query Understanding 生成有限二至四字词组，exact 通道按任一关键词匹配，避免整句匹配导致零召回。
 - LLM Query Understanding 生成的元数据或 must-have 条件导致零召回时，自动移除模型推断的硬过滤并使用本地关键词重试；兼容质检流程即使尚未构建 Ready Embedding Index，也必须能够通过 lexical/exact 通道查询已发布 Chunk。
+- LLM 推断的 `mustHaveTerms` 只参与关键词召回，不再作为所有通道的 SQL AND 硬门槛；系统名检索兼容末尾“系统”字样，例如“全国教育3”和“全国教育3系统”视为同一系统。
+- 带元数据过滤的首次召回为空时，宽松回退保留 LLM 提取的高区分度关键词和 `mustHaveTerms`；exact 通道按命中词数量及词长计算相关性，避免新上传文档被大量仅命中“系统”“检查”等通用词的旧 Chunk 挤出候选集。
+- `LOG_LEVEL=debug` 时记录每次 RAG 召回阶段的 Query Understanding、过滤条件、各通道数量、候选 Chunk/文档版本/标题/内容摘要，以及最终 Rerank 和 Context Builder Trace；`info` 级别不输出这些诊断内容。
 
 验收：
 
@@ -8509,6 +8512,7 @@ KNOWLEDGE_MIN_CITATION_ACCURACY=0.95
 - Rerank Adapter；
 - TopN；
 - Rerank Adapter 自动兼容原有 `top_n` 和配置 App Key 后的网关 `top_k` 请求格式；
+- Rerank 文档围绕问题关键词生成长度受控的摘要输入，兼容最大上下文 512 token 的 bge-reranker-large，超长 Chunk 不再导致整批精排失败；
 - 降级；
 - 去重；
 - 邻接合并；

@@ -14,6 +14,7 @@ import (
 
 const (
 	rerankCandidateLimit = 30
+	rerankDocumentRunes  = 400
 	defaultContextBudget = 6000
 	maxDocumentShare     = 0.5
 )
@@ -121,7 +122,7 @@ func (s *Service) rerankCandidates(ctx context.Context, query string, chunks []m
 	documentsInput := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
 		document := documents[chunk.DocumentID]
-		documentsInput = append(documentsInput, rerankDocument(chunk, document))
+		documentsInput = append(documentsInput, rerankDocument(chunk, document, query))
 	}
 	result, err := client.Rerank(ctx, llmsvc.RerankRequest{
 		BaseURL: config.BaseURL, APIKey: credential.APIKey, AppKey: credential.AppKey, APISecret: credential.APISecret,
@@ -160,7 +161,7 @@ func (s *Service) rerankCandidates(ctx context.Context, query string, chunks []m
 	return ranked, trace
 }
 
-func rerankDocument(chunk model.KBChunk, document model.KBDocument) string {
+func rerankDocument(chunk model.KBChunk, document model.KBDocument, query string) string {
 	parts := []string{}
 	if document.Title != "" {
 		parts = append(parts, "Title: "+document.Title)
@@ -179,8 +180,50 @@ func rerankDocument(chunk model.KBChunk, document model.KBDocument) string {
 			parts = append(parts, label+": "+strings.TrimSpace(*value))
 		}
 	}
-	parts = append(parts, "Content:\n"+chunk.Content)
+	prefix := strings.Join(parts, "\n")
+	contentBudget := rerankDocumentRunes - utf8.RuneCountInString(prefix) - utf8.RuneCountInString("\nContent:\n")
+	parts = append(parts, "Content:\n"+rerankExcerpt(chunk.Content, query, contentBudget))
 	return strings.Join(parts, "\n")
+}
+
+func rerankExcerpt(content, query string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(content))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	terms := tokenize(query)
+	sort.SliceStable(terms, func(i, j int) bool { return len([]rune(terms[i])) > len([]rune(terms[j])) })
+	lower := strings.ToLower(string(runes))
+	matchAt := -1
+	for _, term := range terms {
+		if index := strings.Index(lower, strings.ToLower(term)); index >= 0 {
+			matchAt = utf8.RuneCountInString(lower[:index])
+			break
+		}
+	}
+	if matchAt < 0 {
+		return string(runes[:limit]) + "..."
+	}
+	start := matchAt - limit/3
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > len(runes) {
+		end = len(runes)
+		start = end - limit
+	}
+	excerpt := string(runes[start:end])
+	if start > 0 {
+		excerpt = "..." + excerpt
+	}
+	if end < len(runes) {
+		excerpt += "..."
+	}
+	return excerpt
 }
 
 func metadataFallbackRank(query string, chunks []model.KBChunk, documents map[int64]model.KBDocument) ([]model.KBChunk, map[int64]float64) {

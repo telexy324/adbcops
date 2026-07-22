@@ -99,6 +99,62 @@ func TestAskRetriesLocallyWhenLLMQueryFiltersRemoveAllCandidates(t *testing.T) {
 	}
 }
 
+func TestHybridRetrieveTreatsMustHaveTermsAsSoftKeywords(t *testing.T) {
+	base := newFakeRepository()
+	base.noReadyIndex = true
+	documentID := base.addDocument(model.DocumentStatusPublished)
+	base.addChunk(documentID, "全国教育3系统中如何检查哨兵模式：执行 INFO replication。")
+	store := &restrictiveFilterRepository{fakeRepository: base}
+	service := NewService(store, nil, nil)
+
+	chunks, trace := service.hybridRetrieve(context.Background(), QueryUnderstanding{
+		NormalizedQuery: "全国教育3系统中如何检查哨兵模式",
+		Keywords:        []string{"全国教育3系统", "检查", "哨兵模式"},
+		MustHaveTerms:   []string{"检查", "哨兵模式", "全国教育3系统"},
+	}, nil, modelCredential{}, false, retrievalOptions{})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks = %+v, trace = %+v", chunks, trace)
+	}
+	if len(trace.Filters.MustHaveTerms) != 0 {
+		t.Fatalf("must-have terms leaked into hard retrieval filter: %+v", trace.Filters)
+	}
+}
+
+func TestRelaxedQueryUnderstandingKeepsDiscriminativeTerms(t *testing.T) {
+	got := relaxedQueryUnderstanding("全国教育3系统中如何检查哨兵模式", QueryUnderstanding{
+		Keywords:        []string{"检查", "哨兵模式", "系统"},
+		SystemName:      "全国教育3系统",
+		Environment:     "prod",
+		MustHaveTerms:   []string{"检查", "哨兵模式", "全国教育3系统"},
+		NegativeTerms:   []string{"测试"},
+		ComponentName:   "redis",
+		DocTypes:        []string{"runbook"},
+		TimeSensitivity: "current",
+	})
+	if got.SystemName != "" || got.ComponentName != "" || got.Environment != "" || len(got.DocTypes) != 0 || len(got.NegativeTerms) != 0 {
+		t.Fatalf("relaxed understanding retained hard filters: %+v", got)
+	}
+	for _, term := range []string{"检查", "哨兵模式", "全国教育3系统"} {
+		if !containsTerm(got.MustHaveTerms, term) {
+			t.Fatalf("relaxed must-have terms missing %q: %+v", term, got)
+		}
+	}
+}
+
+func TestRerankDocumentUsesQueryFocusedBoundedExcerpt(t *testing.T) {
+	content := strings.Repeat("无关的前置操作说明。", 80) + "检查哨兵模式时执行 INFO replication。" + strings.Repeat("无关的后置说明。", 80)
+	document := model.KBDocument{Title: "全国教育启停"}
+	chunk := model.KBChunk{Content: content}
+
+	got := rerankDocument(chunk, document, "全国教育3系统中如何检查哨兵模式")
+	if !strings.Contains(got, "检查哨兵模式") {
+		t.Fatalf("rerank document did not retain the query match: %q", got)
+	}
+	if count := len([]rune(got)); count > rerankDocumentRunes+6 {
+		t.Fatalf("rerank document rune count = %d, want <= %d", count, rerankDocumentRunes+6)
+	}
+}
+
 func TestTokenizeExpandsChineseQuestionForLexicalFallback(t *testing.T) {
 	terms := tokenize("数据库连接池耗尽时如何排查？")
 	for _, expected := range []string{"数据库", "连接池", "耗尽", "排查"} {
