@@ -301,7 +301,7 @@ Content-Type: application/json
 }
 ```
 
-`result` 必须符合本地 JSON schema：`score` 为 0～100，且 `summary`、`findings`、`suggestions` 不能为空。分数达到 `KNOWLEDGE_DOCUMENT_PASS_SCORE` 会进入 `reviewing`，低于该阈值会进入 `rejected`；该环境变量默认值为 70。
+`result` 必须符合本地 JSON schema：`score` 为 0～100，且 `summary`、`findings`、`suggestions` 不能为空。`KNOWLEDGE_DOCUMENT_PASS_SCORE` 是建议通过分数，默认值为 70；评分完成后无论高低都进入 `reviewing`，不会自动进入 `rejected`。`rejected` 只由管理员手工驳回产生。
 
 管理员可以通过同一接口提交审核动作：
 
@@ -315,7 +315,7 @@ Content-Type: application/json
 }
 ```
 
-支持的 `action` 为 `publish`、`reject`、`archive`、`deprecate`。审核动作会写入 `kb_document_review` 记录。兼容质检流程的 `publish` 仅允许质量分达到 `KNOWLEDGE_DOCUMENT_PASS_SCORE` 且当前状态为 `reviewing` 的文档进入 `published`，并同步发布最新文档版本及设置 `currentPublishedVersionId`；该接口不要求重复执行新版结构化 Publication Gate。新版版本发布门禁使用所选 Quality Profile 的 `passScore`。
+支持的 `action` 为 `publish`、`reject`、`archive`、`deprecate`。审核动作会写入 `kb_document_review` 记录。兼容质检流程允许管理员手工发布任意分数且状态为 `reviewing` 的文档，并同步发布最新文档版本及设置 `currentPublishedVersionId`；低于建议通过分数时，发布快照记录人工覆盖、实际分数和建议通过分数。该接口不要求重复执行新版结构化 Publication Gate。新版版本发布门禁仍使用所选 Quality Profile 的 `passScore`。
 
 新版版本发布前检查 Parse、Quality、Embedding、Retrieval Smoke Test 和 Review。发布接口返回 `40903` 时，`message` 会列出失败项，`data` 返回完整 Publication Gate；Quality 使用该版本最新一次已完成评分，Review 独立检查该评分是否已发布。
 

@@ -4958,9 +4958,9 @@ GET /api/health
 - 自动评分可使用默认标准；
 - 自动评分可同时使用默认标准和自定义标准；
 - 已配置默认 chat LLM 时，自动评分必须调用 LLM 接口完成评分；
-- 旧版文档质检以 `KNOWLEDGE_DOCUMENT_PASS_SCORE` 作为可进入发布审核的最低分，默认 70；
+- 旧版文档质检以 `KNOWLEDGE_DOCUMENT_PASS_SCORE` 作为建议通过分数，默认 70；自动评分无论高低都进入 `reviewing`，不会自动驳回，管理员可手工发布低分文档或手工驳回；低分发布会在发布快照中记录 `manualOverride=true`、实际分数和建议通过分数；
 - 结构化评分以 Quality Profile 的 `passScore` 为准，管理员可在 Standard Builder 中配置通过分数和警告分数。
-- 知识中心主页面的“解析切片 -> 自动评分/提交质检 -> 发布”属于兼容质检流程；文档达到配置分数并进入 `reviewing` 后可直接审核发布，同时原子更新最新文档版本、`currentPublishedVersionId`、审核记录与发布历史，不要求重复执行结构化 Publication Gate。
+- 知识中心主页面的“解析切片 -> 自动评分/提交质检 -> 发布”属于兼容质检流程；评分完成并进入 `reviewing` 后可由管理员审核发布，不以分数自动决定发布或驳回，同时原子更新最新文档版本、`currentPublishedVersionId`、审核记录与发布历史，不要求重复执行结构化 Publication Gate。
 
 ### Task 1.8：检索增强
 

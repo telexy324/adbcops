@@ -59,7 +59,7 @@ type Repository interface {
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
-	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
+	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, qualityPassScore int, comment *string) (*model.KBDocument, error)
 	CreateQualityStandard(ctx context.Context, standard *model.KBQualityStandard) error
 	ListQualityStandards(ctx context.Context, enabledOnly bool) ([]model.KBQualityStandard, error)
 	FindQualityStandardsByIDs(ctx context.Context, ids []int64) ([]model.KBQualityStandard, error)
@@ -611,7 +611,7 @@ func (s *Service) ReviewDecision(ctx context.Context, actor *model.AppUser, id i
 		return s.documents.FindDocumentByID(ctx, document.ID)
 	}
 	comment := optionalReviewComment(input.Comment)
-	return s.documents.RecordDocumentReview(ctx, document.ID, actor.ID, action, toStatus, comment)
+	return s.documents.RecordDocumentReview(ctx, document.ID, actor.ID, action, toStatus, s.qualityPassScore, comment)
 }
 
 func (s *Service) Search(ctx context.Context, actor *model.AppUser, query string, limit int) ([]model.KBChunk, error) {

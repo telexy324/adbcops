@@ -216,7 +216,7 @@ func TestReviewQualitySetsStatusByScore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReviewQuality(low) error = %v", err)
 	}
-	if low.Status != model.DocumentStatusRejected || low.QualityScore != 69 || CanPublish(low) {
+	if low.Status != model.DocumentStatusReviewing || low.QualityScore != 69 || !CanPublish(low) {
 		t.Fatalf("low-quality document = %+v, canPublish=%v", low, CanPublish(low))
 	}
 
@@ -243,7 +243,7 @@ func TestReviewQualityUsesConfiguredPassScore(t *testing.T) {
 	}
 
 	below, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":79,"summary":"below","findings":["x"],"suggestions":["y"]}`))
-	if err != nil || below.Status != model.DocumentStatusRejected || service.CanPublish(below) {
+	if err != nil || below.Status != model.DocumentStatusReviewing || !service.CanPublish(below) {
 		t.Fatalf("below threshold document=%+v err=%v", below, err)
 	}
 	passing, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":80,"summary":"pass","findings":["x"],"suggestions":["y"]}`))
@@ -251,7 +251,7 @@ func TestReviewQualityUsesConfiguredPassScore(t *testing.T) {
 		t.Fatalf("passing document=%+v err=%v", passing, err)
 	}
 	prompt := BuildQualityLLMPromptAt(passing, "content", nil, true, 80)
-	if !strings.Contains(prompt, "80 分及以上") {
+	if !strings.Contains(prompt, "80 分为建议通过线") || !strings.Contains(prompt, "不要自动驳回") {
 		t.Fatalf("prompt does not contain configured threshold: %s", prompt)
 	}
 }
@@ -297,7 +297,7 @@ func TestAutoReviewQualityUsesLLMWhenDefaultChatConfigExists(t *testing.T) {
 		IsDefault:   true,
 	}
 	client := &fakeLLMClient{
-		content: `{"score":88,"summary":"符合评分标准","findings":["包含回滚方案"],"suggestions":["补充演练记录"],"criteriaScores":[{"name":"回滚方案","score":90,"matched":["回滚"],"missing":["演练"],"standard":"DB 标准"}],"standards":["default","DB 标准"],"source":"llm"}`,
+		content: `{"score":8,"summary":"低于建议通过分数","findings":["缺少完整说明"],"suggestions":["补充演练记录"],"criteriaScores":[{"name":"回滚方案","score":8,"matched":["回滚"],"missing":["演练"],"standard":"DB 标准"}],"standards":["default","DB 标准"],"source":"llm"}`,
 	}
 	service := newTestServiceWithChunk(t, store, t.TempDir(), 4096, 120, 10).WithQualityLLM(nil, client)
 	owner := &model.AppUser{ID: 7, Role: model.RoleUser}
@@ -324,7 +324,7 @@ func TestAutoReviewQualityUsesLLMWhenDefaultChatConfigExists(t *testing.T) {
 	if !strings.Contains(client.lastRequest.Messages[1].Content, "DB 标准") || !strings.Contains(client.lastRequest.Messages[1].Content, "default") {
 		t.Fatalf("llm prompt missing standards: %s", client.lastRequest.Messages[1].Content)
 	}
-	if updated.QualityScore != 88 || result.Score != 88 || result.Source != "llm" || updated.Status != model.DocumentStatusReviewing {
+	if updated.QualityScore != 8 || result.Score != 8 || result.Source != "llm" || updated.Status != model.DocumentStatusReviewing || !service.CanPublish(updated) {
 		t.Fatalf("updated=%+v result=%+v", updated, result)
 	}
 }
@@ -348,7 +348,7 @@ func TestReviewDecisionRequiresAdminAndPublishableDocument(t *testing.T) {
 		t.Fatalf("ReviewDecision(draft publish) error = %v, want ErrCannotPublish", err)
 	}
 
-	reviewing, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":70,"summary":"ok","findings":["clear scope"],"suggestions":["keep updated"]}`))
+	reviewing, _, err := service.ReviewQuality(context.Background(), admin, document.ID, json.RawMessage(`{"score":10,"summary":"manual review required","findings":["missing details"],"suggestions":["improve later"]}`))
 	if err != nil {
 		t.Fatalf("ReviewQuality() error = %v", err)
 	}
@@ -756,7 +756,7 @@ func (f *fakeRepository) UpdateDocumentQuality(_ context.Context, id int64, scor
 	return document, nil
 }
 
-func (f *fakeRepository) RecordDocumentReview(_ context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error) {
+func (f *fakeRepository) RecordDocumentReview(_ context.Context, id int64, reviewerID int64, action, toStatus string, _ int, comment *string) (*model.KBDocument, error) {
 	document, ok := f.documents[id]
 	if !ok {
 		return nil, repository.ErrNotFound

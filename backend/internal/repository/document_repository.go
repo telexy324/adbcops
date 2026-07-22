@@ -35,7 +35,7 @@ type DocumentRepository interface {
 	ReplaceDocumentChunks(ctx context.Context, documentID int64, chunks []model.KBChunk) error
 	ListDocumentChunks(ctx context.Context, documentID int64) ([]model.KBChunk, error)
 	UpdateDocumentQuality(ctx context.Context, id int64, score int, result []byte, status string) (*model.KBDocument, error)
-	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error)
+	RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, qualityPassScore int, comment *string) (*model.KBDocument, error)
 	CreateQualityStandard(ctx context.Context, standard *model.KBQualityStandard) error
 	ListQualityStandards(ctx context.Context, enabledOnly bool) ([]model.KBQualityStandard, error)
 	FindQualityStandardsByIDs(ctx context.Context, ids []int64) ([]model.KBQualityStandard, error)
@@ -310,7 +310,7 @@ func (r *GORMUserRepository) UpdateDocumentQuality(ctx context.Context, id int64
 	return r.FindDocumentByID(ctx, id)
 }
 
-func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, comment *string) (*model.KBDocument, error) {
+func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64, reviewerID int64, action, toStatus string, qualityPassScore int, comment *string) (*model.KBDocument, error) {
 	var updated model.KBDocument
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var document model.KBDocument
@@ -344,11 +344,13 @@ func (r *GORMUserRepository) RecordDocumentReview(ctx context.Context, id int64,
 				return ErrImmutable
 			}
 			gateSnapshot, err := json.Marshal(map[string]any{
-				"mode":         "legacy_quality_review",
-				"qualityScore": document.QualityScore,
+				"mode":             "legacy_quality_review",
+				"qualityScore":     document.QualityScore,
+				"qualityPassScore": qualityPassScore,
+				"manualOverride":   document.QualityScore < qualityPassScore,
 				"checks": []map[string]any{
 					{"name": "parse", "passed": true},
-					{"name": "quality", "passed": true},
+					{"name": "quality", "passed": document.QualityScore >= qualityPassScore},
 					{"name": "review", "passed": true},
 				},
 			})

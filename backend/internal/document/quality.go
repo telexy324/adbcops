@@ -77,19 +77,17 @@ func StatusAfterQualityScore(score int) string {
 	return StatusAfterQualityScoreAt(score, defaultQualityPassScore)
 }
 
-func StatusAfterQualityScoreAt(score, passScore int) string {
-	if score >= passScore {
-		return model.DocumentStatusReviewing
-	}
-	return model.DocumentStatusRejected
+// Quality scores are advisory; only an explicit review action rejects a document.
+func StatusAfterQualityScoreAt(_, _ int) string {
+	return model.DocumentStatusReviewing
 }
 
 func CanPublish(document *model.KBDocument) bool {
 	return CanPublishAt(document, defaultQualityPassScore)
 }
 
-func CanPublishAt(document *model.KBDocument, passScore int) bool {
-	return document != nil && document.QualityScore >= passScore && document.Status == model.DocumentStatusReviewing
+func CanPublishAt(document *model.KBDocument, _ int) bool {
+	return document != nil && document.Status == model.DocumentStatusReviewing
 }
 
 func DefaultQualityCriteria() []QualityCriterion {
@@ -176,7 +174,7 @@ func BuildQualityLLMPromptAt(document *model.KBDocument, content string, customS
 	builder.WriteString("请根据评分标准对知识手册进行质量评分。必须返回严格 JSON：\n")
 	builder.WriteString(`{"score":0,"summary":"string","findings":["string"],"suggestions":["string"],"criteriaScores":[{"name":"string","score":0,"matched":["string"],"missing":["string"],"standard":"string"}],"standards":["string"],"source":"llm"}`)
 	builder.WriteString("\n\n评分要求：\n")
-	builder.WriteString(fmt.Sprintf("- score 必须是 0 到 100 的整数；%d 分及以上表示可进入发布审核，低于 %d 分表示不达标。\n", passScore, passScore))
+	builder.WriteString(fmt.Sprintf("- score 必须是 0 到 100 的整数；%d 分为建议通过线，低于该分数仍进入人工审核，不要自动驳回。\n", passScore))
 	builder.WriteString("- criteriaScores 必须覆盖所选默认标准和自定义标准中的关键条目。\n")
 	builder.WriteString("- findings 写已经满足的证据，suggestions 写需要补充或修正的内容。\n")
 	builder.WriteString("- source 固定返回 llm。\n\n")
