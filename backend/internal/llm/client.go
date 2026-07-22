@@ -369,8 +369,16 @@ func (c *OpenAICompatibleClient) logRequest(ctx context.Context, operation, endp
 		"endpoint", logEndpoint(endpoint),
 		"model", model,
 		"authorization", credentialState(firstSecret(secrets)),
-		"request_body", sanitizeLogBody(body, secrets...),
 	)
+	if c.logger.Enabled(ctx, slog.LevelDebug) {
+		c.logger.DebugContext(ctx, "llm outbound request body",
+			"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+			"operation", operation,
+			"endpoint", logEndpoint(endpoint),
+			"model", model,
+			"request_body", sanitizeLogBody(body, secrets...),
+		)
+	}
 }
 
 func (c *OpenAICompatibleClient) logResponse(ctx context.Context, operation, endpoint, model string, status int, startedAt time.Time, body []byte, secrets ...string) {
@@ -381,13 +389,22 @@ func (c *OpenAICompatibleClient) logResponse(ctx context.Context, operation, end
 		"model", model,
 		"status", status,
 		"latency_ms", time.Since(startedAt).Milliseconds(),
-		"response_body", sanitizeLogBody(body, secrets...),
 	}
 	if status >= http.StatusOK && status < http.StatusMultipleChoices {
 		c.logger.InfoContext(ctx, "llm outbound response", attrs...)
-		return
+	} else {
+		c.logger.ErrorContext(ctx, "llm outbound response", attrs...)
 	}
-	c.logger.ErrorContext(ctx, "llm outbound response", attrs...)
+	if c.logger.Enabled(ctx, slog.LevelDebug) {
+		c.logger.DebugContext(ctx, "llm outbound response body",
+			"request_id", appmiddleware.GetRequestIDFromContext(ctx),
+			"operation", operation,
+			"endpoint", logEndpoint(endpoint),
+			"model", model,
+			"status", status,
+			"response_body", sanitizeLogBody(body, secrets...),
+		)
+	}
 }
 
 func (c *OpenAICompatibleClient) logFailure(ctx context.Context, operation, endpoint, model string, startedAt time.Time, err error, secrets ...string) {

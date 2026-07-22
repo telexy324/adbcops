@@ -8,6 +8,7 @@ import (
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
+	t.Setenv("LOG_LEVEL", "")
 	t.Setenv("APP_PORT", "")
 	t.Setenv("APP_TIMEZONE", "")
 	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "")
@@ -20,6 +21,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Environment != defaultEnvironment {
 		t.Fatalf("Environment = %q, want %q", cfg.Environment, defaultEnvironment)
+	}
+	if cfg.LogLevel != defaultLogLevel {
+		t.Fatalf("LogLevel = %q, want %q", cfg.LogLevel, defaultLogLevel)
 	}
 	if cfg.Port != defaultPort {
 		t.Fatalf("Port = %d, want %d", cfg.Port, defaultPort)
@@ -49,6 +53,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("APP_ENV", "test")
+	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("APP_PORT", "9090")
 	t.Setenv("APP_TIMEZONE", "UTC")
 	t.Setenv("DB_HOST", "db.internal")
@@ -73,7 +78,7 @@ func TestLoadFromEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Environment != "test" || cfg.Port != 9090 || cfg.Timezone != "UTC" {
+	if cfg.Environment != "test" || cfg.LogLevel != "debug" || cfg.Port != 9090 || cfg.Timezone != "UTC" {
 		t.Fatal("Load() did not return the configured application values")
 	}
 	parsedDSN, err := url.Parse(cfg.Database.DSN())
@@ -101,6 +106,14 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.KnowledgeQuality.DocumentPassScore != 85 {
 		t.Fatalf("KnowledgeQuality = %+v", cfg.KnowledgeQuality)
+	}
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	setDatabaseEnv(t)
+	t.Setenv("LOG_LEVEL", "trace")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid LOG_LEVEL error")
 	}
 }
 

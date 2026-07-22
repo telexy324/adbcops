@@ -145,7 +145,7 @@ func TestOpenAICompatibleClientLogsChatEmbeddingAndRerankBodies(t *testing.T) {
 		}, nil
 	})
 	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	client := NewOpenAICompatibleClient(&http.Client{Transport: transport}).WithLogger(logger)
 	ctx := appmiddleware.ContextWithRequestID(context.Background(), "req-llm-log")
 
@@ -172,6 +172,7 @@ func TestOpenAICompatibleClientLogsChatEmbeddingAndRerankBodies(t *testing.T) {
 	output := logs.String()
 	for _, want := range []string{
 		`"msg":"llm outbound request"`, `"msg":"llm outbound response"`,
+		`"msg":"llm outbound request body"`, `"msg":"llm outbound response body"`,
 		`"request_id":"req-llm-log"`, `"operation":"chat"`, `"operation":"embedding"`, `"operation":"rerank"`,
 		"chat request", "chat reply", "embedding request", `\"embedding\":[0.1,0.2]`,
 		"rerank query", "rerank document", `\"relevance_score\":0.9`, `"authorization":"Bearer ***"`,
@@ -183,6 +184,36 @@ func TestOpenAICompatibleClientLogsChatEmbeddingAndRerankBodies(t *testing.T) {
 	for _, secret := range []string{"bearer-secret", "app-key-secret", "app-secret"} {
 		if strings.Contains(output, secret) {
 			t.Fatalf("logs leaked %q: %s", secret, output)
+		}
+	}
+}
+
+func TestOpenAICompatibleClientInfoLogsOmitBodies(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"model":"chat-model","choices":[{"message":{"content":"private reply"}}]}`)),
+		}, nil
+	})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	client := NewOpenAICompatibleClient(&http.Client{Transport: transport}).WithLogger(logger)
+	if _, err := client.Chat(context.Background(), ChatRequest{
+		BaseURL: "https://llm.example", Model: "chat-model",
+		Messages: []ChatMessage{{Role: "user", Content: "private request"}},
+	}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	output := logs.String()
+	for _, want := range []string{`"msg":"llm outbound request"`, `"msg":"llm outbound response"`, `"model":"chat-model"`, `"status":200`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("info logs missing %q: %s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"private request", "private reply", "request_body", "response_body"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("info logs contain body data %q: %s", unwanted, output)
 		}
 	}
 }

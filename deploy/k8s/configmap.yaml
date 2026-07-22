@@ -5,6 +5,7 @@ metadata:
   namespace: aiops
 data:
   APP_ENV: prod
+  LOG_LEVEL: info
   APP_PORT: "8080"
   APP_TIMEZONE: Asia/Shanghai
   HTTP_SERVER_WRITE_TIMEOUT_SECONDS: "300"

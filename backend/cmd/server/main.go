@@ -76,7 +76,7 @@ func run() error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	logger := newLogger(cfg.Environment)
+	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 	setGinMode(cfg.Environment)
 	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), databaseTimeout)
@@ -122,7 +122,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize user service: %w", err)
 	}
-	llmClient := llmsvc.NewLimitedClient(llmsvc.NewOpenAICompatibleClient(nil), 4)
+	llmClient := llmsvc.NewLimitedClient(llmsvc.NewOpenAICompatibleClient(nil).WithLogger(logger), 4)
 	conversationService := conversationsvc.NewService(conversationRepository)
 	llmService := llmsvc.NewService(llmRepository, credentialManager, llmClient)
 	ragService := ragsvc.NewService(ragRepository, credentialManager, llmClient)
@@ -288,7 +288,7 @@ func run() error {
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		logger.Info("http server starting", "address", cfg.Address(), "environment", cfg.Environment, "writeTimeout", cfg.HTTPServer.WriteTimeout)
+		logger.Info("http server starting", "address", cfg.Address(), "environment", cfg.Environment, "logLevel", cfg.LogLevel, "writeTimeout", cfg.HTTPServer.WriteTimeout)
 		serverErrors <- server.ListenAndServe()
 	}()
 
@@ -315,10 +315,15 @@ func run() error {
 	return nil
 }
 
-func newLogger(environment string) *slog.Logger {
+func newLogger(configuredLevel string) *slog.Logger {
 	level := slog.LevelInfo
-	if environment == "dev" {
+	switch configuredLevel {
+	case "debug":
 		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
 	}
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 }

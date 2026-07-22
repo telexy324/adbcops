@@ -25,9 +25,16 @@ Compose 会启动 PostgreSQL、先运行一次 `migrate up`，再启动 API。AP
 
 ```dotenv
 HTTP_SERVER_WRITE_TIMEOUT_SECONDS=300
+LOG_LEVEL=info
 ```
 
 允许范围为 1–3600 秒，修改后需要重启 API 容器。前端及外层反向代理的读取超时也应不小于该请求实际耗时。
+
+`LOG_LEVEL` 支持 `debug`、`info`、`warn`、`error`，默认 `info`。`info` 记录 Chat、Embedding、Rerank 的调用目标、模型、状态和耗时；`debug` 额外记录经过凭据脱敏、最多 64 KiB 的请求体和响应体。修改 `.env` 后执行：
+
+```bash
+docker compose up -d --force-recreate api
+```
 
 ## Kubernetes
 

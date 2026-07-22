@@ -12,6 +12,7 @@ import (
 
 const (
 	defaultEnvironment       = "dev"
+	defaultLogLevel          = "info"
 	defaultPort              = 8080
 	defaultTimezone          = "Asia/Shanghai"
 	defaultDBHost            = "127.0.0.1"
@@ -108,6 +109,7 @@ func (c DatabaseConfig) DSN() string {
 // Config contains the process-level settings needed by the HTTP server.
 type Config struct {
 	Environment      string
+	LogLevel         string
 	Port             int
 	Timezone         string
 	Database         DatabaseConfig
@@ -122,6 +124,10 @@ type Config struct {
 
 // Load reads configuration from environment variables and validates it.
 func Load() (Config, error) {
+	logLevel, err := loadLogLevel()
+	if err != nil {
+		return Config{}, err
+	}
 	port, err := loadPort(os.Getenv("APP_PORT"))
 	if err != nil {
 		return Config{}, err
@@ -166,6 +172,7 @@ func Load() (Config, error) {
 
 	return Config{
 		Environment:      valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
+		LogLevel:         logLevel,
 		Port:             port,
 		Timezone:         timezone,
 		Database:         database,
@@ -177,6 +184,16 @@ func Load() (Config, error) {
 		HTTPServer:       httpServer,
 		KnowledgeQuality: knowledgeQuality,
 	}, nil
+}
+
+func loadLogLevel() (string, error) {
+	level := strings.ToLower(strings.TrimSpace(valueOrDefault(os.Getenv("LOG_LEVEL"), defaultLogLevel)))
+	switch level {
+	case "debug", "info", "warn", "error":
+		return level, nil
+	default:
+		return "", fmt.Errorf("invalid LOG_LEVEL %q: must be debug, info, warn, or error", level)
+	}
 }
 
 func loadKnowledgeQualityConfig() (KnowledgeQualityConfig, error) {
