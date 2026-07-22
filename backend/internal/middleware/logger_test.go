@@ -38,3 +38,25 @@ func TestLoggerPrintsRecordedErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggerSkipsReadinessProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	router := gin.New()
+	router.Use(RequestID(), Logger(logger))
+	router.GET(readinessProbePath, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	})
+
+	request := httptest.NewRequest(http.MethodGet, readinessProbePath, nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("readiness probe produced access logs: %s", logs.String())
+	}
+}

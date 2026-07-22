@@ -23,7 +23,7 @@ func Audit(recorder AuditRecorder, logger *slog.Logger) gin.HandlerFunc {
 		startedAt := time.Now()
 		c.Next()
 
-		if recorder == nil || c.FullPath() == "" {
+		if recorder == nil || c.FullPath() == "" || c.Request.URL.Path == readinessProbePath {
 			return
 		}
 		requestID := GetRequestID(c)

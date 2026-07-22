@@ -4884,6 +4884,7 @@ GET /api/health
 - LLM HTTP 调用默认超时 180 秒，支持 Qwen3 等长耗时模型返回完整结果；
 - HTTP Server 写超时通过 `HTTP_SERVER_WRITE_TIMEOUT_SECONDS` 配置，默认 300 秒、有效范围 1–3600 秒，避免长耗时 LLM 响应被固定 30 秒写超时截断；
 - 服务日志级别通过 `LOG_LEVEL` 独立配置，支持 `debug`、`info`、`warn`、`error`，默认 `info`，不再由 `APP_ENV` 隐式决定；`info` 保留外部模型调用类型、目标、模型、状态与耗时，`debug` 额外打印经过凭据脱敏和长度限制的 Chat/Embedding/Rerank 请求体与响应体；
+- `/api/ready` 健康探针不写 HTTP 访问日志和审计日志，避免 Docker/K8s 周期探测产生无效日志；就绪检查、HTTP 指标和异常恢复保持启用；
 - Chat、Embedding、Rerank 调用统一打印结构化请求、响应和异常日志，`info` 包含 request ID、模型、接口、HTTP 状态和耗时；
 - 仅在 `debug` 级别写入模型请求与响应正文，单个日志正文最多 64 KiB，超限明确标记截断；Bearer Token、API Key、App Key、App Secret 和 URL 查询参数必须脱敏；
 - Embedding API；

@@ -7,11 +7,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const readinessProbePath = "/api/ready"
+
 // Logger writes one structured log entry after each HTTP request.
 func Logger(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		startedAt := time.Now()
 		c.Next()
+		if c.Request.URL.Path == readinessProbePath {
+			return
+		}
 
 		attrs := []any{
 			"request_id", GetRequestID(c),
