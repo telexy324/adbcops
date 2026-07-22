@@ -307,7 +307,11 @@ func (s *Service) fetch(ctx context.Context, dataSourceID int64, cfg Config, cre
 		return "", err
 	}
 	applyCredential(request, credential)
-	response, err := internalhttp.WithInsecureTLS(s.client, cfg.InsecureSkipTLS).Do(request)
+	response, err := internalhttp.DoWithDebugLog(
+		internalhttp.WithInsecureTLS(s.client, cfg.InsecureSkipTLS),
+		request,
+		internalhttp.DataSourceLogOptions{SourceType: model.DataSourceTypeNginx, DataSourceID: dataSourceID},
+	)
 	if err != nil {
 		if errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return "", ErrNginxTimeout

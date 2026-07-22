@@ -165,7 +165,11 @@ func (s *Service) Query(ctx context.Context, actor *model.AppUser, input QueryIn
 	}
 	request.Header.Set("Content-Type", "application/json")
 	applyCredential(request, credential)
-	response, err := internalhttp.WithInsecureTLS(s.client, config.InsecureSkipTLS).Do(request)
+	response, err := internalhttp.DoWithDebugLog(
+		internalhttp.WithInsecureTLS(s.client, config.InsecureSkipTLS),
+		request,
+		internalhttp.DataSourceLogOptions{SourceType: dataSource.SourceType, DataSourceID: dataSource.ID},
+	)
 	if err != nil {
 		if isTimeout(err) || errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return nil, ErrLogQueryTimeout

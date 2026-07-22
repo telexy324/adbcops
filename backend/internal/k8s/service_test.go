@@ -10,6 +10,7 @@ import (
 	"aiops-platform/backend/internal/model"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -325,6 +326,43 @@ func TestDiagnosePodRulesFromFakeClientDataset(t *testing.T) {
 	}
 }
 
+func TestDiagnosePodDegradesWhenWaitingContainerHasNoLogs(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-shell", Namespace: "kube-system"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "shell", Image: "alpine:latest"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "shell",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason: "ImagePullBackOff", Message: "Back-off pulling image alpine:latest",
+				}},
+			}},
+		},
+	}
+	service, _ := newTestService(t, pod)
+	service.repository = testRepository{dataSource: testDataSource(t, Config{
+		APIServer: "https://kubernetes.example.test", AllowedNamespaces: []string{"kube-system"},
+	})}
+	service.logReader = testLogReader{err: apierrors.NewBadRequest(`container "shell" in pod "node-shell" is waiting to start: trying and failing to pull image`)}
+
+	result, err := service.DiagnosePod(context.Background(), testActor(), PodDiagnosisInput{
+		DataSourceID: 1, Namespace: "kube-system", PodName: "node-shell",
+	})
+	if err != nil {
+		t.Fatalf("diagnose waiting pod: %v", err)
+	}
+	if len(result.Logs) != 1 || !result.Logs[0].Unavailable || !strings.Contains(result.Logs[0].Error, "waiting to start") {
+		t.Fatalf("unexpected degraded logs: %+v", result.Logs)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Container != "shell" {
+		t.Fatalf("unexpected warnings: %+v", result.Warnings)
+	}
+	if findRule(result.Rules, "k8s.pod.image_pull_backoff") == nil {
+		t.Fatalf("image pull finding missing: %+v", result.Rules)
+	}
+}
+
 func newTestService(t *testing.T, objects ...runtime.Object) (*Service, *fake.Clientset) {
 	t.Helper()
 	client := fake.NewSimpleClientset(objects...)
@@ -354,10 +392,11 @@ func (f testClientFactory) ClientFor(context.Context, *model.DataSource, Config,
 
 type testLogReader struct {
 	content string
+	err     error
 }
 
 func (r testLogReader) ReadPodLog(context.Context, kubernetes.Interface, string, string, string, bool, int64, int64) (string, error) {
-	return r.content, nil
+	return r.content, r.err
 }
 
 func findRule(findings []RuleFinding, id string) *RuleFinding {

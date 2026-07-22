@@ -591,7 +591,11 @@ func (s *Service) getJSON(ctx context.Context, dataSourceID int64, cfg Config, c
 		return fmt.Errorf("create nacos request: %w", err)
 	}
 	applyCredential(request, credential)
-	response, err := internalhttp.WithInsecureTLS(s.client, cfg.InsecureSkipTLS).Do(request)
+	response, err := internalhttp.DoWithDebugLog(
+		internalhttp.WithInsecureTLS(s.client, cfg.InsecureSkipTLS),
+		request,
+		internalhttp.DataSourceLogOptions{SourceType: model.DataSourceTypeNacos, DataSourceID: dataSourceID},
+	)
 	if err != nil {
 		if errors.Is(queryContext.Err(), context.DeadlineExceeded) {
 			return ErrNacosTimeout

@@ -138,7 +138,11 @@ export function AnalysisPage() {
     onSuccess: (response) => {
       setPodResult(response);
       setRules(response.rules ?? []);
-      setNotice("K8s 诊断完成，规则判断已更新。");
+      setNotice(
+        response.warnings?.length
+          ? `K8s 诊断完成，${response.warnings.length} 项日志不可用，其他诊断结果已返回。`
+          : "K8s 诊断完成，规则判断已更新。",
+      );
       setError(null);
     },
     onError: (err) => setError(toAPIErrorMessage(err)),
@@ -255,7 +259,9 @@ export function AnalysisPage() {
                 <Logs className="size-5 text-cyan-600" />
                 日志分析
               </CardTitle>
-              <CardDescription>触发后端 general analysis，产出证据与引用。</CardDescription>
+              <CardDescription>
+                触发后端 general analysis，产出证据与引用。
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-3" onSubmit={submitGeneral}>
@@ -405,11 +411,17 @@ export function AnalysisPage() {
                     checked={k8sForm.includeNode}
                     label="包含 Node"
                     onChange={(value) =>
-                      setK8sForm((current) => ({ ...current, includeNode: value }))
+                      setK8sForm((current) => ({
+                        ...current,
+                        includeNode: value,
+                      }))
                     }
                   />
                 </div>
-                <SubmitButton pending={podMutation.isPending} label="诊断 Pod" />
+                <SubmitButton
+                  pending={podMutation.isPending}
+                  label="诊断 Pod"
+                />
               </form>
             </CardContent>
           </Card>
@@ -420,7 +432,9 @@ export function AnalysisPage() {
                 <Activity className="size-5 text-cyan-600" />
                 指标查询
               </CardTitle>
-              <CardDescription>Prometheus instant/range 查询统一展示。</CardDescription>
+              <CardDescription>
+                Prometheus instant/range 查询统一展示。
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-3" onSubmit={submitMetrics}>
@@ -528,12 +542,18 @@ export function AnalysisPage() {
                 <BellRing className="size-5 text-cyan-600" />
                 告警输入
               </CardTitle>
-              <CardDescription>模拟 Alertmanager Webhook，写入统一事件。</CardDescription>
+              <CardDescription>
+                模拟 Alertmanager Webhook，写入统一事件。
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-3" onSubmit={submitAlert}>
                 <Field label="Alertmanager JSON">
-                  <Textarea value={alertJSON} rows={12} onChange={setAlertJSON} />
+                  <Textarea
+                    value={alertJSON}
+                    rows={12}
+                    onChange={setAlertJSON}
+                  />
                 </Field>
                 <SubmitButton
                   pending={alertMutation.isPending}
@@ -574,10 +594,14 @@ export function AnalysisPage() {
                 <Quote className="size-5 text-cyan-600" />
                 引用与规则
               </CardTitle>
-              <CardDescription>展示 RAG 引用和 K8s 规则 evidence keys。</CardDescription>
+              <CardDescription>
+                展示 RAG 引用和 K8s 规则 evidence keys。
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {citations.length === 0 && rules.length === 0 ? (
+              {citations.length === 0 &&
+              rules.length === 0 &&
+              !podResult?.warnings?.length ? (
                 <EmptyState text="暂无引用或规则判断。" />
               ) : (
                 <>
@@ -593,6 +617,13 @@ export function AnalysisPage() {
                       key={rule.id}
                       title={`${rule.severity.toUpperCase()} · ${rule.title}`}
                       meta={rule.evidenceKeys.join(", ")}
+                    />
+                  ))}
+                  {podResult?.warnings?.map((warning, index) => (
+                    <PanelItem
+                      key={`k8s-warning-${warning.container ?? "unknown"}-${warning.previous ? "previous" : "current"}-${index}`}
+                      title={`日志不可用 · ${warning.container ?? "unknown"}${warning.previous ? " · previous" : ""}`}
+                      meta={warning.message}
                     />
                   ))}
                 </>
@@ -615,7 +646,9 @@ export function AnalysisPage() {
               />
               <ResultPreview
                 title="K8s"
-                value={podResult && `${podResult.pod.name} · ${podResult.pod.phase}`}
+                value={
+                  podResult && `${podResult.pod.name} · ${podResult.pod.phase}`
+                }
               />
               <ResultPreview
                 title="指标"
@@ -640,7 +673,9 @@ export function AnalysisPage() {
                 <Network className="size-5 text-cyan-600" />
                 我的分析任务
               </CardTitle>
-              <CardDescription>后端按当前用户过滤；管理员可查看全部。</CardDescription>
+              <CardDescription>
+                后端按当前用户过滤；管理员可查看全部。
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {tasksQuery.isLoading ? (
@@ -739,7 +774,9 @@ function PanelItem({ title, meta }: { title: string; meta: string }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
       <p className="text-sm font-medium text-slate-800">{title}</p>
-      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{meta}</p>
+      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+        {meta}
+      </p>
     </div>
   );
 }
@@ -758,7 +795,11 @@ function ResultPreview({ title, value }: { title: string; value: unknown }) {
     <div className="rounded-lg bg-slate-50 px-3 py-2">
       <p className="text-xs font-medium text-slate-500">{title}</p>
       <p className="mt-1 truncate text-sm text-slate-800">
-        {typeof value === "string" ? value : value ? JSON.stringify(value) : "暂无"}
+        {typeof value === "string"
+          ? value
+          : value
+            ? JSON.stringify(value)
+            : "暂无"}
       </p>
     </div>
   );

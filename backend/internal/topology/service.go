@@ -2638,7 +2638,11 @@ func (r httpTraceGraphReader) ReadTraceServiceGraph(ctx context.Context, _ *mode
 	if err != nil {
 		return nil, ErrInvalidInput
 	}
-	response, err := internalhttp.WithInsecureTLS(r.client, insecureSkipTLS).Do(request)
+	response, err := internalhttp.DoWithDebugLog(
+		internalhttp.WithInsecureTLS(r.client, insecureSkipTLS),
+		request,
+		internalhttp.DataSourceLogOptions{SourceType: dataSource.SourceType, DataSourceID: dataSource.ID},
+	)
 	if err != nil {
 		return nil, err
 	}

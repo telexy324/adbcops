@@ -75,11 +75,22 @@ export type PodDiagnosisResponse = {
       lastReason?: string;
     }>;
   };
-  events?: Array<{ type?: string; reason?: string; message?: string; count?: number }>;
+  events?: Array<{
+    type?: string;
+    reason?: string;
+    message?: string;
+    count?: number;
+  }>;
   services?: Array<{ name: string; type?: string }>;
   endpoints?: Array<{ name: string; addresses?: string[] }>;
   ingresses?: Array<{ name: string; hosts?: string[] }>;
   rules?: K8sRuleFinding[];
+  warnings?: Array<{
+    stage: string;
+    container?: string;
+    previous?: boolean;
+    message: string;
+  }>;
 };
 
 export type MetricQueryResponse = {
@@ -121,8 +132,9 @@ export async function runGeneralAnalysis(input: {
 }
 
 export async function listAnalysisTasks() {
-  const response =
-    await apiClient.get<ApiEnvelope<AnalysisTask[]>>("/api/analysis/tasks");
+  const response = await apiClient.get<ApiEnvelope<AnalysisTask[]>>(
+    "/api/analysis/tasks",
+  );
   return response.data.data;
 }
 

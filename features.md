@@ -5048,12 +5048,14 @@ GET /api/health
 - Test；
 - admin only 配置；
 - Kubernetes、Elasticsearch/OpenSearch、Prometheus、Generic HTTP、Nacos、Nginx 等 HTTPS 数据源显式支持 `insecureSkipTlsVerify`，默认关闭且按数据源隔离生效。
+- `LOG_LEVEL=debug` 时完整记录 Kubernetes、Elasticsearch/OpenSearch、Prometheus、Generic HTTP、Nacos、Nginx 等 HTTP 数据源的出站方法、URL、请求头、请求体、响应状态、响应头、响应体和耗时，并关联 `request_id`、数据源类型及数据源 ID；认证头、Cookie、Token、Password、Secret、API Key 等敏感字段统一脱敏，单个 Body 超过 20 MiB 时明确标记截断；`info` 级别不打印请求与响应正文。
 
 验收：
 
 - config 无明文凭据；
 - 已有数据源可在配置中心编辑；
 - HTTPS 数据源可在配置中心显式选择“跳过 TLS 证书校验”，编辑时正确回显；
+- DEBUG 数据源调用日志可还原脱敏后的完整 HTTP 请求和响应，且日志读取不影响业务侧继续读取 Body；
 - user 只能查看脱敏后的启用数据源。
 
 ### Task 2.2：Elasticsearch Tool
@@ -5145,6 +5147,7 @@ GET /api/health
 - Pod；
 - Events；
 - current/previous logs；
+- 容器处于 `ImagePullBackOff`、`ContainerCreating` 等尚未启动状态，或 previous logs 不存在时，日志采集按 partial/degraded 处理：返回不可用原因并继续完成 Pod、Events、Service/Endpoint、Node 和规则诊断，不因 K8s logs API 的 400/404 响应导致整个诊断返回 500；
 - owner；
 - Service/Endpoint；
 - 可选 Node。
@@ -5152,6 +5155,7 @@ GET /api/health
 验收：
 
 - 日志行数和字节限制；
+- 单个容器日志不可用时返回结构化 `warnings` 和 `logs[].unavailable/error`，认证、权限、网络等非日志缺失错误仍正常失败；
 - Secret 不返回。
 
 ### Task 2.8：K8s 规则引擎

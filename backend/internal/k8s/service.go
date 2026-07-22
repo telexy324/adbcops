@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
+	internalhttp "aiops-platform/backend/internal/httpclient"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/resourcelimit"
@@ -124,6 +126,14 @@ type PodDiagnosisResult struct {
 	Node         *NodeSummary          `json:"node,omitempty"`
 	Rules        []RuleFinding         `json:"rules"`
 	Limits       PodDiagnosisLogLimits `json:"limits"`
+	Warnings     []PodDiagnosisWarning `json:"warnings,omitempty"`
+}
+
+type PodDiagnosisWarning struct {
+	Stage     string `json:"stage"`
+	Container string `json:"container,omitempty"`
+	Previous  bool   `json:"previous,omitempty"`
+	Message   string `json:"message"`
 }
 
 type PodDiagnosisLogLimits struct {
@@ -183,12 +193,14 @@ type EventSummary struct {
 }
 
 type PodLogSummary struct {
-	Container string `json:"container"`
-	Previous  bool   `json:"previous"`
-	Lines     int    `json:"lines"`
-	Bytes     int    `json:"bytes"`
-	Truncated bool   `json:"truncated"`
-	Content   string `json:"content"`
+	Container   string `json:"container"`
+	Previous    bool   `json:"previous"`
+	Lines       int    `json:"lines"`
+	Bytes       int    `json:"bytes"`
+	Truncated   bool   `json:"truncated"`
+	Content     string `json:"content"`
+	Unavailable bool   `json:"unavailable,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type ServiceSummary struct {
@@ -356,7 +368,7 @@ func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input P
 	if err != nil {
 		return nil, err
 	}
-	result.Logs, err = s.collectPodLogs(ctx, client, pod, input.IncludePreviousLogs, int64(tailLines), int64(maxBytes))
+	result.Logs, result.Warnings, err = s.collectPodLogs(ctx, client, pod, input.IncludePreviousLogs, int64(tailLines), int64(maxBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -783,23 +795,62 @@ func ingressReferencesServices(ingress IngressSummary, serviceNames map[string]s
 	return false
 }
 
-func (s *Service) collectPodLogs(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, includePrevious bool, tailLines, maxBytes int64) ([]PodLogSummary, error) {
+func (s *Service) collectPodLogs(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod, includePrevious bool, tailLines, maxBytes int64) ([]PodLogSummary, []PodDiagnosisWarning, error) {
 	result := make([]PodLogSummary, 0, len(pod.Spec.Containers)*2)
+	warnings := make([]PodDiagnosisWarning, 0)
 	for _, container := range pod.Spec.Containers {
 		current, err := s.readLimitedPodLog(ctx, client, pod.Namespace, pod.Name, container.Name, false, tailLines, maxBytes)
 		if err != nil {
-			return nil, err
+			if !isPodLogUnavailable(err) {
+				return nil, warnings, err
+			}
+			message := podLogErrorMessage(err)
+			current = unavailablePodLog(container.Name, false, message)
+			warnings = append(warnings, PodDiagnosisWarning{Stage: "pod_logs", Container: container.Name, Message: message})
 		}
 		result = append(result, current)
 		if includePrevious {
 			previous, err := s.readLimitedPodLog(ctx, client, pod.Namespace, pod.Name, container.Name, true, tailLines, maxBytes)
 			if err != nil {
-				return nil, err
+				if !isPodLogUnavailable(err) {
+					return nil, warnings, err
+				}
+				message := podLogErrorMessage(err)
+				previous = unavailablePodLog(container.Name, true, message)
+				warnings = append(warnings, PodDiagnosisWarning{Stage: "pod_logs", Container: container.Name, Previous: true, Message: message})
 			}
 			result = append(result, previous)
 		}
 	}
-	return result, nil
+	return result, warnings, nil
+}
+
+func isPodLogUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsBadRequest(err) || apierrors.IsNotFound(err) {
+		return true
+	}
+	detail := strings.ToLower(err.Error())
+	for _, marker := range []string{"waiting to start", "previous terminated container", "container is not valid for pod", "no logs"} {
+		if strings.Contains(detail, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func podLogErrorMessage(err error) string {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) && strings.TrimSpace(status.Status().Message) != "" {
+		return strings.TrimSpace(status.Status().Message)
+	}
+	return strings.TrimSpace(err.Error())
+}
+
+func unavailablePodLog(container string, previous bool, message string) PodLogSummary {
+	return PodLogSummary{Container: container, Previous: previous, Unavailable: true, Error: message}
 }
 
 func (s *Service) readLimitedPodLog(ctx context.Context, client kubernetes.Interface, namespace, podName, container string, previous bool, tailLines, maxBytes int64) (PodLogSummary, error) {
@@ -1105,11 +1156,20 @@ func (clientPodLogReader) ReadPodLog(ctx context.Context, client kubernetes.Inte
 	return string(bytes.TrimRight(raw, "\x00")), nil
 }
 
-func (realClientFactory) ClientFor(_ context.Context, _ *model.DataSource, config Config, credential Credential) (kubernetes.Interface, error) {
+func (realClientFactory) ClientFor(_ context.Context, dataSource *model.DataSource, config Config, credential Credential) (kubernetes.Interface, error) {
 	restConfig, err := restConfigFor(config, credential)
 	if err != nil {
 		return nil, err
 	}
+	dataSourceID := int64(0)
+	if dataSource != nil {
+		dataSourceID = dataSource.ID
+	}
+	restConfig.Wrap(func(transport http.RoundTripper) http.RoundTripper {
+		return internalhttp.NewDebugLoggingRoundTripper(transport, internalhttp.DataSourceLogOptions{
+			SourceType: model.DataSourceTypeKubernetes, DataSourceID: dataSourceID,
+		})
+	})
 	return kubernetes.NewForConfig(restConfig)
 }
 
