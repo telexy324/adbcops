@@ -5257,6 +5257,7 @@ GET /api/health
 - 页面维护关联分析上下文，统一环境、系统、组件、Namespace、Pod 和时间范围；
 - Alertmanager labels/annotations 自动预填日志、K8s 和指标条件；
 - K8s Pod 诊断完成后自动生成该 Pod 的基础 PromQL；
+- K8s Pod 诊断结果区必须明确展示 Pod/容器状态、规则描述、处理建议和已生成的 CPU PromQL，不得仅显示 Pod 名称与 Phase；
 - K8s 诊断支持 Pod 与 Service 两种对象，Service 模式调用 `/api/analysis/k8s/service-diagnose`；
 - Service 诊断展示后端 Pod、Endpoints、EndpointSlice、Ingress、采集降级 warning 和确定性规则；
 - `/analysis?nodeKey=...` 读取拓扑节点及 labels/properties，自动预填分析上下文；

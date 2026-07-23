@@ -862,6 +862,16 @@ export function AnalysisPage() {
         </div>
 
         <div className="space-y-6">
+          {podResult && (
+            <PodDiagnosisPanel
+              result={podResult}
+              cpuPromQL={buildPodMetricQuery(
+                podResult.namespace,
+                podResult.pod.name,
+              )}
+            />
+          )}
+
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -1127,6 +1137,115 @@ function EmptyState({ text }: { text: string }) {
     <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-400">
       <AlertTriangle className="mx-auto mb-2 size-4" />
       {text}
+    </div>
+  );
+}
+
+function PodDiagnosisPanel({
+  result,
+  cpuPromQL,
+}: {
+  result: PodDiagnosisResponse;
+  cpuPromQL: string;
+}) {
+  const containers = result.pod.containers ?? [];
+  const podRules = result.rules ?? [];
+  return (
+    <Card className="border-slate-200/80 shadow-none">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ServerCog className="size-5 text-brand-600" />
+          Pod 诊断结果
+        </CardTitle>
+        <CardDescription>
+          {result.namespace} / {result.pod.name}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <section>
+          <p className="text-xs font-medium text-slate-500">Pod 状态</p>
+          <div className="mt-2 grid gap-x-6 gap-y-2 border-y border-slate-200 py-3 text-sm sm:grid-cols-3">
+            <DiagnosisValue label="Phase" value={result.pod.phase} />
+            <DiagnosisValue label="Node" value={result.pod.nodeName ?? "-"} />
+            <DiagnosisValue
+              label="Containers Ready"
+              value={`${containers.filter((container) => container.ready).length}/${containers.length}`}
+            />
+          </div>
+          {containers.length > 0 && (
+            <div className="divide-y divide-slate-100">
+              {containers.map((container) => (
+                <div
+                  key={container.name}
+                  className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+                >
+                  <span className="font-medium text-slate-800">
+                    {container.name}
+                  </span>
+                  <span className="text-slate-500">
+                    {container.ready ? "Ready" : "Not Ready"} ·{" "}
+                    {container.state ?? "unknown"} · restart{" "}
+                    {container.restartCount}
+                    {container.reason ? ` · ${container.reason}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <p className="text-xs font-medium text-slate-500">
+            规则判断 ({podRules.length})
+          </p>
+          {podRules.length === 0 ? (
+            <p className="mt-2 border-y border-slate-200 py-3 text-sm text-emerald-700">
+              当前确定性规则未发现异常。
+            </p>
+          ) : (
+            <div className="mt-2 divide-y divide-slate-200 border-y border-slate-200">
+              {podRules.map((rule, index) => (
+                <div key={`${rule.id}-detail-${index}`} className="py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold uppercase text-rose-700">
+                      {rule.severity}
+                    </span>
+                    <p className="text-sm font-medium text-slate-900">
+                      {rule.title}
+                    </p>
+                  </div>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    {rule.description}
+                  </p>
+                  {rule.suggestion && (
+                    <p className="mt-1 text-sm leading-6 text-brand-700">
+                      建议：{rule.suggestion}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <p className="text-xs font-medium text-slate-500">
+            已生成 CPU PromQL
+          </p>
+          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all border-y border-slate-200 bg-slate-50 py-3 text-xs leading-5 text-slate-700">
+            {cpuPromQL}
+          </pre>
+        </section>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DiagnosisValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span className="text-xs text-slate-400">{label}</span>
+      <p className="mt-0.5 font-medium text-slate-800">{value}</p>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
 import {
+  diagnosePod,
   diagnoseService,
   listAnalysisTasks,
   runGeneralAnalysis,
@@ -795,6 +796,59 @@ describe("AnalysisPage", () => {
     expect(screen.getByDisplayValue("2")).toBeInTheDocument();
     expect(
       screen.getByDisplayValue(/container_cpu_usage_seconds_total/),
+    ).toBeInTheDocument();
+  });
+
+  it("displays Pod status, rule details, and the generated CPU PromQL", async () => {
+    const user = userEvent.setup();
+    vi.mocked(diagnosePod).mockResolvedValueOnce({
+      dataSourceId: 1,
+      namespace: "prod",
+      pod: {
+        name: "payment-api-0",
+        phase: "Running",
+        nodeName: "node-a",
+        containers: [
+          {
+            name: "app",
+            ready: false,
+            restartCount: 3,
+            state: "waiting",
+            reason: "CrashLoopBackOff",
+          },
+        ],
+      },
+      rules: [
+        {
+          id: "k8s.pod.crash_loop_backoff",
+          severity: "critical",
+          category: "pod",
+          title: "Pod container is in CrashLoopBackOff",
+          description: "container app is repeatedly restarting",
+          evidenceKeys: ["pod.container.app.reason"],
+          suggestion: "检查 previous logs 和启动参数。",
+        },
+      ],
+    });
+
+    renderWithQueryClient(<AnalysisPage />);
+    await user.click(screen.getByRole("button", { name: /诊断 Pod/ }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Pod 诊断结果" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Containers Ready")).toBeInTheDocument();
+    expect(
+      screen.getByText("container app is repeatedly restarting"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("建议：检查 previous logs 和启动参数。"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("已生成 CPU PromQL")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /container_cpu_usage_seconds_total\{namespace="prod",pod="payment-api-0"\}/,
+      ),
     ).toBeInTheDocument();
   });
 
