@@ -15,10 +15,11 @@ import (
 
 func TestBuiltinDefinitionsValidate(t *testing.T) {
 	definitions := BuiltinDefinitions()
-	if len(definitions) != 29 {
-		t.Fatalf("builtin workflow count = %d, want 29", len(definitions))
+	if len(definitions) != 30 {
+		t.Fatalf("builtin workflow count = %d, want 30", len(definitions))
 	}
 	assertBuiltinWorkflowNames(t, definitions, []string{
+		"service_diagnosis_workflow",
 		"nacos_diagnosis_workflow",
 		"nacos_registration_diagnosis_workflow",
 		"nacos_config_delivery_diagnosis_workflow",
@@ -134,6 +135,7 @@ func (builtinTestSkills) Get(name string) (skillframework.SkillDefinition, error
 		"aggregate_log_templates",
 		"extract_log_entities",
 		"get_pod_context",
+		"get_service_context",
 		"get_ingress_context",
 		"run_k8s_diagnostic_rules",
 		"query_metrics",

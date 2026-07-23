@@ -9,10 +9,12 @@ import (
 
 	"aiops-platform/backend/internal/model"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -326,6 +328,125 @@ func TestDiagnosePodRulesFromFakeClientDataset(t *testing.T) {
 	}
 }
 
+func TestDiagnoseServiceCollectsEndpointSlicesAndFindsRoutingProblems(t *testing.T) {
+	serviceObject := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: corev1.ServiceSpec{
+			Selector:  map[string]string{"app": "api"},
+			ClusterIP: "10.0.0.10",
+			Ports: []corev1.ServicePort{{
+				Name: "http", Port: 80, TargetPort: intstrFromString("web"), Protocol: corev1.ProtocolTCP,
+			}},
+		},
+	}
+	readyPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-ready", Namespace: "prod", Labels: map[string]string{"app": "api"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app", Ports: []corev1.ContainerPort{{Name: "web", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			Conditions:        []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: true}},
+		},
+	}
+	notReadyPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-not-ready", Namespace: "prod", Labels: map[string]string{"app": "api"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+		},
+	}
+	portName := "http"
+	portNumber := int32(8080)
+	protocol := corev1.ProtocolTCP
+	ready := true
+	notReady := false
+	terminating := true
+	endpointSlice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-slice",
+			Namespace: "prod",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "api"},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       []discoveryv1.EndpointPort{{Name: &portName, Port: &portNumber, Protocol: &protocol}},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.1.0.1"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}},
+			{Addresses: []string{"10.1.0.2"}, Conditions: discoveryv1.EndpointConditions{Ready: &notReady, Terminating: &terminating}},
+		},
+	}
+	ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{
+			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{{
+					Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+						Name: "api", Port: networkingv1.ServiceBackendPort{Number: 81},
+					}},
+				}},
+			}},
+		}}},
+	}
+	k8sService, _ := newTestService(t, serviceObject, readyPod, notReadyPod, endpointSlice, ingress)
+
+	result, err := k8sService.DiagnoseService(context.Background(), testActor(), ServiceDiagnosisInput{
+		DataSourceID: 1,
+		Namespace:    "prod",
+		ServiceName:  "api",
+	})
+	if err != nil {
+		t.Fatalf("diagnose service: %v", err)
+	}
+	if result.Service.Name != "api" || len(result.BackendPods) != 2 || len(result.EndpointSlices) != 1 {
+		t.Fatalf("unexpected service context: %+v", result)
+	}
+	expected := []string{
+		"k8s.service.not_ready_endpoints",
+		"k8s.service.terminating_endpoints",
+		"k8s.service.backend_pods_not_ready",
+		"k8s.service.target_port_not_found",
+		"k8s.ingress.backend_port_mismatch",
+	}
+	for _, id := range expected {
+		if findRule(result.Rules, id) == nil {
+			t.Fatalf("expected rule %s in %+v", id, result.Rules)
+		}
+	}
+	if findRule(result.Rules, "k8s.service.no_ready_endpoint") != nil {
+		t.Fatalf("did not expect no-ready-endpoint rule: %+v", result.Rules)
+	}
+}
+
+func TestDiagnoseServiceFallsBackToLegacyEndpoints(t *testing.T) {
+	serviceObject := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "manual", Namespace: "prod"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
+	}
+	endpoint := &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "manual", Namespace: "prod"},
+		Subsets: []corev1.EndpointSubset{{
+			Addresses: []corev1.EndpointAddress{{IP: "10.2.0.1"}},
+			Ports:     []corev1.EndpointPort{{Port: 8443}},
+		}},
+	}
+	k8sService, _ := newTestService(t, serviceObject, endpoint)
+
+	result, err := k8sService.DiagnoseService(context.Background(), testActor(), ServiceDiagnosisInput{
+		DataSourceID: 1, Namespace: "prod", ServiceName: "manual",
+	})
+	if err != nil {
+		t.Fatalf("diagnose service: %v", err)
+	}
+	if result.Endpoints == nil || len(result.Endpoints.Addresses) != 1 {
+		t.Fatalf("legacy endpoints were not collected: %+v", result)
+	}
+	if findRule(result.Rules, "k8s.service.no_ready_endpoint") != nil {
+		t.Fatalf("legacy ready endpoint should satisfy routing gate: %+v", result.Rules)
+	}
+}
+
 func TestDiagnosePodDegradesWhenWaitingContainerHasNoLogs(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-shell", Namespace: "kube-system"},
@@ -426,4 +547,8 @@ func testDataSource(t *testing.T, config Config) *model.DataSource {
 
 func testActor() *model.AppUser {
 	return &model.AppUser{ID: 10, Username: "operator", Role: model.RoleUser, Enabled: true}
+}
+
+func intstrFromString(value string) intstr.IntOrString {
+	return intstr.FromString(value)
 }

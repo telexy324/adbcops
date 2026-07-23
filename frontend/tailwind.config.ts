@@ -13,6 +13,18 @@ export default {
     },
     extend: {
       colors: {
+        brand: {
+          50: "#faf7f1",
+          100: "#f4ecdd",
+          200: "#e6d5b4",
+          300: "#d8c18f",
+          400: "#c6a86f",
+          500: "#b99a5d",
+          600: "#9c7f49",
+          700: "#795f38",
+          800: "#58452f",
+          900: "#383226",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -49,7 +61,7 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       boxShadow: {
-        panel: "0 18px 50px rgba(2, 10, 24, 0.16)",
+        panel: "0 18px 50px rgba(37, 43, 58, 0.14)",
       },
     },
   },

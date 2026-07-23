@@ -187,7 +187,7 @@ export function WorkflowPage() {
     <div className="mx-auto max-w-[1700px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">Workflow Center</p>
+          <p className="text-sm font-medium text-brand-700">Workflow Center</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">
             工作流
           </h1>
@@ -221,7 +221,7 @@ export function WorkflowPage() {
         <Card className="border-slate-200/80 shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <GitBranch className="size-5 text-cyan-600" />
+              <GitBranch className="size-5 text-brand-600" />
               Builder
             </CardTitle>
             <CardDescription>
@@ -267,7 +267,7 @@ export function WorkflowPage() {
               </Field>
               <Field label="DSL JSON">
                 <textarea
-                  className="min-h-[420px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 outline-none ring-cyan-500/20 transition focus:border-cyan-500 focus:ring-4"
+                  className="min-h-[420px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 outline-none ring-brand-500/20 transition focus:border-brand-500 focus:ring-4"
                   value={definitionText}
                   onChange={(event) => setDefinitionText(event.target.value)}
                   spellCheck={false}
@@ -417,7 +417,7 @@ function WorkflowList({
                 className={cn(
                   "rounded-xl border px-4 py-3 text-left transition",
                   selectedId === workflow.id
-                    ? "border-cyan-300 bg-cyan-50"
+                    ? "border-brand-300 bg-brand-50"
                     : "border-slate-200 bg-white hover:border-slate-300",
                 )}
               >
@@ -456,7 +456,7 @@ function RunPanel({
     <Card className="border-slate-200/80 shadow-none">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <PlayCircle className="size-5 text-cyan-600" />
+          <PlayCircle className="size-5 text-brand-600" />
           运行 Workflow
         </CardTitle>
         <CardDescription>
@@ -467,7 +467,7 @@ function RunPanel({
         <form className="space-y-3" onSubmit={onSubmit}>
           <Field label="运行输入 JSON">
             <textarea
-              className="min-h-32 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 outline-none ring-cyan-500/20 transition focus:border-cyan-500 focus:ring-4"
+              className="min-h-32 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 outline-none ring-brand-500/20 transition focus:border-brand-500 focus:ring-4"
               value={runInputText}
               onChange={(event) => onRunInputTextChange(event.target.value)}
               spellCheck={false}
@@ -527,7 +527,7 @@ function RunList({
                 className={cn(
                   "flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition",
                   selectedRunId === run.id
-                    ? "border-cyan-300 bg-cyan-50"
+                    ? "border-brand-300 bg-brand-50"
                     : "border-slate-200 bg-white hover:border-slate-300",
                 )}
               >
@@ -667,7 +667,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function StatusPill({ label }: { label: string }) {
   return (
-    <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
+    <span className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">
       {label}
     </span>
   );

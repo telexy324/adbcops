@@ -96,7 +96,7 @@ export function KnowledgeAdminWorkbench({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2 text-white">
-              <ShieldCheck className="size-5 text-cyan-300" /> 管理工作台
+              <ShieldCheck className="size-5 text-brand-300" /> 管理工作台
             </CardTitle>
             <CardDescription className="mt-2 text-slate-400">
               版本、AST、评分标准、Chunk、Embedding、Retrieval 与发布门禁。
@@ -117,7 +117,7 @@ export function KnowledgeAdminWorkbench({
                 className={cn(
                   "rounded-md px-3 py-2 text-xs font-medium",
                   tab === value
-                    ? "bg-cyan-300 text-slate-950"
+                    ? "bg-brand-300 text-slate-950"
                     : "text-slate-400 hover:text-white",
                 )}
               >
@@ -343,7 +343,7 @@ function DocumentPipeline({
       {message && (
         <p
           role="status"
-          className="rounded-lg bg-white/10 px-3 py-2 text-sm text-cyan-100"
+          className="rounded-lg bg-white/10 px-3 py-2 text-sm text-brand-100"
         >
           {message}
         </p>
@@ -553,7 +553,7 @@ function DocumentPipeline({
               {evaluationID && (
                 <a
                   href={`/knowledge/evaluations/${evaluationID}/review`}
-                  className="inline-flex items-center rounded-md px-3 text-xs text-cyan-300 hover:bg-white/5"
+                  className="inline-flex items-center rounded-md px-3 text-xs text-brand-300 hover:bg-white/5"
                 >
                   查看证据 #{evaluationID}
                 </a>
@@ -579,7 +579,7 @@ function DocumentPipeline({
                   key={item.id}
                   className="rounded-lg bg-white/5 p-3 text-xs text-slate-300"
                 >
-                  <p className="font-medium text-cyan-200">
+                  <p className="font-medium text-brand-200">
                     ID {item.id} · #{item.chunkIndex} · {item.chunkType} ·{" "}
                     {item.sourceSection ?? "未命名章节"}
                   </p>
@@ -809,7 +809,7 @@ function StandardBuilder() {
             </DarkField>
           </div>
           <div className="mt-3 rounded-md bg-white/5 p-3">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-cyan-300">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-brand-300">
               Rule
             </p>
             <div className="grid gap-3 sm:grid-cols-3">
@@ -892,7 +892,7 @@ function StandardBuilder() {
             <div key={item.id} className="rounded-lg bg-white/5 p-3 text-sm">
               <div className="flex justify-between">
                 <span>{item.name}</span>
-                <span className="text-cyan-300">{item.status}</span>
+                <span className="text-brand-300">{item.status}</span>
               </div>
               <p className="mt-1 text-xs text-slate-500">
                 {item.version} · {item.profiles?.length ?? 0} profiles
@@ -1154,9 +1154,9 @@ function BlockTree({
         <div
           key={block.id}
           style={{ marginLeft: depth * 12 }}
-          className="border-l border-cyan-300/20 pl-3 text-xs"
+          className="border-l border-brand-300/20 pl-3 text-xs"
         >
-          <p className="font-medium text-cyan-200">
+          <p className="font-medium text-brand-200">
             {block.type} · {block.id} {block.page ? `· page ${block.page}` : ""}
           </p>
           <p className="mt-1 whitespace-pre-wrap text-slate-300">

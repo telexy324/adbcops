@@ -22,6 +22,7 @@ func BuiltinDefinitions() []Definition {
 		knowledgeQAWorkflow(),
 		logAnalysisWorkflow(),
 		podDiagnosisWorkflow(),
+		serviceDiagnosisWorkflow(),
 		ingressDiagnosisWorkflow(),
 		alertDiagnosisWorkflow(),
 		nacosDiagnosisWorkflow(),
@@ -146,6 +147,21 @@ func podDiagnosisWorkflow() Definition {
 			{ID: "search_knowledge", Type: NodeTypeSkill, Name: "Search K8s knowledge", SkillName: "search_knowledge", Config: rawConfig(map[string]any{"input": map[string]any{"query": "kubernetes pod diagnosis", "limit": 5}})},
 			controlNode("correlate", "Correlate evidence"),
 			{ID: "kubernetes_agent", Type: NodeTypeAgent, Name: "Kubernetes Agent", AgentName: "kubernetes_agent", Config: rawConfig(map[string]any{"context": map[string]any{"query": "pod diagnosis", "variables": map[string]any{"dataSourceId": 1, "namespace": "default", "podName": "sample-pod"}}})},
+		},
+	)
+}
+
+func serviceDiagnosisWorkflow() Definition {
+	return linearWorkflow(
+		"service_diagnosis_workflow",
+		"K8s Service Diagnosis",
+		"Collect service, backend pod, EndpointSlice and ingress context for Kubernetes service diagnosis.",
+		[]Node{
+			{ID: "get_service_context", Type: NodeTypeSkill, Name: "Get service context", SkillName: "get_service_context", Config: rawConfig(map[string]any{"input": map[string]any{"dataSourceId": 1, "namespace": "default", "serviceName": "sample-service"}})},
+			controlNode("query_service_metrics", "Query service metrics"),
+			controlNode("query_backend_logs", "Query backend pod logs"),
+			controlNode("correlate", "Correlate evidence"),
+			{ID: "kubernetes_agent", Type: NodeTypeAgent, Name: "Kubernetes Agent", AgentName: "kubernetes_agent", Config: rawConfig(map[string]any{"context": map[string]any{"query": "service diagnosis", "variables": map[string]any{"dataSourceId": 1, "namespace": "default", "serviceName": "sample-service"}}})},
 		},
 	)
 }

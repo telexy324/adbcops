@@ -13,6 +13,7 @@ import (
 
 type K8sDiagnoser interface {
 	DiagnosePod(ctx context.Context, actor *model.AppUser, input k8ssvc.PodDiagnosisInput) (*k8ssvc.PodDiagnosisResult, error)
+	DiagnoseService(ctx context.Context, actor *model.AppUser, input k8ssvc.ServiceDiagnosisInput) (*k8ssvc.ServiceDiagnosisResult, error)
 	Resources(ctx context.Context, actor *model.AppUser, input k8ssvc.ResourceInput) (*k8ssvc.ResourceResult, error)
 }
 
@@ -23,11 +24,52 @@ type MetricsQuerier interface {
 func K8sAndMetricsSkills(k8s K8sDiagnoser, metrics MetricsQuerier) []Skill {
 	return []Skill{
 		GetPodContextSkill{k8s: k8s},
+		GetServiceContextSkill{k8s: k8s},
 		GetIngressContextSkill{k8s: k8s},
 		RunK8sDiagnosticRulesSkill{k8s: k8s},
 		QueryMetricsSkill{metrics: metrics},
 		CompareMetricBaselineSkill{metrics: metrics},
 	}
+}
+
+type GetServiceContextSkill struct {
+	k8s K8sDiagnoser
+}
+
+func (s GetServiceContextSkill) Definition() SkillDefinition {
+	return SkillDefinition{
+		Name:          "get_service_context",
+		Version:       "v1",
+		Description:   "Collect Kubernetes service context including selected pods, Endpoints, EndpointSlices, ingress backends and diagnostic rules.",
+		InputSchema:   json.RawMessage(`{"type":"object","required":["dataSourceId","namespace","serviceName"],"properties":{"dataSourceId":{"type":"integer"},"namespace":{"type":"string"},"serviceName":{"type":"string"}}}`),
+		OutputSchema:  partialOutputSchema(),
+		RiskLevel:     model.SkillRiskSensitiveRead,
+		ReadOnly:      true,
+		TimeoutSecond: 30,
+	}
+}
+
+func (s GetServiceContextSkill) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	var request struct {
+		DataSourceID int64  `json:"dataSourceId"`
+		Namespace    string `json:"namespace"`
+		ServiceName  string `json:"serviceName"`
+	}
+	if err := json.Unmarshal(input, &request); err != nil {
+		return nil, ErrInvalidInput
+	}
+	if s.k8s == nil {
+		return partialError("kubernetes", "k8s service is not configured"), nil
+	}
+	result, err := s.k8s.DiagnoseService(ctx, ActorFromContext(ctx), k8ssvc.ServiceDiagnosisInput{
+		DataSourceID: request.DataSourceID,
+		Namespace:    request.Namespace,
+		ServiceName:  request.ServiceName,
+	})
+	if err != nil {
+		return partialError("kubernetes", err.Error()), nil
+	}
+	return json.Marshal(map[string]any{"partial": false, "serviceContext": result})
 }
 
 type GetPodContextSkill struct {

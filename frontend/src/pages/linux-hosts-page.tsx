@@ -199,10 +199,10 @@ export function LinuxHostsPage() {
   ).length;
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
-      <section className="overflow-hidden rounded-2xl bg-[#071827] px-6 py-7 text-white shadow-xl sm:px-8">
+      <section className="overflow-hidden rounded-2xl bg-[#2d3748] px-6 py-7 text-white shadow-xl sm:px-8">
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div>
-            <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.2em] text-cyan-300">
+            <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.2em] text-brand-300">
               <Server className="size-4" />
               Linux Fleet
             </div>
@@ -799,7 +799,7 @@ function CredentialPanel({
           {items.map((item) => (
             <div key={item.id} className="rounded-xl border p-4">
               <div className="flex items-start justify-between">
-                <div className="rounded-lg bg-cyan-50 p-2 text-cyan-700">
+                <div className="rounded-lg bg-brand-50 p-2 text-brand-700">
                   <KeyRound className="size-5" />
                 </div>
                 <Badge tone={item.enabled ? "green" : "slate"}>
@@ -970,7 +970,7 @@ function CatalogPanel({
               key={group.id}
               className="flex items-center gap-3 rounded-xl border p-4"
             >
-              <Layers3 className="size-5 text-cyan-600" />
+              <Layers3 className="size-5 text-brand-600" />
               <div>
                 <p className="font-semibold">{group.name}</p>
                 <p className="text-xs text-slate-500">
@@ -1286,7 +1286,7 @@ function BatchPanel({
             <>
               <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                 <div
-                  className="h-full bg-cyan-500 transition-all"
+                  className="h-full bg-brand-500 transition-all"
                   style={{ width: `${job.data.progress}%` }}
                 />
               </div>
@@ -1383,7 +1383,7 @@ function Badge({
   const tones = {
     slate: "bg-slate-100 text-slate-600",
     green: "bg-emerald-50 text-emerald-700",
-    cyan: "bg-cyan-50 text-cyan-700",
+    cyan: "bg-brand-50 text-brand-700",
     amber: "bg-amber-50 text-amber-700",
   };
   return (

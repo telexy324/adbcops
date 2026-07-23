@@ -60,7 +60,7 @@ export function DashboardPage() {
     <div className="mx-auto max-w-[1500px] space-y-7">
       <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">运行工作台</p>
+          <p className="text-sm font-medium text-brand-700">运行工作台</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">
             平台总览
           </h1>
@@ -190,7 +190,7 @@ export function DashboardPage() {
             key={item.title}
             className="flex items-center gap-4 rounded-xl border border-slate-200/80 bg-white p-4"
           >
-            <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-slate-950 text-cyan-300">
+            <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-slate-950 text-brand-300">
               <item.icon className="size-5" aria-hidden="true" />
             </div>
             <div>

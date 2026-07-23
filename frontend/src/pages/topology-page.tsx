@@ -131,7 +131,7 @@ const emptyEdgeForm: ManualEdgeForm = {
 };
 
 const nodePalette = [
-  "bg-cyan-50 text-cyan-700 border-cyan-200",
+  "bg-brand-50 text-brand-700 border-brand-200",
   "bg-violet-50 text-violet-700 border-violet-200",
   "bg-emerald-50 text-emerald-700 border-emerald-200",
   "bg-amber-50 text-amber-700 border-amber-200",
@@ -496,7 +496,7 @@ export function TopologyPage() {
     <div className="mx-auto max-w-[1900px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">Topology Map</p>
+          <p className="text-sm font-medium text-brand-700">Topology Map</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
             拓扑地图
           </h1>
@@ -677,7 +677,7 @@ function FilterCard({
     <Card>
       <CardHeader>
         <div className="flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-xl bg-cyan-50 text-cyan-700">
+          <div className="grid size-10 place-items-center rounded-xl bg-brand-50 text-brand-700">
             <Search className="size-5" aria-hidden="true" />
           </div>
           <div>
@@ -1204,7 +1204,7 @@ function TopologyCanvasCard({
       <CardHeader className="border-b border-slate-200 bg-white/80">
         <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
           <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-xl bg-slate-900 text-cyan-200">
+            <div className="grid size-10 place-items-center rounded-xl bg-slate-900 text-brand-200">
               <Network className="size-5" aria-hidden="true" />
             </div>
             <div>
@@ -1265,7 +1265,7 @@ function TopologyCanvasCard({
                   node.id === rootKey
                     ? "#f59e0b"
                     : node.id === selectedNodeKey
-                      ? "#0891b2"
+                      ? "#c6a86f"
                       : "#94a3b8"
                 }
                 className="!bg-white/90"
@@ -1285,7 +1285,7 @@ function TopologyFlowNodeCard({ data, selected }: NodeProps<TopologyFlowNode>) {
       className={cn(
         "relative w-[220px] rounded-lg border bg-white px-4 py-3 shadow-sm transition-shadow",
         selected
-          ? "border-cyan-400 shadow-cyan-100"
+          ? "border-brand-400 shadow-brand-100"
           : data.isRoot
             ? "border-amber-400"
             : "border-slate-200",
@@ -1313,7 +1313,7 @@ function TopologyFlowNodeCard({ data, selected }: NodeProps<TopologyFlowNode>) {
         <StatusDots node={node} />
       </div>
       <div className="mt-3 flex items-center justify-between gap-3">
-        <span className="truncate rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-medium text-cyan-700">
+        <span className="truncate rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700">
           {node.kind}
         </span>
         <span className="truncate text-[11px] text-slate-500">
@@ -1529,7 +1529,7 @@ function PathsCard({
             className={cn(
               "w-full rounded-xl border p-3 text-left text-sm transition-colors",
               selectedNodeKey === path.targetNodeKey
-                ? "border-cyan-300 bg-cyan-50"
+                ? "border-brand-300 bg-brand-50"
                 : "border-slate-200 bg-white hover:bg-slate-50",
             )}
           >
@@ -1692,10 +1692,10 @@ function buildFlowElements(
         animated: selected,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: selected ? "#0891b2" : "#64748b",
+          color: selected ? "#c6a86f" : "#64748b",
         },
         style: {
-          stroke: selected ? "#0891b2" : "#94a3b8",
+          stroke: selected ? "#c6a86f" : "#94a3b8",
           strokeWidth: selected ? 2.4 : 1.5,
         },
         labelStyle: {

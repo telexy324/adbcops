@@ -4,7 +4,11 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
-import { listAnalysisTasks, runGeneralAnalysis } from "@/api/analysis";
+import {
+  diagnoseService,
+  listAnalysisTasks,
+  runGeneralAnalysis,
+} from "@/api/analysis";
 import { testDataSource, testLLMConfig, updateDataSource } from "@/api/config";
 import {
   createTopologySource,
@@ -58,6 +62,7 @@ vi.mock("@/api/knowledge", () => ({
 
 vi.mock("@/api/analysis", () => ({
   diagnosePod: vi.fn(),
+  diagnoseService: vi.fn(),
   listAnalysisTasks: vi.fn().mockResolvedValue([]),
   queryMetrics: vi.fn(),
   runGeneralAnalysis: vi.fn(),
@@ -790,6 +795,61 @@ describe("AnalysisPage", () => {
     expect(screen.getByDisplayValue("2")).toBeInTheDocument();
     expect(
       screen.getByDisplayValue(/container_cpu_usage_seconds_total/),
+    ).toBeInTheDocument();
+  });
+
+  it("diagnoses a Service and displays backend and EndpointSlice context", async () => {
+    const user = userEvent.setup();
+    vi.mocked(diagnoseService).mockResolvedValueOnce({
+      dataSourceId: 1,
+      namespace: "prod",
+      service: {
+        name: "payment-api",
+        type: "ClusterIP",
+        clusterIp: "10.0.0.10",
+        portDetails: [
+          {
+            name: "http",
+            port: 80,
+            targetPort: "web",
+            protocol: "TCP",
+          },
+        ],
+      },
+      backendPods: [
+        {
+          name: "payment-api-0",
+          phase: "Running",
+          containers: [{ name: "app", ready: true, restartCount: 0 }],
+        },
+      ],
+      endpointSlices: [
+        {
+          name: "payment-api-slice",
+          addressType: "IPv4",
+          endpoints: [{ addresses: ["10.1.0.1"], ready: true }],
+        },
+      ],
+      rules: [],
+    });
+
+    renderWithQueryClient(<AnalysisPage />);
+    await user.click(screen.getByRole("button", { name: "Service" }));
+    await user.click(screen.getByRole("button", { name: /诊断 Service/ }));
+
+    expect(diagnoseService).toHaveBeenCalledWith(
+      {
+        dataSourceId: 1,
+        namespace: "prod",
+        serviceName: "payment-api",
+      },
+      expect.any(Object),
+    );
+    expect(
+      await screen.findByText("后端 Pod · payment-api-0"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("EndpointSlice · payment-api-slice"),
     ).toBeInTheDocument();
   });
 });

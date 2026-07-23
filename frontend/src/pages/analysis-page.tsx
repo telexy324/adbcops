@@ -17,6 +17,7 @@ import {
 
 import {
   diagnosePod,
+  diagnoseService,
   listAnalysisTasks,
   queryMetrics,
   runGeneralAnalysis,
@@ -29,6 +30,7 @@ import {
   type K8sRuleFinding,
   type MetricQueryResponse,
   type PodDiagnosisResponse,
+  type ServiceDiagnosisResponse,
 } from "@/api/analysis";
 import { getTopologyGraph, type TopologyNode } from "@/api/operations";
 import { Button } from "@/components/ui/button";
@@ -79,6 +81,7 @@ type LinkedAnalysisContext = {
   componentName?: string;
   namespace?: string;
   podName?: string;
+  serviceName?: string;
   summary?: string;
 };
 
@@ -95,6 +98,8 @@ export function AnalysisPage() {
   const [generalResult, setGeneralResult] =
     useState<GeneralAnalysisResponse | null>(null);
   const [podResult, setPodResult] = useState<PodDiagnosisResponse | null>(null);
+  const [serviceResult, setServiceResult] =
+    useState<ServiceDiagnosisResponse | null>(null);
   const [metricsResult, setMetricsResult] =
     useState<MetricQueryResponse | null>(null);
   const [alertResult, setAlertResult] = useState<AlertmanagerResponse | null>(
@@ -116,11 +121,13 @@ export function AnalysisPage() {
     dataSourceId: "1",
     namespace: "prod",
     podName: "payment-api-0",
+    serviceName: "payment-api",
     logTailLines: "200",
     logMaxBytes: "65536",
     includePreviousLogs: true,
     includeNode: true,
   });
+  const [k8sMode, setK8sMode] = useState<"pod" | "service">("pod");
   const [metricsForm, setMetricsForm] = useState({
     dataSourceId: "1",
     query: "rate(http_requests_total[5m])",
@@ -208,6 +215,7 @@ export function AnalysisPage() {
     mutationFn: diagnosePod,
     onSuccess: (response) => {
       setPodResult(response);
+      setServiceResult(null);
       setRules(response.rules ?? []);
       setLinkedContext((current) => ({
         ...current,
@@ -229,6 +237,34 @@ export function AnalysisPage() {
         response.warnings?.length
           ? `K8s 诊断完成，${response.warnings.length} 项日志不可用，其他诊断结果已返回。`
           : "K8s 诊断完成，规则判断已更新。",
+      );
+      setError(null);
+    },
+    onError: (err) => setError(toAPIErrorMessage(err)),
+  });
+
+  const serviceMutation = useMutation({
+    mutationFn: diagnoseService,
+    onSuccess: (response) => {
+      setServiceResult(response);
+      setPodResult(null);
+      setRules(response.rules ?? []);
+      setLinkedContext((current) => ({
+        ...current,
+        source: "k8s",
+        namespace: response.namespace,
+        serviceName: response.service.name,
+        componentName: current.componentName || response.service.name,
+        summary: `${response.service.name} · ${response.backendPods?.length ?? 0} 个后端 Pod · ${response.rules?.length ?? 0} 条规则判断`,
+      }));
+      setLogForm((current) => ({
+        ...current,
+        componentName: current.componentName || response.service.name,
+      }));
+      setNotice(
+        response.warnings?.length
+          ? `Service 诊断完成，${response.warnings.length} 项采集已降级，其他诊断结果已返回。`
+          : "Service 诊断完成，后端 Pod、EndpointSlice 和 Ingress 规则已更新。",
       );
       setError(null);
     },
@@ -277,6 +313,14 @@ export function AnalysisPage() {
 
   function submitK8s(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (k8sMode === "service") {
+      serviceMutation.mutate({
+        dataSourceId: Number(k8sForm.dataSourceId),
+        namespace: k8sForm.namespace,
+        serviceName: k8sForm.serviceName,
+      });
+      return;
+    }
     podMutation.mutate({
       dataSourceId: Number(k8sForm.dataSourceId),
       namespace: k8sForm.namespace,
@@ -366,7 +410,7 @@ export function AnalysisPage() {
     <div className="mx-auto max-w-[1700px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">Analysis Center</p>
+          <p className="text-sm font-medium text-brand-700">Analysis Center</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">
             智能分析
           </h1>
@@ -396,10 +440,10 @@ export function AnalysisPage() {
         </div>
       )}
 
-      <Card className="border-cyan-200 bg-cyan-50/40 shadow-none">
+      <Card className="border-brand-200 bg-brand-50/40 shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Network className="size-5 text-cyan-700" />
+            <Network className="size-5 text-brand-700" />
             关联分析上下文
           </CardTitle>
           <CardDescription>
@@ -415,6 +459,7 @@ export function AnalysisPage() {
           <ContextPill label="组件" value={linkedContext.componentName} />
           <ContextPill label="Namespace" value={linkedContext.namespace} />
           <ContextPill label="Pod" value={linkedContext.podName} />
+          <ContextPill label="Service" value={linkedContext.serviceName} />
           <ContextPill label="观察" value={linkedContext.summary} />
         </CardContent>
       </Card>
@@ -424,7 +469,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Logs className="size-5 text-cyan-600" />
+                <Logs className="size-5 text-brand-600" />
                 日志分析
               </CardTitle>
               <CardDescription>
@@ -534,13 +579,38 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <ServerCog className="size-5 text-cyan-600" />
+                <ServerCog className="size-5 text-brand-600" />
                 K8s 诊断
               </CardTitle>
-              <CardDescription>采集 Pod 上下文并展示规则判断。</CardDescription>
+              <CardDescription>
+                采集 Pod 或 Service 上下文并展示规则判断。
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="space-y-3" onSubmit={submitK8s}>
+                <div
+                  className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1"
+                  aria-label="K8s 诊断对象"
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={k8sMode === "pod" ? "default" : "ghost"}
+                    aria-pressed={k8sMode === "pod"}
+                    onClick={() => setK8sMode("pod")}
+                  >
+                    Pod
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={k8sMode === "service" ? "default" : "ghost"}
+                    aria-pressed={k8sMode === "service"}
+                    onClick={() => setK8sMode("service")}
+                  >
+                    Service
+                  </Button>
+                </div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="数据源 ID">
                     <Input
@@ -564,67 +634,80 @@ export function AnalysisPage() {
                       }
                     />
                   </Field>
-                  <Field label="Pod">
+                  <Field label={k8sMode === "pod" ? "Pod" : "Service"}>
                     <Input
-                      value={k8sForm.podName}
+                      value={
+                        k8sMode === "pod"
+                          ? k8sForm.podName
+                          : k8sForm.serviceName
+                      }
                       onChange={(event) =>
                         setK8sForm((current) => ({
                           ...current,
-                          podName: event.target.value,
+                          [k8sMode === "pod" ? "podName" : "serviceName"]:
+                            event.target.value,
                         }))
                       }
                     />
                   </Field>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="日志行数">
-                    <Input
-                      value={k8sForm.logTailLines}
-                      onChange={(event) =>
-                        setK8sForm((current) => ({
-                          ...current,
-                          logTailLines: event.target.value,
-                        }))
-                      }
-                    />
-                  </Field>
-                  <Field label="日志字节">
-                    <Input
-                      value={k8sForm.logMaxBytes}
-                      onChange={(event) =>
-                        setK8sForm((current) => ({
-                          ...current,
-                          logMaxBytes: event.target.value,
-                        }))
-                      }
-                    />
-                  </Field>
-                </div>
-                <div className="flex flex-wrap gap-3 text-sm text-slate-600">
-                  <Checkbox
-                    checked={k8sForm.includePreviousLogs}
-                    label="previous logs"
-                    onChange={(value) =>
-                      setK8sForm((current) => ({
-                        ...current,
-                        includePreviousLogs: value,
-                      }))
-                    }
-                  />
-                  <Checkbox
-                    checked={k8sForm.includeNode}
-                    label="包含 Node"
-                    onChange={(value) =>
-                      setK8sForm((current) => ({
-                        ...current,
-                        includeNode: value,
-                      }))
-                    }
-                  />
-                </div>
+                {k8sMode === "pod" && (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="日志行数">
+                        <Input
+                          value={k8sForm.logTailLines}
+                          onChange={(event) =>
+                            setK8sForm((current) => ({
+                              ...current,
+                              logTailLines: event.target.value,
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="日志字节">
+                        <Input
+                          value={k8sForm.logMaxBytes}
+                          onChange={(event) =>
+                            setK8sForm((current) => ({
+                              ...current,
+                              logMaxBytes: event.target.value,
+                            }))
+                          }
+                        />
+                      </Field>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-sm text-slate-600">
+                      <Checkbox
+                        checked={k8sForm.includePreviousLogs}
+                        label="previous logs"
+                        onChange={(value) =>
+                          setK8sForm((current) => ({
+                            ...current,
+                            includePreviousLogs: value,
+                          }))
+                        }
+                      />
+                      <Checkbox
+                        checked={k8sForm.includeNode}
+                        label="包含 Node"
+                        onChange={(value) =>
+                          setK8sForm((current) => ({
+                            ...current,
+                            includeNode: value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </>
+                )}
                 <SubmitButton
-                  pending={podMutation.isPending}
-                  label="诊断 Pod"
+                  pending={
+                    k8sMode === "pod"
+                      ? podMutation.isPending
+                      : serviceMutation.isPending
+                  }
+                  label={k8sMode === "pod" ? "诊断 Pod" : "诊断 Service"}
                 />
               </form>
             </CardContent>
@@ -633,7 +716,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Activity className="size-5 text-cyan-600" />
+                <Activity className="size-5 text-brand-600" />
                 指标查询
               </CardTitle>
               <CardDescription>
@@ -753,7 +836,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <BellRing className="size-5 text-cyan-600" />
+                <BellRing className="size-5 text-brand-600" />
                 告警输入
               </CardTitle>
               <CardDescription>
@@ -782,7 +865,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <FileSearch className="size-5 text-cyan-600" />
+                <FileSearch className="size-5 text-brand-600" />
                 证据面板
               </CardTitle>
               <CardDescription>展示日志分析事实和可观察证据。</CardDescription>
@@ -805,7 +888,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Quote className="size-5 text-cyan-600" />
+                <Quote className="size-5 text-brand-600" />
                 引用与规则
               </CardTitle>
               <CardDescription>
@@ -815,7 +898,8 @@ export function AnalysisPage() {
             <CardContent className="space-y-3">
               {citations.length === 0 &&
               rules.length === 0 &&
-              !podResult?.warnings?.length ? (
+              !podResult?.warnings?.length &&
+              !serviceResult ? (
                 <EmptyState text="暂无引用或规则判断。" />
               ) : (
                 <>
@@ -826,17 +910,44 @@ export function AnalysisPage() {
                       meta={item.snippet ?? "无摘要"}
                     />
                   ))}
-                  {rules.map((rule) => (
+                  {rules.map((rule, index) => (
                     <PanelItem
-                      key={rule.id}
+                      key={`${rule.id}-${index}`}
                       title={`${rule.severity.toUpperCase()} · ${rule.title}`}
                       meta={rule.evidenceKeys.join(", ")}
+                    />
+                  ))}
+                  {serviceResult && (
+                    <PanelItem
+                      title={`${serviceResult.service.name} · ${serviceResult.service.type ?? "Service"}`}
+                      meta={`${serviceResult.service.clusterIp ?? serviceResult.service.externalName ?? "-"} · ${serviceResult.service.portDetails?.map((port) => `${port.name || port.port}:${port.port}->${port.targetPort}/${port.protocol}`).join(", ") || "未声明端口"}`}
+                    />
+                  )}
+                  {serviceResult?.backendPods?.map((pod) => (
+                    <PanelItem
+                      key={`service-pod-${pod.name}`}
+                      title={`后端 Pod · ${pod.name}`}
+                      meta={`${pod.phase} · ${pod.containers?.filter((container) => container.ready).length ?? 0}/${pod.containers?.length ?? 0} containers ready`}
+                    />
+                  ))}
+                  {serviceResult?.endpointSlices?.map((endpointSlice) => (
+                    <PanelItem
+                      key={`endpoint-slice-${endpointSlice.name}`}
+                      title={`EndpointSlice · ${endpointSlice.name}`}
+                      meta={`${endpointSlice.addressType} · ${endpointSlice.endpoints?.filter((endpoint) => endpoint.ready).length ?? 0}/${endpointSlice.endpoints?.length ?? 0} endpoints ready`}
                     />
                   ))}
                   {podResult?.warnings?.map((warning, index) => (
                     <PanelItem
                       key={`k8s-warning-${warning.container ?? "unknown"}-${warning.previous ? "previous" : "current"}-${index}`}
                       title={`日志不可用 · ${warning.container ?? "unknown"}${warning.previous ? " · previous" : ""}`}
+                      meta={warning.message}
+                    />
+                  ))}
+                  {serviceResult?.warnings?.map((warning, index) => (
+                    <PanelItem
+                      key={`service-warning-${warning.stage}-${index}`}
+                      title={`采集降级 · ${warning.stage}`}
                       meta={warning.message}
                     />
                   ))}
@@ -848,7 +959,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Braces className="size-5 text-cyan-600" />
+                <Braces className="size-5 text-brand-600" />
                 最近结果
               </CardTitle>
               <CardDescription>用于快速核对接口返回。</CardDescription>
@@ -861,7 +972,11 @@ export function AnalysisPage() {
               <ResultPreview
                 title="K8s"
                 value={
-                  podResult && `${podResult.pod.name} · ${podResult.pod.phase}`
+                  k8sMode === "service"
+                    ? serviceResult &&
+                      `${serviceResult.service.name} · ${serviceResult.backendPods?.length ?? 0} backend pods`
+                    : podResult &&
+                      `${podResult.pod.name} · ${podResult.pod.phase}`
                 }
               />
               <ResultPreview
@@ -884,7 +999,7 @@ export function AnalysisPage() {
           <Card className="border-slate-200/80 shadow-none">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Network className="size-5 text-cyan-600" />
+                <Network className="size-5 text-brand-600" />
                 我的分析任务
               </CardTitle>
               <CardDescription>
@@ -936,7 +1051,7 @@ function Textarea({
       value={value}
       rows={rows}
       onChange={(event) => onChange(event.target.value)}
-      className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20"
+      className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
     />
   );
 }
@@ -956,7 +1071,7 @@ function Checkbox({
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="size-4 rounded border-slate-300 text-cyan-600"
+        className="size-4 rounded border-slate-300 text-brand-600"
       />
       {label}
     </label>
@@ -978,7 +1093,7 @@ function SubmitButton({ pending, label }: { pending: boolean; label: string }) {
 
 function StatusPill({ label }: { label: string }) {
   return (
-    <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
+    <span className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">
       {label}
     </span>
   );
@@ -989,7 +1104,7 @@ function ContextPill({ label, value }: { label: string; value?: string }) {
     return null;
   }
   return (
-    <span className="rounded-full border border-cyan-200 bg-white px-3 py-1">
+    <span className="rounded-full border border-brand-200 bg-white px-3 py-1">
       <span className="text-slate-400">{label}：</span>
       {value}
     </span>

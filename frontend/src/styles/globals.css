@@ -4,24 +4,24 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 206 28% 95%;
+    --foreground: 225 22% 19%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 84% 4.9%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --card-foreground: 225 22% 19%;
+    --primary: 39 46% 61%;
+    --primary-foreground: 225 22% 19%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 225 22% 19%;
+    --muted: 206 28% 95%;
+    --muted-foreground: 218 9% 50%;
+    --accent: 40 39% 92%;
+    --accent-foreground: 37 21% 18%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 188 86% 43%;
-    --radius: 0.75rem;
+    --destructive-foreground: 0 0% 100%;
+    --border: 213 22% 86%;
+    --input: 213 22% 86%;
+    --ring: 39 46% 61%;
+    --radius: 0.5rem;
   }
 
   * {
@@ -50,6 +50,20 @@
   }
 
   ::selection {
-    background: rgba(34, 211, 238, 0.24);
+    background: rgba(198, 168, 111, 0.3);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border-radius: 4px;
+    background: rgba(116, 124, 139, 0.42);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(45, 55, 72, 0.65);
   }
 }

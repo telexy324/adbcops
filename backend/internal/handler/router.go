@@ -400,6 +400,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 			analysisRoutes.POST("/k8s/test", dependencies.K8sHandler.Test)
 			analysisRoutes.POST("/k8s/resources", dependencies.K8sHandler.Resources)
 			analysisRoutes.POST("/k8s/pod-diagnose", dependencies.K8sHandler.DiagnosePod)
+			analysisRoutes.POST("/k8s/service-diagnose", dependencies.K8sHandler.DiagnoseService)
 		}
 		if dependencies.MetricsHandler != nil {
 			analysisRoutes.POST("/metrics/test", dependencies.MetricsHandler.Test)

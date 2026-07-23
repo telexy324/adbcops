@@ -133,6 +133,10 @@ func (f fakeK8sService) DiagnosePod(context.Context, *model.AppUser, k8ssvc.PodD
 	return f.podResult, nil
 }
 
+func (f fakeK8sService) DiagnoseService(context.Context, *model.AppUser, k8ssvc.ServiceDiagnosisInput) (*k8ssvc.ServiceDiagnosisResult, error) {
+	return &k8ssvc.ServiceDiagnosisResult{}, nil
+}
+
 func (f fakeK8sService) Resources(context.Context, *model.AppUser, k8ssvc.ResourceInput) (*k8ssvc.ResourceResult, error) {
 	if f.err != nil {
 		return nil, f.err

@@ -274,7 +274,7 @@ export function QualityReviewPage() {
                     {evidence.blockId && (
                       <button
                         type="button"
-                        className="mt-2 text-xs font-medium text-cyan-700 hover:underline"
+                        className="mt-2 text-xs font-medium text-brand-700 hover:underline"
                         onClick={() => locateEvidence(evidence.blockId!)}
                       >
                         定位原文 · {evidence.blockId}
@@ -305,7 +305,7 @@ export function QualityReviewPage() {
                 key={block.id}
                 id={`source-block-${block.id}`}
                 onClick={() => setSelectedBlockID(block.id)}
-                className={`w-full rounded-lg border p-3 text-left text-sm ${selectedBlockID === block.id ? "border-cyan-400 bg-cyan-50 ring-2 ring-cyan-100" : "border-slate-200"}`}
+                className={`w-full rounded-lg border p-3 text-left text-sm ${selectedBlockID === block.id ? "border-brand-400 bg-brand-50 ring-2 ring-brand-100" : "border-slate-200"}`}
               >
                 <span className="text-xs font-semibold text-slate-500">
                   {block.id} · {block.type}

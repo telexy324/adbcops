@@ -2049,6 +2049,28 @@ client_certificate
 - Endpoint Pod 是否 Ready；
 - terminating Endpoint。
 
+实现要求：
+
+- 提供独立的 `POST /api/analysis/k8s/service-diagnose` 只读诊断接口；
+- 请求必须包含 `dataSourceId`、`namespace`、`serviceName`；
+- 根据 Service selector 采集全部后端 Pod，并展示 Pod phase、Ready condition、容器 Ready 状态和重启次数；
+- 同时采集 `discovery.k8s.io/v1 EndpointSlice` 与兼容的旧版 `Endpoints`；
+- EndpointSlice 可用时以其 Ready、Serving、Terminating condition 为主要判断依据；
+- EndpointSlice 无权限或不可用时降级到旧版 Endpoints，并在响应中返回 warning；
+- 支持 ClusterIP、Headless、NodePort、LoadBalancer、ExternalName 和无 selector Service，不得将 ExternalName 或手工维护 Endpoint 的 Service 误判为 selector 异常；
+- 校验命名 `targetPort` 是否存在于所有 selector 匹配的后端 Pod 容器端口中；
+- 校验引用该 Service 的 Ingress backend port 是否为 Service 已声明的名称或端口号；
+- 输出 selector 无匹配 Pod、无 Ready Endpoint、NotReady Endpoint、Terminating Endpoint、后端 Pod 未 Ready、targetPort 缺失和 Ingress 端口不匹配规则；
+- Service 不存在时返回 Kubernetes 资源 404，不得转换为 500；
+- Kubernetes 账号至少需要 `services`、`pods`、`endpoints`、`endpointslices`、`ingresses` 的 `get/list` 权限。
+
+页面要求：
+
+- “智能分析 -> K8s 诊断”提供 `Pod / Service` 分段选择；
+- Service 模式输入数据源 ID、Namespace 和 Service 名称；
+- 结果展示 Service 类型、ClusterIP/ExternalName、端口映射、后端 Pod、EndpointSlice Ready 数、Ingress、warning 和规则判断；
+- Pod 模式的日志行数、日志字节、previous logs 和 Node 选项保持原有行为。
+
 ### 43.6 Ingress
 
 检查：
@@ -5235,6 +5257,8 @@ GET /api/health
 - 页面维护关联分析上下文，统一环境、系统、组件、Namespace、Pod 和时间范围；
 - Alertmanager labels/annotations 自动预填日志、K8s 和指标条件；
 - K8s Pod 诊断完成后自动生成该 Pod 的基础 PromQL；
+- K8s 诊断支持 Pod 与 Service 两种对象，Service 模式调用 `/api/analysis/k8s/service-diagnose`；
+- Service 诊断展示后端 Pod、Endpoints、EndpointSlice、Ingress、采集降级 warning 和确定性规则；
 - `/analysis?nodeKey=...` 读取拓扑节点及 labels/properties，自动预填分析上下文；
 - 页面不得使用已过期的固定演示时间，默认查询最近一小时。
 
@@ -8089,6 +8113,13 @@ degraded_components
 ---
 
 ## 168. 前端重新设计
+
+统一视觉主题：
+
+- 采用参考前端 CSS 的香槟金与冷灰配色，品牌主色为 `#c6a86f`，页面背景为 `#eff3f6`，主要文字/深色品牌区域为 `#252b3a`、`#2d3748`，次级文字为 `#747c8b`，基础边框为 `#d1dbe5`；
+- Tailwind 提供完整 `brand-50` 至 `brand-900` 色阶，按钮、链接、选中态、焦点环、图标和 React Flow 选中元素统一使用品牌色，不再以 Cyan 作为主强调色；
+- 左侧导航采用白色菜单背景、冷灰文字、香槟金选中态，状态类红/绿/橙配色继续保留其告警语义；
+- 登录页及深色功能横幅使用深灰底与香槟金强调，避免页面形成单一蓝色主题。
 
 页面：
 

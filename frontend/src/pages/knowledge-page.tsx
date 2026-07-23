@@ -316,7 +316,7 @@ export function KnowledgePage() {
     <div className="mx-auto max-w-[1600px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">Knowledge Center</p>
+          <p className="text-sm font-medium text-brand-700">Knowledge Center</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">
             知识中心
           </h1>
@@ -351,7 +351,7 @@ export function KnowledgePage() {
       {isAdmin && <KnowledgeAdminWorkbench document={selectedDocument} />}
 
       {isAdmin && (
-        <Card className="border-cyan-200 bg-cyan-50/40 shadow-none">
+        <Card className="border-brand-200 bg-brand-50/40 shadow-none">
           <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center">
             <div className="min-w-0 flex-1">
               <p className="font-medium text-slate-900">
@@ -532,7 +532,7 @@ export function KnowledgePage() {
         <Card className="border-slate-200/80 shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileText className="size-5 text-cyan-600" />
+              <FileText className="size-5 text-brand-600" />
               文档列表
             </CardTitle>
             <CardDescription>上传后会以 draft 状态进入知识库。</CardDescription>
@@ -688,7 +688,7 @@ export function KnowledgePage() {
                   className={cn(
                     "w-full rounded-xl border p-3 text-left transition-colors",
                     selectedID === document.id
-                      ? "border-cyan-300 bg-cyan-50"
+                      ? "border-brand-300 bg-brand-50"
                       : "border-slate-200 bg-white hover:bg-slate-50",
                   )}
                 >
@@ -1074,7 +1074,7 @@ function StatusPill({ label, active }: { label: string; active: boolean }) {
     <span
       className={cn(
         "rounded-full px-3 py-1 text-xs font-medium",
-        active ? "bg-cyan-50 text-cyan-700" : "bg-slate-100 text-slate-400",
+        active ? "bg-brand-50 text-brand-700" : "bg-slate-100 text-slate-400",
       )}
     >
       {label}

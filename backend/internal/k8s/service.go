@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"aiops-platform/backend/internal/resourcelimit"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -129,6 +131,29 @@ type PodDiagnosisResult struct {
 	Warnings     []PodDiagnosisWarning `json:"warnings,omitempty"`
 }
 
+type ServiceDiagnosisInput struct {
+	DataSourceID int64
+	Namespace    string
+	ServiceName  string
+}
+
+type ServiceDiagnosisResult struct {
+	DataSourceID   int64                     `json:"dataSourceId"`
+	Namespace      string                    `json:"namespace"`
+	Service        ServiceSummary            `json:"service"`
+	BackendPods    []PodSummary              `json:"backendPods"`
+	Endpoints      *EndpointSummary          `json:"endpoints,omitempty"`
+	EndpointSlices []EndpointSliceSummary    `json:"endpointSlices"`
+	Ingresses      []IngressSummary          `json:"ingresses,omitempty"`
+	Rules          []RuleFinding             `json:"rules"`
+	Warnings       []ServiceDiagnosisWarning `json:"warnings,omitempty"`
+}
+
+type ServiceDiagnosisWarning struct {
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
+}
+
 type PodDiagnosisWarning struct {
 	Stage     string `json:"stage"`
 	Container string `json:"container,omitempty"`
@@ -157,17 +182,24 @@ type PodSummary struct {
 }
 
 type ContainerSummary struct {
-	Name         string `json:"name"`
-	Image        string `json:"image,omitempty"`
-	Ready        bool   `json:"ready"`
-	RestartCount int32  `json:"restartCount"`
-	State        string `json:"state,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-	Message      string `json:"message,omitempty"`
-	ExitCode     int32  `json:"exitCode,omitempty"`
-	LastState    string `json:"lastState,omitempty"`
-	LastReason   string `json:"lastReason,omitempty"`
-	LastExitCode int32  `json:"lastExitCode,omitempty"`
+	Name         string                 `json:"name"`
+	Image        string                 `json:"image,omitempty"`
+	Ready        bool                   `json:"ready"`
+	RestartCount int32                  `json:"restartCount"`
+	State        string                 `json:"state,omitempty"`
+	Reason       string                 `json:"reason,omitempty"`
+	Message      string                 `json:"message,omitempty"`
+	ExitCode     int32                  `json:"exitCode,omitempty"`
+	LastState    string                 `json:"lastState,omitempty"`
+	LastReason   string                 `json:"lastReason,omitempty"`
+	LastExitCode int32                  `json:"lastExitCode,omitempty"`
+	Ports        []ContainerPortSummary `json:"ports,omitempty"`
+}
+
+type ContainerPortSummary struct {
+	Name          string `json:"name,omitempty"`
+	ContainerPort int32  `json:"containerPort"`
+	Protocol      string `json:"protocol"`
 }
 
 type ConditionSummary struct {
@@ -204,17 +236,46 @@ type PodLogSummary struct {
 }
 
 type ServiceSummary struct {
-	Name      string            `json:"name"`
-	Type      string            `json:"type,omitempty"`
-	Selector  map[string]string `json:"selector,omitempty"`
-	ClusterIP string            `json:"clusterIp,omitempty"`
-	Ports     []string          `json:"ports,omitempty"`
+	Name         string               `json:"name"`
+	Type         string               `json:"type,omitempty"`
+	Selector     map[string]string    `json:"selector,omitempty"`
+	ClusterIP    string               `json:"clusterIp,omitempty"`
+	ExternalName string               `json:"externalName,omitempty"`
+	Headless     bool                 `json:"headless,omitempty"`
+	Ports        []string             `json:"ports,omitempty"`
+	PortDetails  []ServicePortSummary `json:"portDetails,omitempty"`
+}
+
+type ServicePortSummary struct {
+	Name       string `json:"name,omitempty"`
+	Port       int32  `json:"port"`
+	TargetPort string `json:"targetPort"`
+	NodePort   int32  `json:"nodePort,omitempty"`
+	Protocol   string `json:"protocol"`
 }
 
 type EndpointSummary struct {
-	Name      string   `json:"name"`
-	Addresses []string `json:"addresses,omitempty"`
-	Ports     []string `json:"ports,omitempty"`
+	Name              string   `json:"name"`
+	Addresses         []string `json:"addresses,omitempty"`
+	NotReadyAddresses []string `json:"notReadyAddresses,omitempty"`
+	Ports             []string `json:"ports,omitempty"`
+}
+
+type EndpointSliceSummary struct {
+	Name        string                   `json:"name"`
+	AddressType string                   `json:"addressType"`
+	Ports       []string                 `json:"ports,omitempty"`
+	Endpoints   []EndpointAddressSummary `json:"endpoints,omitempty"`
+}
+
+type EndpointAddressSummary struct {
+	Addresses   []string `json:"addresses"`
+	Ready       bool     `json:"ready"`
+	Serving     bool     `json:"serving,omitempty"`
+	Terminating bool     `json:"terminating,omitempty"`
+	TargetKind  string   `json:"targetKind,omitempty"`
+	TargetName  string   `json:"targetName,omitempty"`
+	NodeName    string   `json:"nodeName,omitempty"`
 }
 
 type IngressSummary struct {
@@ -383,6 +444,81 @@ func (s *Service) DiagnosePod(ctx context.Context, actor *model.AppUser, input P
 	return result, nil
 }
 
+func (s *Service) DiagnoseService(ctx context.Context, actor *model.AppUser, input ServiceDiagnosisInput) (*ServiceDiagnosisResult, error) {
+	if actor == nil {
+		return nil, ErrForbidden
+	}
+	namespace := strings.TrimSpace(input.Namespace)
+	serviceName := strings.TrimSpace(input.ServiceName)
+	if namespace == "" || serviceName == "" {
+		return nil, ErrInvalidInput
+	}
+	release, err := s.acquireDataSource(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	dataSource, config, credential, err := s.load(ctx, input.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	if !namespaceAllowed(namespace, config.AllowedNamespaces) {
+		return nil, ErrNamespaceNotAllowed
+	}
+	client, err := s.factory.ClientFor(ctx, dataSource, config, credential)
+	if err != nil {
+		return nil, fmt.Errorf("create kubernetes client: %w", err)
+	}
+	service, err := client.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	result := &ServiceDiagnosisResult{
+		DataSourceID: dataSource.ID,
+		Namespace:    namespace,
+		Service:      summarizeService(service),
+	}
+	if len(service.Spec.Selector) > 0 {
+		pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: labels.SelectorFromSet(service.Spec.Selector).String(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.BackendPods = make([]PodSummary, 0, len(pods.Items))
+		for index := range pods.Items {
+			result.BackendPods = append(result.BackendPods, summarizePod(&pods.Items[index]))
+		}
+	}
+	endpoints, err := client.CoreV1().Endpoints(namespace).Get(ctx, serviceName, metav1.GetOptions{})
+	if err == nil {
+		summary := summarizeEndpoint(endpoints)
+		result.Endpoints = &summary
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	endpointSlices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set{discoveryv1.LabelServiceName: serviceName}.AsSelector().String(),
+	})
+	if err != nil {
+		result.Warnings = append(result.Warnings, ServiceDiagnosisWarning{
+			Stage:   "endpointSlices",
+			Message: fmt.Sprintf("EndpointSlice collection failed; legacy Endpoints will be used: %v", err),
+		})
+	} else {
+		result.EndpointSlices = make([]EndpointSliceSummary, 0, len(endpointSlices.Items))
+		for index := range endpointSlices.Items {
+			result.EndpointSlices = append(result.EndpointSlices, summarizeEndpointSlice(&endpointSlices.Items[index]))
+		}
+	}
+	result.Ingresses, err = collectIngressesForServices(ctx, client, namespace, []ServiceSummary{result.Service})
+	if err != nil {
+		return nil, err
+	}
+	result.Rules = EvaluateServiceRules(result)
+	return result, nil
+}
+
 func (s *Service) acquireDataSource(ctx context.Context, dataSourceID int64) (func(), error) {
 	release, err := s.limiter.Acquire(ctx, fmt.Sprintf("k8s:%d", dataSourceID))
 	if err == nil {
@@ -504,6 +640,16 @@ func readResources(ctx context.Context, client kubernetes.Interface, resource, n
 			items = append(items, objectItem("Endpoints", &list.Items[index], ""))
 		}
 		return items, nil
+	case "endpointslices":
+		list, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{Limit: int64(limit)})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceItem, 0, len(list.Items))
+		for index := range list.Items {
+			items = append(items, objectItem("EndpointSlice", &list.Items[index], string(list.Items[index].AddressType)))
+		}
+		return items, nil
 	case "persistentvolumeclaims", "pvcs":
 		list, err := client.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{Limit: int64(limit)})
 		if err != nil {
@@ -612,6 +758,13 @@ func summarizeContainers(containers []corev1.Container, statuses []corev1.Contai
 	result := make([]ContainerSummary, 0, len(containers))
 	for _, container := range containers {
 		item := ContainerSummary{Name: container.Name, Image: container.Image}
+		for _, port := range container.Ports {
+			item.Ports = append(item.Ports, ContainerPortSummary{
+				Name:          port.Name,
+				ContainerPort: port.ContainerPort,
+				Protocol:      string(port.Protocol),
+			})
+		}
 		if status, ok := statusByName[container.Name]; ok {
 			item.Ready = status.Ready
 			item.RestartCount = status.RestartCount
@@ -706,15 +859,30 @@ func collectPodServicesAndEndpoints(ctx context.Context, client kubernetes.Inter
 
 func summarizeService(service *corev1.Service) ServiceSummary {
 	ports := make([]string, 0, len(service.Spec.Ports))
+	portDetails := make([]ServicePortSummary, 0, len(service.Spec.Ports))
 	for _, port := range service.Spec.Ports {
-		ports = append(ports, fmt.Sprintf("%s:%d/%s", port.Name, port.Port, port.Protocol))
+		targetPort := port.TargetPort.String()
+		if targetPort == "0" || targetPort == "" {
+			targetPort = fmt.Sprintf("%d", port.Port)
+		}
+		ports = append(ports, fmt.Sprintf("%s:%d->%s/%s", port.Name, port.Port, targetPort, port.Protocol))
+		portDetails = append(portDetails, ServicePortSummary{
+			Name:       port.Name,
+			Port:       port.Port,
+			TargetPort: targetPort,
+			NodePort:   port.NodePort,
+			Protocol:   string(port.Protocol),
+		})
 	}
 	return ServiceSummary{
-		Name:      service.Name,
-		Type:      string(service.Spec.Type),
-		Selector:  copyStringMap(service.Spec.Selector),
-		ClusterIP: service.Spec.ClusterIP,
-		Ports:     ports,
+		Name:         service.Name,
+		Type:         string(service.Spec.Type),
+		Selector:     copyStringMap(service.Spec.Selector),
+		ClusterIP:    service.Spec.ClusterIP,
+		ExternalName: service.Spec.ExternalName,
+		Headless:     service.Spec.ClusterIP == corev1.ClusterIPNone,
+		Ports:        ports,
+		PortDetails:  portDetails,
 	}
 }
 
@@ -724,9 +892,56 @@ func summarizeEndpoint(endpoint *corev1.Endpoints) EndpointSummary {
 		for _, address := range subset.Addresses {
 			summary.Addresses = append(summary.Addresses, address.IP)
 		}
+		for _, address := range subset.NotReadyAddresses {
+			summary.NotReadyAddresses = append(summary.NotReadyAddresses, address.IP)
+		}
 		for _, port := range subset.Ports {
 			summary.Ports = append(summary.Ports, fmt.Sprintf("%s:%d/%s", port.Name, port.Port, port.Protocol))
 		}
+	}
+	return summary
+}
+
+func summarizeEndpointSlice(endpointSlice *discoveryv1.EndpointSlice) EndpointSliceSummary {
+	summary := EndpointSliceSummary{
+		Name:        endpointSlice.Name,
+		AddressType: string(endpointSlice.AddressType),
+		Ports:       make([]string, 0, len(endpointSlice.Ports)),
+		Endpoints:   make([]EndpointAddressSummary, 0, len(endpointSlice.Endpoints)),
+	}
+	for _, port := range endpointSlice.Ports {
+		name := ""
+		if port.Name != nil {
+			name = *port.Name
+		}
+		number := int32(0)
+		if port.Port != nil {
+			number = *port.Port
+		}
+		protocol := corev1.ProtocolTCP
+		if port.Protocol != nil {
+			protocol = *port.Protocol
+		}
+		summary.Ports = append(summary.Ports, fmt.Sprintf("%s:%d/%s", name, number, protocol))
+	}
+	for _, endpoint := range endpointSlice.Endpoints {
+		ready := endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready
+		serving := endpoint.Conditions.Serving != nil && *endpoint.Conditions.Serving
+		terminating := endpoint.Conditions.Terminating != nil && *endpoint.Conditions.Terminating
+		item := EndpointAddressSummary{
+			Addresses:   append([]string(nil), endpoint.Addresses...),
+			Ready:       ready && !terminating,
+			Serving:     serving,
+			Terminating: terminating,
+		}
+		if endpoint.TargetRef != nil {
+			item.TargetKind = endpoint.TargetRef.Kind
+			item.TargetName = endpoint.TargetRef.Name
+		}
+		if endpoint.NodeName != nil {
+			item.NodeName = *endpoint.NodeName
+		}
+		summary.Endpoints = append(summary.Endpoints, item)
 	}
 	return summary
 }
@@ -923,6 +1138,190 @@ func EvaluatePodRules(result *PodDiagnosisResult) []RuleFinding {
 	findings = append(findings, evaluatePending(result)...)
 	findings = append(findings, evaluateServiceEndpoint(result)...)
 	findings = append(findings, evaluateIngress(result)...)
+	return findings
+}
+
+func EvaluateServiceRules(result *ServiceDiagnosisResult) []RuleFinding {
+	if result == nil {
+		return nil
+	}
+	findings := make([]RuleFinding, 0)
+	service := result.Service
+	isExternalName := strings.EqualFold(service.Type, string(corev1.ServiceTypeExternalName))
+	if len(service.Selector) > 0 && len(result.BackendPods) == 0 {
+		findings = append(findings, RuleFinding{
+			ID:           "k8s.service.selector_matches_no_pods",
+			Severity:     "high",
+			Category:     "service",
+			Title:        "Service selector matches no Pods",
+			Description:  fmt.Sprintf("service %s selector does not match any pod in namespace %s", service.Name, result.Namespace),
+			EvidenceKeys: []string{evidenceKey("service", service.Name, "selector"), "backendPods"},
+			Suggestion:   "核对 Service selector 与工作负载 Pod labels 是否一致。",
+		})
+	}
+	readyEndpoints, notReadyEndpoints, terminatingEndpoints := serviceEndpointStats(result)
+	if !isExternalName && readyEndpoints == 0 {
+		findings = append(findings, RuleFinding{
+			ID:           "k8s.service.no_ready_endpoint",
+			Severity:     "high",
+			Category:     "service",
+			Title:        "Service has no ready endpoint",
+			Description:  fmt.Sprintf("service %s has no ready endpoint in EndpointSlice or Endpoints", service.Name),
+			EvidenceKeys: []string{"endpointSlices.endpoints.ready", "endpoints.addresses"},
+			Suggestion:   "检查 selector、Pod readiness、readinessProbe、targetPort 和 EndpointSlice 控制器状态。",
+		})
+	}
+	if notReadyEndpoints > 0 {
+		findings = append(findings, RuleFinding{
+			ID:           "k8s.service.not_ready_endpoints",
+			Severity:     "medium",
+			Category:     "service",
+			Title:        "Service has not-ready endpoints",
+			Description:  fmt.Sprintf("service %s has %d endpoint(s) that are not ready", service.Name, notReadyEndpoints),
+			EvidenceKeys: []string{"endpointSlices.endpoints.ready", "endpoints.notReadyAddresses"},
+			Suggestion:   "检查对应 Pod 的 Ready condition 和 readinessProbe 失败原因。",
+		})
+	}
+	if terminatingEndpoints > 0 {
+		findings = append(findings, RuleFinding{
+			ID:           "k8s.service.terminating_endpoints",
+			Severity:     "medium",
+			Category:     "service",
+			Title:        "Service contains terminating endpoints",
+			Description:  fmt.Sprintf("service %s has %d terminating endpoint(s)", service.Name, terminatingEndpoints),
+			EvidenceKeys: []string{"endpointSlices.endpoints.terminating"},
+			Suggestion:   "检查滚动发布、preStop、terminationGracePeriodSeconds 和连接排空配置。",
+		})
+	}
+	notReadyPods := make([]string, 0)
+	for _, pod := range result.BackendPods {
+		if !podSummaryReady(pod) {
+			notReadyPods = append(notReadyPods, pod.Name)
+		}
+	}
+	if len(notReadyPods) > 0 {
+		findings = append(findings, RuleFinding{
+			ID:           "k8s.service.backend_pods_not_ready",
+			Severity:     "high",
+			Category:     "pod",
+			Title:        "Service backend Pods are not ready",
+			Description:  fmt.Sprintf("%d backend pod(s) are not ready: %s", len(notReadyPods), strings.Join(notReadyPods, ", ")),
+			EvidenceKeys: []string{"backendPods.conditions.Ready"},
+			Suggestion:   "继续对未 Ready 的后端 Pod 执行 Pod 诊断并检查事件和容器日志。",
+		})
+	}
+	findings = append(findings, evaluateServiceTargetPorts(result)...)
+	findings = append(findings, evaluateServiceIngressPorts(result)...)
+	return findings
+}
+
+func serviceEndpointStats(result *ServiceDiagnosisResult) (int, int, int) {
+	ready, notReady, terminating := 0, 0, 0
+	if len(result.EndpointSlices) > 0 {
+		for _, endpointSlice := range result.EndpointSlices {
+			for _, endpoint := range endpointSlice.Endpoints {
+				if endpoint.Terminating {
+					terminating++
+				}
+				if endpoint.Ready {
+					ready++
+				} else {
+					notReady++
+				}
+			}
+		}
+		return ready, notReady, terminating
+	}
+	if result.Endpoints != nil {
+		ready = len(result.Endpoints.Addresses)
+		notReady = len(result.Endpoints.NotReadyAddresses)
+	}
+	return ready, notReady, terminating
+}
+
+func podSummaryReady(pod PodSummary) bool {
+	if hasPodCondition(pod.Conditions, string(corev1.PodReady), string(corev1.ConditionTrue)) {
+		return true
+	}
+	if !strings.EqualFold(pod.Phase, string(corev1.PodRunning)) || len(pod.Containers) == 0 {
+		return false
+	}
+	for _, container := range pod.Containers {
+		if !container.Ready {
+			return false
+		}
+	}
+	return true
+}
+
+func evaluateServiceTargetPorts(result *ServiceDiagnosisResult) []RuleFinding {
+	if len(result.BackendPods) == 0 {
+		return nil
+	}
+	findings := make([]RuleFinding, 0)
+	for _, servicePort := range result.Service.PortDetails {
+		if _, err := strconv.Atoi(servicePort.TargetPort); err == nil {
+			continue
+		}
+		matchedPods := 0
+		for _, pod := range result.BackendPods {
+			if podHasNamedPort(pod, servicePort.TargetPort, servicePort.Protocol) {
+				matchedPods++
+			}
+		}
+		if matchedPods == len(result.BackendPods) {
+			continue
+		}
+		findings = append(findings, RuleFinding{
+			ID:           "k8s.service.target_port_not_found",
+			Severity:     "high",
+			Category:     "service",
+			Title:        "Service named targetPort is missing",
+			Description:  fmt.Sprintf("targetPort %s/%s is present on %d of %d selected pod(s)", servicePort.TargetPort, servicePort.Protocol, matchedPods, len(result.BackendPods)),
+			EvidenceKeys: []string{evidenceKey("service", result.Service.Name, "portDetails"), "backendPods.containers.ports"},
+			Suggestion:   "修正 Service targetPort 名称，或在所有后端容器中声明同名且协议一致的 containerPort。",
+		})
+	}
+	return findings
+}
+
+func podHasNamedPort(pod PodSummary, name, protocol string) bool {
+	for _, container := range pod.Containers {
+		for _, port := range container.Ports {
+			if port.Name == name && strings.EqualFold(port.Protocol, protocol) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func evaluateServiceIngressPorts(result *ServiceDiagnosisResult) []RuleFinding {
+	validPorts := make(map[string]struct{}, len(result.Service.PortDetails)*2)
+	for _, port := range result.Service.PortDetails {
+		validPorts[port.Name] = struct{}{}
+		validPorts[fmt.Sprintf("%d", port.Port)] = struct{}{}
+	}
+	findings := make([]RuleFinding, 0)
+	for _, ingress := range result.Ingresses {
+		for _, backend := range ingress.Backends {
+			if backend.Service != result.Service.Name {
+				continue
+			}
+			if _, ok := validPorts[backend.Port]; ok {
+				continue
+			}
+			findings = append(findings, RuleFinding{
+				ID:           "k8s.ingress.backend_port_mismatch",
+				Severity:     "high",
+				Category:     "ingress",
+				Title:        "Ingress backend port does not exist on Service",
+				Description:  fmt.Sprintf("ingress %s references service %s port %s, but that port is not declared", ingress.Name, result.Service.Name, backend.Port),
+				EvidenceKeys: []string{evidenceKey("ingress", ingress.Name, "backends"), evidenceKey("service", result.Service.Name, "portDetails")},
+				Suggestion:   "将 Ingress backend port 修改为 Service 已声明的端口名称或端口号。",
+			})
+		}
+	}
 	return findings
 }
 

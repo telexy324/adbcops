@@ -478,7 +478,7 @@ export function SettingsPage() {
     <div className="mx-auto max-w-[1700px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">Settings</p>
+          <p className="text-sm font-medium text-brand-700">Settings</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight text-slate-950">
             配置中心
           </h1>
@@ -541,7 +541,7 @@ export function SettingsPage() {
         <Card className="border-slate-200/80 shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <KeyRound className="size-5 text-cyan-600" />
+              <KeyRound className="size-5 text-brand-600" />
               LLM 配置
             </CardTitle>
             <CardDescription>
@@ -560,7 +560,7 @@ export function SettingsPage() {
                   className={cn(
                     "rounded-xl border p-4 text-left transition-colors",
                     llmForm.purpose === item.purpose
-                      ? "border-cyan-300 bg-cyan-50 text-cyan-900"
+                      ? "border-brand-300 bg-brand-50 text-brand-900"
                       : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
                   )}
                 >
@@ -572,7 +572,7 @@ export function SettingsPage() {
             </div>
             <form className="space-y-4" onSubmit={submitLLM}>
               {editingLLMId && (
-                <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
+                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800">
                   正在编辑 #{editingLLMId}。Bearer Token、App Key / Secret
                   留空表示不修改。
                 </div>
@@ -753,7 +753,7 @@ export function SettingsPage() {
         <Card className="border-slate-200/80 shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Settings2 className="size-5 text-cyan-600" />
+              <Settings2 className="size-5 text-brand-600" />
               数据源配置
             </CardTitle>
             <CardDescription>
@@ -773,7 +773,7 @@ export function SettingsPage() {
                     className={cn(
                       "rounded-xl border p-4 text-left transition-colors",
                       selectedType === item.type
-                        ? "border-cyan-300 bg-cyan-50 text-cyan-900"
+                        ? "border-brand-300 bg-brand-50 text-brand-900"
                         : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
                     )}
                   >
@@ -787,7 +787,7 @@ export function SettingsPage() {
 
             <form className="space-y-4" onSubmit={submitDataSource} noValidate>
               {editingDataSourceId && (
-                <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
+                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800">
                   正在编辑 #{editingDataSourceId}。Credential JSON
                   留空表示不修改已保存凭据。
                 </div>
@@ -1165,7 +1165,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function StatusPill({ label }: { label: string }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
+    <span className="inline-flex items-center gap-1 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">
       <CheckCircle2 className="size-3.5" aria-hidden="true" />
       {label}
     </span>

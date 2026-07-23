@@ -129,7 +129,7 @@ export function OperationsPage() {
     <div className="mx-auto max-w-[1800px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">
+          <p className="text-sm font-medium text-brand-700">
             Operations Intelligence
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
@@ -259,7 +259,7 @@ function TopologyGraphCard({
     <Card>
       <CardHeader>
         <div className="flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-xl bg-cyan-50 text-cyan-700">
+          <div className="grid size-10 place-items-center rounded-xl bg-brand-50 text-brand-700">
             <Network className="size-5" aria-hidden="true" />
           </div>
           <div>
@@ -422,7 +422,7 @@ function IncidentSelector({
               className={cn(
                 "rounded-xl border p-3 text-left transition-colors",
                 selectedIncidentId === incident.id
-                  ? "border-cyan-300 bg-cyan-50"
+                  ? "border-brand-300 bg-brand-50"
                   : "border-slate-200 bg-white hover:bg-slate-50",
               )}
             >
@@ -670,7 +670,7 @@ function NodePill({ node }: { node: TopologyNode }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex items-center gap-2">
-        <GitBranch className="size-4 text-cyan-600" aria-hidden="true" />
+        <GitBranch className="size-4 text-brand-600" aria-hidden="true" />
         <p className="truncate text-sm font-medium text-slate-900">
           {node.displayName || node.name}
         </p>
@@ -765,7 +765,7 @@ function EdgeList({
             className="grid gap-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600 md:grid-cols-[1fr_auto_1fr]"
           >
             <span className="truncate font-mono">{edge.fromNodeKey}</span>
-            <span className="text-cyan-700">{edge.edgeType} →</span>
+            <span className="text-brand-700">{edge.edgeType} →</span>
             <span className="truncate font-mono">{edge.toNodeKey}</span>
           </div>
         ))}
@@ -787,7 +787,7 @@ function TimelineRow({
 }) {
   return (
     <div className="relative border-l border-slate-200 pb-4 pl-5 last:pb-0">
-      <span className="absolute -left-[7px] top-1 grid size-3.5 place-items-center rounded-full bg-cyan-500 ring-4 ring-white" />
+      <span className="absolute -left-[7px] top-1 grid size-3.5 place-items-center rounded-full bg-brand-500 ring-4 ring-white" />
       <div className="flex flex-col justify-between gap-1 md:flex-row md:items-start">
         <p className="font-medium text-slate-900">{title}</p>
         <p className="text-xs text-slate-500">{formatDate(time)}</p>

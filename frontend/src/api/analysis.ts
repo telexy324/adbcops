@@ -114,6 +114,63 @@ export type PodDiagnosisResponse = {
   }>;
 };
 
+export type ServiceDiagnosisResponse = {
+  dataSourceId: number;
+  namespace: string;
+  service: {
+    name: string;
+    type?: string;
+    selector?: Record<string, string>;
+    clusterIp?: string;
+    externalName?: string;
+    headless?: boolean;
+    portDetails?: Array<{
+      name?: string;
+      port: number;
+      targetPort: string;
+      nodePort?: number;
+      protocol: string;
+    }>;
+  };
+  backendPods?: Array<{
+    name: string;
+    phase: string;
+    conditions?: Array<{ type: string; status: string }>;
+    containers?: Array<{
+      name: string;
+      ready: boolean;
+      restartCount: number;
+    }>;
+  }>;
+  endpoints?: {
+    name: string;
+    addresses?: string[];
+    notReadyAddresses?: string[];
+    ports?: string[];
+  };
+  endpointSlices?: Array<{
+    name: string;
+    addressType: string;
+    ports?: string[];
+    endpoints?: Array<{
+      addresses: string[];
+      ready: boolean;
+      serving?: boolean;
+      terminating?: boolean;
+      targetKind?: string;
+      targetName?: string;
+      nodeName?: string;
+    }>;
+  }>;
+  ingresses?: Array<{
+    name: string;
+    hosts?: string[];
+    backends?: Array<{ service: string; port?: string }>;
+  }>;
+  rules?: K8sRuleFinding[];
+  warnings?: Array<{ stage: string; message: string }>;
+};
+
 export type MetricQueryResponse = {
   dataSourceId: number;
   query: string;
@@ -164,6 +221,18 @@ export async function diagnosePod(input: {
 }) {
   const response = await apiClient.post<ApiEnvelope<PodDiagnosisResponse>>(
     "/api/analysis/k8s/pod-diagnose",
+    input,
+  );
+  return response.data.data;
+}
+
+export async function diagnoseService(input: {
+  dataSourceId: number;
+  namespace: string;
+  serviceName: string;
+}) {
+  const response = await apiClient.post<ApiEnvelope<ServiceDiagnosisResponse>>(
+    "/api/analysis/k8s/service-diagnose",
     input,
   );
   return response.data.data;

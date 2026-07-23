@@ -7,6 +7,7 @@ import (
 	k8ssvc "aiops-platform/backend/internal/k8s"
 	"aiops-platform/backend/internal/repository"
 	"github.com/gin-gonic/gin"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type K8sHandler struct {
@@ -37,6 +38,12 @@ type k8sPodDiagnosisRequest struct {
 	LogTailLines        int    `json:"logTailLines"`
 	LogMaxBytes         int    `json:"logMaxBytes"`
 	IncludePreviousLogs bool   `json:"includePreviousLogs"`
+}
+
+type k8sServiceDiagnosisRequest struct {
+	DataSourceID int64  `json:"dataSourceId" binding:"required"`
+	Namespace    string `json:"namespace" binding:"required"`
+	ServiceName  string `json:"serviceName" binding:"required"`
 }
 
 func (h *K8sHandler) Test(c *gin.Context) {
@@ -104,6 +111,27 @@ func (h *K8sHandler) DiagnosePod(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *K8sHandler) DiagnoseService(c *gin.Context) {
+	actor, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	var request k8sServiceDiagnosisRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.DiagnoseService(c.Request.Context(), actor, k8ssvc.ServiceDiagnosisInput{
+		DataSourceID: request.DataSourceID,
+		Namespace:    request.Namespace,
+		ServiceName:  request.ServiceName,
+	})
+	if handleK8sError(c, err, "diagnose kubernetes service failed") {
+		return
+	}
+	success(c, result)
+}
+
 func handleK8sError(c *gin.Context, err error, fallback string) bool {
 	if err == nil {
 		return false
@@ -122,6 +150,8 @@ func handleK8sError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusTooManyRequests, 42902, "data source concurrency limit exceeded")
 	case errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "data source not found")
+	case apierrors.IsNotFound(err):
+		failure(c, http.StatusNotFound, 40411, "kubernetes resource not found")
 	default:
 		failure(c, http.StatusInternalServerError, 50090, fallback)
 	}

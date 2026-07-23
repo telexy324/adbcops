@@ -403,7 +403,7 @@ export function TopologyConfigurationPage() {
     <div className="mx-auto max-w-[1900px] space-y-6">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
-          <p className="text-sm font-medium text-cyan-700">
+          <p className="text-sm font-medium text-brand-700">
             Topology Configuration
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
@@ -569,7 +569,7 @@ function K8sImportCard({
   return (
     <Card
       id="k8s-import"
-      className="scroll-mt-6 ring-offset-4 target:ring-2 target:ring-cyan-400"
+      className="scroll-mt-6 ring-offset-4 target:ring-2 target:ring-brand-400"
     >
       <CardHeader>
         <div className="flex items-center gap-3">
@@ -730,7 +730,7 @@ function TypeCatalogCard({
     <Card>
       <CardHeader>
         <div className="flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-xl bg-cyan-50 text-cyan-700">
+          <div className="grid size-10 place-items-center rounded-xl bg-brand-50 text-brand-700">
             <Settings2 className="size-5" aria-hidden="true" />
           </div>
           <div>
@@ -912,7 +912,7 @@ function SourceWizardCard({
             <textarea
               value={mappingText}
               onChange={(event) => onMappingChange(event.target.value)}
-              className="min-h-96 w-full rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              className="min-h-96 w-full rounded-xl border border-slate-200 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
               spellCheck={false}
             />
           </Field>
@@ -920,7 +920,7 @@ function SourceWizardCard({
             <textarea
               value={sampleText}
               onChange={(event) => onSampleChange(event.target.value)}
-              className="min-h-96 w-full rounded-xl border border-slate-200 bg-white p-4 font-mono text-xs leading-5 text-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              className="min-h-96 w-full rounded-xl border border-slate-200 bg-white p-4 font-mono text-xs leading-5 text-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
               spellCheck={false}
             />
           </Field>
@@ -970,7 +970,7 @@ function PreviewResultCard({
     return <InlineHint text="尚未执行 Mapping Preview。" />;
   }
   return (
-    <div className="space-y-3 rounded-xl border border-cyan-200 bg-cyan-50/50 p-4">
+    <div className="space-y-3 rounded-xl border border-brand-200 bg-brand-50/50 p-4">
       <div className="grid gap-3 text-sm md:grid-cols-4">
         <Info label="Nodes" value={`${preview.nodes.length}`} />
         <Info label="Edges" value={`${preview.edges.length}`} />

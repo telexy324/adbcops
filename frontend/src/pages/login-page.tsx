@@ -45,14 +45,11 @@ export function LoginPage() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#07111f] px-4 py-8 text-white sm:px-6 lg:px-8">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_18%,rgba(34,211,238,0.13),transparent_30%),radial-gradient(circle_at_85%_70%,rgba(59,130,246,0.12),transparent_35%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-[0.16] [background-image:linear-gradient(rgba(148,163,184,.16)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,.16)_1px,transparent_1px)] [background-size:52px_52px]" />
-
+    <main className="relative min-h-screen overflow-hidden bg-[#252b3a] px-4 py-8 text-white sm:px-6 lg:px-8">
       <div className="relative mx-auto grid min-h-[calc(100vh-4rem)] max-w-7xl items-center gap-12 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="hidden max-w-2xl lg:block">
           <div className="mb-10 inline-flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-xl bg-cyan-400/15 text-cyan-300 ring-1 ring-cyan-300/25">
+            <div className="grid size-11 place-items-center rounded-lg bg-brand-400/15 text-brand-300 ring-1 ring-brand-300/25">
               <Activity className="size-6" aria-hidden="true" />
             </div>
             <div>
@@ -63,12 +60,12 @@ export function LoginPage() {
             </div>
           </div>
 
-          <p className="mb-5 text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">
+          <p className="mb-5 text-sm font-semibold uppercase tracking-[0.2em] text-brand-300">
             Operational clarity, built in
           </p>
           <h1 className="max-w-xl text-5xl font-semibold leading-[1.12] tracking-tight text-white">
             让每一次故障分析，
-            <span className="text-cyan-300">都有证据可循。</span>
+            <span className="text-brand-300">都有证据可循。</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg leading-8 text-slate-400">
             统一关联日志、指标、告警、Kubernetes
@@ -94,7 +91,7 @@ export function LoginPage() {
                 className="rounded-xl border border-white/10 bg-white/[0.035] p-4 backdrop-blur-sm"
               >
                 <item.icon
-                  className="mb-3 size-5 text-cyan-300"
+                  className="mb-3 size-5 text-brand-300"
                   aria-hidden="true"
                 />
                 <p className="text-sm font-semibold text-slate-100">
@@ -110,7 +107,7 @@ export function LoginPage() {
 
         <section className="mx-auto w-full max-w-md">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="grid size-10 place-items-center rounded-xl bg-cyan-400/15 text-cyan-300">
+            <div className="grid size-10 place-items-center rounded-lg bg-brand-400/15 text-brand-300">
               <Activity className="size-5" aria-hidden="true" />
             </div>
             <p className="font-semibold">AI Native AIOps</p>
@@ -118,7 +115,7 @@ export function LoginPage() {
 
           <Card className="border-white/10 bg-white/[0.98] text-slate-950 shadow-[0_30px_90px_rgba(0,0,0,.38)]">
             <CardHeader className="space-y-3 p-7 pb-4 sm:p-8 sm:pb-5">
-              <div className="grid size-11 place-items-center rounded-xl bg-slate-950 text-cyan-300">
+              <div className="grid size-11 place-items-center rounded-lg bg-[#2d3748] text-brand-300">
                 <LockKeyhole className="size-5" aria-hidden="true" />
               </div>
               <div>

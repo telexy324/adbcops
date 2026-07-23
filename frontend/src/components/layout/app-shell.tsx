@@ -38,10 +38,10 @@ export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-950">
+    <div className="min-h-screen bg-[#eff3f6] text-[#252b3a]">
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-sm transition-opacity lg:hidden",
+          "fixed inset-0 z-40 bg-[#252b3a]/55 backdrop-blur-sm transition-opacity lg:hidden",
           sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
         )}
         aria-hidden="true"
@@ -50,25 +50,25 @@ export function AppShell() {
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-white/10 bg-[#07111f] text-slate-200 shadow-2xl transition-transform lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-[#d1dbe5] bg-white text-[#747c8b] shadow-xl transition-transform lg:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
         aria-label="主导航"
       >
-        <div className="flex h-20 items-center gap-3 border-b border-white/10 px-6">
-          <div className="grid size-10 place-items-center rounded-xl bg-cyan-400/15 text-cyan-300 ring-1 ring-cyan-300/25">
+        <div className="flex h-20 items-center gap-3 border-b border-[#d1dbe5] px-6">
+          <div className="grid size-10 place-items-center rounded-lg bg-[#2d3748] text-brand-400 shadow-sm">
             <Activity className="size-5" aria-hidden="true" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold tracking-wide text-white">
+            <p className="truncate text-sm font-semibold tracking-wide text-[#252b3a]">
               AI Native AIOps
             </p>
-            <p className="text-xs text-slate-400">智能运维分析平台</p>
+            <p className="text-xs text-[#747c8b]">智能运维分析平台</p>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="ml-auto text-slate-300 hover:bg-white/10 hover:text-white lg:hidden"
+            className="ml-auto text-[#747c8b] hover:bg-[#eff3f6] hover:text-[#252b3a] lg:hidden"
             onClick={() => setSidebarOpen(false)}
             aria-label="关闭导航"
           >
@@ -77,7 +77,7 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-4 py-6">
-          <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          <p className="mb-3 px-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#adb0b8]">
             Workspace
           </p>
           {navigation.map((item) => {
@@ -92,8 +92,8 @@ export function AppShell() {
                     cn(
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                       isActive
-                        ? "bg-cyan-400/12 text-cyan-200 ring-1 ring-inset ring-cyan-300/15"
-                        : "text-slate-400 hover:bg-white/5 hover:text-slate-100",
+                        ? "bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200"
+                        : "text-[#747c8b] hover:bg-[#eff3f6] hover:text-[#252b3a]",
                     )
                   }
                 >
@@ -106,7 +106,7 @@ export function AppShell() {
             return (
               <div
                 key={item.label}
-                className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-600"
+                className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#adb0b8]"
                 aria-disabled="true"
               >
                 <Icon className="size-[18px]" aria-hidden="true" />
@@ -119,24 +119,24 @@ export function AppShell() {
           })}
         </nav>
 
-        <div className="border-t border-white/10 p-4">
-          <div className="flex items-center gap-3 rounded-xl bg-white/[0.04] p-3 ring-1 ring-inset ring-white/[0.06]">
-            <div className="grid size-9 place-items-center rounded-full bg-slate-700 text-xs font-semibold text-white">
+        <div className="border-t border-[#d1dbe5] p-4">
+          <div className="flex items-center gap-3 rounded-lg bg-[#f4f8fa] p-3 ring-1 ring-inset ring-[#d1dbe5]">
+            <div className="grid size-9 place-items-center rounded-full bg-[#2d3748] text-xs font-semibold text-brand-300">
               AD
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-slate-200">
+              <p className="truncate text-sm font-medium text-[#252b3a]">
                 Platform Admin
               </p>
-              <p className="truncate text-xs text-slate-500">初始化阶段</p>
+              <p className="truncate text-xs text-[#747c8b]">初始化阶段</p>
             </div>
-            <Settings className="size-4 text-slate-500" aria-hidden="true" />
+            <Settings className="size-4 text-[#747c8b]" aria-hidden="true" />
           </div>
         </div>
       </aside>
 
       <div className="lg:pl-72">
-        <header className="sticky top-0 z-30 flex h-20 items-center gap-4 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+        <header className="sticky top-0 z-30 flex h-20 items-center gap-4 border-b border-[#d1dbe5] bg-white/95 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
           <Button
             variant="ghost"
             size="icon"
@@ -149,7 +149,7 @@ export function AppShell() {
 
           <div className="relative hidden max-w-md flex-1 md:block">
             <Search
-              className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400"
+              className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#747c8b]"
               aria-hidden="true"
             />
             <input
@@ -157,7 +157,7 @@ export function AppShell() {
               aria-label="搜索"
               disabled
               placeholder="搜索事件、资源或会话"
-              className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+              className="h-10 w-full rounded-lg border border-[#d1dbe5] bg-[#f4f8fa] pl-10 pr-3 text-sm outline-none placeholder:text-[#adb0b8] disabled:cursor-not-allowed"
             />
           </div>
 

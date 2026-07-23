@@ -4,7 +4,7 @@ export function NotFoundPage() {
   return (
     <main className="grid min-h-screen place-items-center bg-slate-50 p-6 text-center">
       <div>
-        <p className="text-sm font-semibold text-cyan-700">404</p>
+        <p className="text-sm font-semibold text-brand-700">404</p>
         <h1 className="mt-2 text-3xl font-semibold text-slate-950">
           页面不存在
         </h1>

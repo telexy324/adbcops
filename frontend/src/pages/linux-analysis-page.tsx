@@ -293,16 +293,16 @@ export function LinuxAnalysisPage() {
 
   return (
     <div className="mx-auto max-w-[1700px] space-y-6">
-      <section className="overflow-hidden rounded-2xl bg-[#071827] px-6 py-6 text-white shadow-xl sm:px-8">
+      <section className="overflow-hidden rounded-2xl bg-[#2d3748] px-6 py-6 text-white shadow-xl sm:px-8">
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div>
             <Link
               to="/linux-hosts"
-              className="mb-4 inline-flex items-center gap-2 text-xs font-semibold text-cyan-300 hover:text-cyan-200"
+              className="mb-4 inline-flex items-center gap-2 text-xs font-semibold text-brand-300 hover:text-brand-200"
             >
               <ArrowLeft className="size-4" /> 返回主机配置
             </Link>
-            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[.2em] text-cyan-300">
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[.2em] text-brand-300">
               <Activity className="size-4" /> Linux Analysis
             </p>
             <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">
@@ -540,7 +540,7 @@ function HostChoice({
     <label
       className={cn(
         "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm",
-        checked && "border-cyan-300 bg-cyan-50",
+        checked && "border-brand-300 bg-brand-50",
       )}
     >
       <input
@@ -574,7 +574,7 @@ function HostSummary({
     <Card>
       <CardContent className="grid gap-5 p-5 lg:grid-cols-[1fr_auto] lg:items-center">
         <div className="flex min-w-0 items-start gap-4">
-          <div className="rounded-xl bg-cyan-50 p-3 text-cyan-700">
+          <div className="rounded-xl bg-brand-50 p-3 text-brand-700">
             <Server className="size-6" />
           </div>
           <div className="min-w-0">
@@ -613,13 +613,13 @@ function WorkflowProgress({
       <CardHeader className="flex-row items-center justify-between">
         <div>
           <CardTitle className="flex items-center gap-2">
-            <GitBranch className="size-5 text-cyan-600" /> Workflow Progress
+            <GitBranch className="size-5 text-brand-600" /> Workflow Progress
           </CardTitle>
           <CardDescription>
             Run #{run.id} · {run.status}
           </CardDescription>
         </div>
-        {pending && <Loader2 className="size-5 animate-spin text-cyan-600" />}
+        {pending && <Loader2 className="size-5 animate-spin text-brand-600" />}
       </CardHeader>
       <CardContent>
         {(run.status === "partial_success" || run.errorMessage) && (
@@ -855,7 +855,7 @@ function FindingsPanel({
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 {type === "FACT" ? (
-                  <Database className="size-5 text-cyan-600" />
+                  <Database className="size-5 text-brand-600" />
                 ) : type === "RULE" ? (
                   <FileSearch className="size-5 text-amber-600" />
                 ) : (
@@ -896,7 +896,7 @@ function FindingCard({ finding }: { finding: Finding }) {
     <div className="rounded-xl border p-3">
       <p className="text-sm leading-6">{finding.summary}</p>
       {finding.evidenceRef && (
-        <p className="mt-2 break-all font-mono text-[11px] text-cyan-700">
+        <p className="mt-2 break-all font-mono text-[11px] text-brand-700">
           Evidence: {finding.evidenceRef}
         </p>
       )}
@@ -960,7 +960,7 @@ function EvidencePanel({ records }: { records: LinuxEvidence[] }) {
                 <Pill>{Math.round(record.confidence * 100)}% confidence</Pill>
               )}
             </div>
-            <p className="mt-2 break-all font-mono text-[11px] text-cyan-700">
+            <p className="mt-2 break-all font-mono text-[11px] text-brand-700">
               {record.evidenceKey}
             </p>
             <div className="mt-3">
@@ -1066,7 +1066,7 @@ function TopologyPanel({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Network className="size-5 text-cyan-600" /> Host Topology
+          <Network className="size-5 text-brand-600" /> Host Topology
         </CardTitle>
         <CardDescription>关系显示来源与置信度。</CardDescription>
       </CardHeader>
@@ -1123,7 +1123,7 @@ function BatchReport({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Layers3 className="size-5 text-cyan-600" /> Batch Report
+          <Layers3 className="size-5 text-brand-600" /> Batch Report
         </CardTitle>
         <CardDescription>
           总数包含成功、unknown 和采集失败主机，不遗漏失败样本。
@@ -1139,7 +1139,7 @@ function BatchReport({
           <ReportMetric label="失败" value={counts.failed} tone="red" />
         </div>
         {pending && (
-          <div className="mt-5 flex items-center gap-2 text-sm text-cyan-700">
+          <div className="mt-5 flex items-center gap-2 text-sm text-brand-700">
             <Loader2 className="size-4 animate-spin" /> 批量诊断执行中
           </div>
         )}
@@ -1682,7 +1682,7 @@ function SmallStatus({ value }: { value: string }) {
 }
 function Pill({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-semibold text-cyan-700">
+    <span className="inline-flex rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700">
       {children}
     </span>
   );
