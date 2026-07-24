@@ -197,6 +197,10 @@ export function AnalysisPage() {
     () => (tasksQuery.data ?? []).slice(0, 6),
     [tasksQuery.data],
   );
+  const podMetricSuggestions = useMemo(
+    () => (podResult ? buildPodMetricSuggestions(podResult) : []),
+    [podResult],
+  );
 
   const generalMutation = useMutation({
     mutationFn: runGeneralAnalysis,
@@ -214,6 +218,7 @@ export function AnalysisPage() {
   const podMutation = useMutation({
     mutationFn: diagnosePod,
     onSuccess: (response) => {
+      const metricSuggestions = buildPodMetricSuggestions(response);
       setPodResult(response);
       setServiceResult(null);
       setRules(response.rules ?? []);
@@ -231,7 +236,9 @@ export function AnalysisPage() {
       }));
       setMetricsForm((current) => ({
         ...current,
-        query: buildPodMetricQuery(response.namespace, response.pod.name),
+        query:
+          metricSuggestions[0]?.query ??
+          buildPodMetricQuery(response.namespace, response.pod.name),
       }));
       setNotice(
         response.warnings?.length
@@ -865,10 +872,13 @@ export function AnalysisPage() {
           {podResult && (
             <PodDiagnosisPanel
               result={podResult}
-              cpuPromQL={buildPodMetricQuery(
-                podResult.namespace,
-                podResult.pod.name,
-              )}
+              metricSuggestions={podMetricSuggestions}
+              activePromQL={metricsForm.query}
+              onSelectPromQL={(query, label) => {
+                setMetricsForm((current) => ({ ...current, query }));
+                setNotice(`已将“${label}”带入指标查询。`);
+                setError(null);
+              }}
             />
           )}
 
@@ -1143,10 +1153,14 @@ function EmptyState({ text }: { text: string }) {
 
 function PodDiagnosisPanel({
   result,
-  cpuPromQL,
+  metricSuggestions,
+  activePromQL,
+  onSelectPromQL,
 }: {
   result: PodDiagnosisResponse;
-  cpuPromQL: string;
+  metricSuggestions: PodMetricSuggestion[];
+  activePromQL: string;
+  onSelectPromQL: (query: string, label: string) => void;
 }) {
   const containers = result.pod.containers ?? [];
   const podRules = result.rules ?? [];
@@ -1230,11 +1244,43 @@ function PodDiagnosisPanel({
 
         <section>
           <p className="text-xs font-medium text-slate-500">
-            已生成 CPU PromQL
+            推荐指标查询 ({metricSuggestions.length})
           </p>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all border-y border-slate-200 bg-slate-50 py-3 text-xs leading-5 text-slate-700">
-            {cpuPromQL}
-          </pre>
+          <div className="mt-2 divide-y divide-slate-200 border-y border-slate-200">
+            {metricSuggestions.map((suggestion) => {
+              const active = suggestion.query === activePromQL;
+              return (
+                <div key={suggestion.id} className="py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-900">
+                        {suggestion.label}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        {suggestion.description}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={active ? "secondary" : "outline"}
+                      aria-label={`应用到指标查询：${suggestion.label}`}
+                      disabled={active}
+                      onClick={() =>
+                        onSelectPromQL(suggestion.query, suggestion.label)
+                      }
+                    >
+                      <Activity className="size-4" />
+                      {active ? "已应用" : "应用"}
+                    </Button>
+                  </div>
+                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
+                    {suggestion.query}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
         </section>
       </CardContent>
     </Card>
@@ -1340,9 +1386,99 @@ function topologyDataSourceID(node: TopologyNode) {
 }
 
 function buildPodMetricQuery(namespace: string, podName: string) {
-  const escapedNamespace = namespace
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"');
-  const escapedPod = podName.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  const escapedNamespace = escapePromQLLabel(namespace);
+  const escapedPod = escapePromQLLabel(podName);
   return `sum(rate(container_cpu_usage_seconds_total{namespace="${escapedNamespace}",pod="${escapedPod}"}[5m])) by (pod)`;
+}
+
+type PodMetricSuggestion = {
+  id: string;
+  label: string;
+  description: string;
+  query: string;
+};
+
+function buildPodMetricSuggestions(
+  result: PodDiagnosisResponse,
+): PodMetricSuggestion[] {
+  const namespace = escapePromQLLabel(result.namespace);
+  const podName = escapePromQLLabel(result.pod.name);
+  const selector = `namespace="${namespace}",pod="${podName}"`;
+  const containerSelector = `${selector},container!="",container!="POD"`;
+  const oomKilled = hasOOMKilledSignal(result);
+
+  const cpu: PodMetricSuggestion = {
+    id: "cpu-usage",
+    label: "Pod CPU 使用率",
+    description: "观察 Pod CPU 使用趋势，辅助判断负载变化和资源争用。",
+    query: buildPodMetricQuery(result.namespace, result.pod.name),
+  };
+  const memoryWorkingSet: PodMetricSuggestion = {
+    id: "memory-working-set",
+    label: "Pod 内存工作集",
+    description:
+      "观察当前不可轻易回收的内存，是分析 OOM 风险的主要使用量指标。",
+    query: `sum(container_memory_working_set_bytes{${containerSelector}}) by (pod)`,
+  };
+  const memoryLimit: PodMetricSuggestion = {
+    id: "memory-limit",
+    label: "Pod 内存上限",
+    description: "汇总容器 memory limit，用于确认 OOMKill 的资源边界。",
+    query: `sum(kube_pod_container_resource_limits{${selector},resource="memory",unit="byte"}) by (pod)`,
+  };
+  const restartTrend: PodMetricSuggestion = {
+    id: "restart-trend",
+    label: "容器重启增量",
+    description: "观察最近一小时容器重启次数，确认异常是否持续发生。",
+    query: `sum(increase(kube_pod_container_status_restarts_total{${selector}}[1h])) by (pod)`,
+  };
+
+  if (!oomKilled) {
+    return [cpu, memoryWorkingSet, memoryLimit, restartTrend];
+  }
+
+  return [
+    {
+      id: "memory-limit-ratio",
+      label: "Pod 内存使用率",
+      description:
+        "OOMKilled 首选查询：计算工作集相对 memory limit 的百分比，默认带入指标查询。",
+      query: `100 * sum(container_memory_working_set_bytes{${containerSelector}}) by (pod) / clamp_min(sum(kube_pod_container_resource_limits{${selector},resource="memory",unit="byte"}) by (pod), 1)`,
+    },
+    memoryWorkingSet,
+    memoryLimit,
+    {
+      id: "oom-killed-state",
+      label: "OOMKilled 状态",
+      description: "通过 kube-state-metrics 确认最近终止原因是否为 OOMKilled。",
+      query: `max_over_time(kube_pod_container_status_last_terminated_reason{${selector},reason="OOMKilled"}[1h])`,
+    },
+    restartTrend,
+    cpu,
+  ];
+}
+
+function escapePromQLLabel(value: string) {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+function hasOOMKilledSignal(result: PodDiagnosisResponse) {
+  const values = [
+    ...(result.rules ?? []).flatMap((rule) => [
+      rule.id,
+      rule.title,
+      rule.description,
+    ]),
+    ...(result.pod.containers ?? []).flatMap((container) => [
+      container.reason,
+      container.lastReason,
+    ]),
+    ...(result.events ?? []).flatMap((event) => [event.reason, event.message]),
+  ];
+  return values.some((value) => {
+    const normalized = (value ?? "").toLowerCase().replaceAll(/[\s_.-]+/g, "");
+    return (
+      normalized.includes("oomkilled") || normalized.includes("outofmemory")
+    );
+  });
 }

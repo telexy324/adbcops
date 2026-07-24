@@ -5256,8 +5256,11 @@ GET /api/health
 - 通用分析成功后立即刷新“我的分析任务”；
 - 页面维护关联分析上下文，统一环境、系统、组件、Namespace、Pod 和时间范围；
 - Alertmanager labels/annotations 自动预填日志、K8s 和指标条件；
-- K8s Pod 诊断完成后自动生成该 Pod 的基础 PromQL；
-- K8s Pod 诊断结果区必须明确展示 Pod/容器状态、规则描述、处理建议和已生成的 CPU PromQL，不得仅显示 Pod 名称与 Phase；
+- K8s Pod 诊断完成后根据 Pod 状态和规则生成多条 PromQL 建议，基础查询至少包含 CPU、内存工作集、内存上限和容器重启增量；
+- 命中 `k8s.pod.oom_killed` 或容器终止原因为 `OOMKilled` 时，必须优先生成并默认带入内存使用率查询，同时提供内存工作集、memory limit、OOMKilled 状态、重启增量和 CPU 查询；
+- OOM 信号识别必须兼容规则 ID、规则标题、规则描述、容器 reason/lastReason 和 Event reason/message，并忽略大小写以及空格、下划线、连字符和点号差异；
+- 推荐 PromQL 必须支持一键带入指标查询，不得要求用户手工复制；
+- K8s Pod 诊断结果区必须明确展示 Pod/容器状态、规则描述、处理建议和推荐指标查询，不得仅显示 Pod 名称与 Phase；
 - K8s 诊断支持 Pod 与 Service 两种对象，Service 模式调用 `/api/analysis/k8s/service-diagnose`；
 - Service 诊断展示后端 Pod、Endpoints、EndpointSlice、Ingress、采集降级 warning 和确定性规则；
 - `/analysis?nodeKey=...` 读取拓扑节点及 labels/properties，自动预填分析上下文；

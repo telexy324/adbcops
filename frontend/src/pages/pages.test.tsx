@@ -820,13 +820,13 @@ describe("AnalysisPage", () => {
       },
       rules: [
         {
-          id: "k8s.pod.crash_loop_backoff",
+          id: "custom.container.terminated",
           severity: "critical",
-          category: "pod",
-          title: "Pod container is in CrashLoopBackOff",
-          description: "container app is repeatedly restarting",
-          evidenceKeys: ["pod.container.app.reason"],
-          suggestion: "检查 previous logs 和启动参数。",
+          category: "memory",
+          title: "critical container was oom-killed",
+          description: "container app exceeded its memory limit",
+          evidenceKeys: ["pod.container.app.lastReason"],
+          suggestion: "检查内存使用趋势、limit 设置和泄漏风险。",
         },
       ],
     });
@@ -839,15 +839,27 @@ describe("AnalysisPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Containers Ready")).toBeInTheDocument();
     expect(
-      screen.getByText("container app is repeatedly restarting"),
+      screen.getByText("container app exceeded its memory limit"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("建议：检查 previous logs 和启动参数。"),
+      screen.getByText("建议：检查内存使用趋势、limit 设置和泄漏风险。"),
     ).toBeInTheDocument();
-    expect(screen.getByText("已生成 CPU PromQL")).toBeInTheDocument();
+    expect(screen.getByText("推荐指标查询 (6)")).toBeInTheDocument();
+    expect(screen.getByText("Pod 内存使用率")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /container_cpu_usage_seconds_total\{namespace="prod",pod="payment-api-0"\}/,
+      screen.getByDisplayValue(
+        /100 \* sum\(container_memory_working_set_bytes/,
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "应用到指标查询：Pod 内存上限",
+      }),
+    );
+    expect(
+      screen.getByDisplayValue(
+        /sum\(kube_pod_container_resource_limits\{namespace="prod",pod="payment-api-0"/,
       ),
     ).toBeInTheDocument();
   });

@@ -24,5 +24,7 @@ frontend/coverage/
 .vscode/
 
 outputs/
+artifacts/
+.tmp/
 Knowledge-Center-2.0-新增设计-v1.3.md
 ai-native-aiops-platform-linux-server-delta-v1.4.md
