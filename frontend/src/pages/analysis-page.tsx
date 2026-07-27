@@ -24,6 +24,7 @@ import {
   sendAlertmanagerWebhook,
   toAPIErrorMessage,
   type AlertmanagerResponse,
+  type AnalysisTask,
   type CitationItem,
   type EvidenceItem,
   type GeneralAnalysisResponse,
@@ -85,18 +86,115 @@ type LinkedAnalysisContext = {
   summary?: string;
 };
 
+const demoAnalysisTasks: AnalysisTask[] = [
+  {
+    id: 1807,
+    userId: 12,
+    taskType: "general",
+    question: "checkout-service 5xx 错误率为何突增？",
+    status: "completed",
+    summary: "order-mysql 连接池饱和",
+    createdAt: "2026-07-24T10:32:00+08:00",
+    updatedAt: "2026-07-24T10:36:00+08:00",
+  },
+  {
+    id: 1806,
+    userId: 8,
+    taskType: "k8s",
+    question: "payment-api Pod 为什么频繁重启？",
+    status: "completed",
+    summary: "内存限制过低触发 OOMKilled",
+    createdAt: "2026-07-24T09:48:00+08:00",
+    updatedAt: "2026-07-24T09:51:00+08:00",
+  },
+];
+
 export function AnalysisPage() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const topologyNodeKey = searchParams.get("nodeKey")?.trim() ?? "";
+  const demoMode = searchParams.get("demo") === "1";
   const initialTimeRange = useMemo(createInitialTimeRange, []);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
-  const [citations, setCitations] = useState<CitationItem[]>([]);
-  const [rules, setRules] = useState<K8sRuleFinding[]>([]);
+  const [evidence, setEvidence] = useState<EvidenceItem[]>(
+    demoMode
+      ? [
+          {
+            type: "metric",
+            source: "Prometheus",
+            summary: "checkout-service 5xx 错误率升至 8.7%",
+            reference: "http_requests_total · 10:32—10:47",
+          },
+          {
+            type: "log",
+            source: "Loki",
+            summary: "数据库连接超时日志 15 分钟内出现 326 次",
+            reference: "prod/checkout-service",
+          },
+          {
+            type: "k8s",
+            source: "Kubernetes",
+            summary: "3 个 Pod 的连接池使用率均超过 95%",
+            reference: "prod/checkout",
+          },
+        ]
+      : [],
+  );
+  const [citations, setCitations] = useState<CitationItem[]>(
+    demoMode
+      ? [
+          {
+            documentId: 21,
+            chunkId: 87,
+            sourceTitle: "数据库连接池调优与故障处置规范 v2.1",
+            sourceSection: "4.2 连接池耗尽",
+            snippet: "当使用率持续超过 90% 时，应优先检查慢查询与未释放连接。",
+          },
+        ]
+      : [],
+  );
+  const [rules, setRules] = useState<K8sRuleFinding[]>(
+    demoMode
+      ? [
+          {
+            id: "POOL-SATURATION",
+            severity: "high",
+            category: "database",
+            title: "连接池容量接近上限",
+            description: "连接池活跃连接持续高于阈值。",
+            evidenceKeys: ["metric.pool_usage", "log.connection_timeout"],
+            suggestion: "扩容连接池并排查慢查询。",
+          },
+        ]
+      : [],
+  );
   const [generalResult, setGeneralResult] =
-    useState<GeneralAnalysisResponse | null>(null);
+    useState<GeneralAnalysisResponse | null>(
+      demoMode
+        ? {
+            taskId: 20260724018,
+            status: "completed",
+            summary:
+              "checkout-service 的异常主要由 order-mysql 连接池饱和引起，慢查询放大了请求排队。",
+            facts: [
+              "5xx 错误率峰值 8.7%",
+              "连接池使用率 98%",
+              "慢查询 31 次/分钟",
+            ],
+            rootCauseCandidates: [
+              "order-mysql 慢查询导致连接长时间占用",
+              "流量上涨后连接池容量不足",
+            ],
+            missingEvidence: ["变更记录显示 10:20 无数据库发布"],
+            confidence: {
+              level: "high",
+              score: 0.92,
+              reasons: ["日志、指标和知识规则相互印证"],
+            },
+          }
+        : null,
+    );
   const [podResult, setPodResult] = useState<PodDiagnosisResponse | null>(null);
   const [serviceResult, setServiceResult] =
     useState<ServiceDiagnosisResponse | null>(null);
@@ -106,7 +204,11 @@ export function AnalysisPage() {
     null,
   );
   const [linkedContext, setLinkedContext] = useState<LinkedAnalysisContext>({
-    source: "manual",
+    source: demoMode ? "metrics" : "manual",
+    environment: demoMode ? "prod" : undefined,
+    systemName: demoMode ? "checkout" : undefined,
+    componentName: demoMode ? "checkout-service" : undefined,
+    summary: demoMode ? "高错误率告警已关联指标与日志证据" : undefined,
   });
   const [logForm, setLogForm] = useState({
     question: "支付接口 9 点后超时增多，可能是什么原因？",
@@ -143,6 +245,7 @@ export function AnalysisPage() {
   const tasksQuery = useQuery({
     queryKey: ["analysis", "tasks"],
     queryFn: listAnalysisTasks,
+    enabled: !demoMode,
   });
 
   const topologyQuery = useQuery({
@@ -193,10 +296,12 @@ export function AnalysisPage() {
     }
   }, [topologyNodeKey, topologyQuery.error, topologyQuery.isError]);
 
-  const sortedTasks = useMemo(
-    () => (tasksQuery.data ?? []).slice(0, 6),
-    [tasksQuery.data],
-  );
+  const sortedTasks = useMemo(() => {
+    if (demoMode) {
+      return demoAnalysisTasks;
+    }
+    return (tasksQuery.data ?? []).slice(0, 6);
+  }, [demoMode, tasksQuery.data]);
   const podMetricSuggestions = useMemo(
     () => (podResult ? buildPodMetricSuggestions(podResult) : []),
     [podResult],

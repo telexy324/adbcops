@@ -17,7 +17,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-const summaryCards = [
+const emptySummaryCards = [
   {
     label: "活跃告警",
     value: "--",
@@ -48,7 +48,7 @@ const summaryCards = [
   },
 ];
 
-const readiness = [
+const emptyReadiness = [
   { label: "HTTP 服务", detail: "基础健康检查可用", ready: true },
   { label: "用户与认证", detail: "计划在 Phase 1 接入", ready: false },
   { label: "知识与检索", detail: "计划在 Phase 1 接入", ready: false },
@@ -56,6 +56,65 @@ const readiness = [
 ];
 
 export function DashboardPage() {
+  const demoMode =
+    new URLSearchParams(window.location.search).get("demo") === "1";
+  const summaryCards = demoMode
+    ? [
+        {
+          label: "活跃告警",
+          value: "18",
+          note: "较昨日下降 12%",
+          icon: BellRing,
+          tone: "text-rose-600 bg-rose-50",
+        },
+        {
+          label: "开放故障",
+          value: "3",
+          note: "1 个高优先级事件",
+          icon: Activity,
+          tone: "text-amber-600 bg-amber-50",
+        },
+        {
+          label: "知识文档",
+          value: "286",
+          note: "本周新增 14 篇",
+          icon: BookOpenText,
+          tone: "text-sky-600 bg-sky-50",
+        },
+        {
+          label: "数据源健康",
+          value: "12 / 13",
+          note: "ClickHouse 延迟偏高",
+          icon: Database,
+          tone: "text-emerald-600 bg-emerald-50",
+        },
+      ]
+    : emptySummaryCards;
+  const readiness = demoMode
+    ? [
+        { label: "HTTP 服务", detail: "P95 延迟 182 ms", ready: true },
+        { label: "用户与认证", detail: "SSO 与 RBAC 正常", ready: true },
+        { label: "知识与检索", detail: "召回率 93.8%", ready: true },
+        { label: "分析数据源", detail: "12 个连接正常，1 个降级", ready: false },
+      ]
+    : emptyReadiness;
+  const recentTasks = [
+    {
+      title: "checkout-service 5xx 错误率突增",
+      meta: "日志 + 指标 · 已完成 · 置信度 92%",
+      tone: "bg-emerald-500",
+    },
+    {
+      title: "order-mysql 连接池接近上限",
+      meta: "指标分析 · 处理中 · 已发现 4 条证据",
+      tone: "bg-amber-500",
+    },
+    {
+      title: "payment-api Pod 频繁重启",
+      meta: "Kubernetes · 已完成 · 根因候选 2 个",
+      tone: "bg-emerald-500",
+    },
+  ];
   return (
     <div className="mx-auto max-w-[1500px] space-y-7">
       <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -65,7 +124,9 @@ export function DashboardPage() {
             平台总览
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-            汇总告警、故障、知识和数据源状态。当前处于工程初始化阶段，未接入生产数据。
+            {demoMode
+              ? "统一汇总告警、故障、知识和数据源状态，快速识别需要优先处理的运行风险。"
+              : "汇总告警、故障、知识和数据源状态。当前处于工程初始化阶段，未接入生产数据。"}
           </p>
         </div>
         <div className="inline-flex w-fit items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 shadow-sm">
@@ -115,12 +176,31 @@ export function DashboardPage() {
               </CardDescription>
             </div>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">
-              0 tasks
+              {demoMode ? "3 tasks" : "0 tasks"}
             </span>
           </CardHeader>
           <CardContent>
-            <div className="grid min-h-72 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center">
-              <div>
+            {demoMode ? (
+              <div className="min-h-72 space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                {recentTasks.map((task) => (
+                  <div
+                    key={task.title}
+                    className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4"
+                  >
+                    <span className={`size-2.5 rounded-full ${task.tone}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-800">
+                        {task.title}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-400">{task.meta}</p>
+                    </div>
+                    <ArrowUpRight className="size-4 text-slate-300" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid min-h-72 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center">
+                <div>
                 <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-white text-slate-400 shadow-sm ring-1 ring-slate-200">
                   <FileSearch className="size-5" aria-hidden="true" />
                 </div>
@@ -131,8 +211,9 @@ export function DashboardPage() {
                   数据源与分析能力将在后续 Task
                   中按设计文档顺序接入，这里不会展示模拟生产数据。
                 </p>
+                </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
 

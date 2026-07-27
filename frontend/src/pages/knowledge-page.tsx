@@ -70,10 +70,70 @@ const statusTone: Record<string, string> = {
   deprecated: "bg-violet-100 text-violet-700",
 };
 
+const demoKnowledgeDocuments: KnowledgeDocument[] = [
+  {
+    id: 21,
+    title: "数据库连接池调优与故障处置规范",
+    fileName: "db-pool-runbook-v2.1.md",
+    fileType: "md",
+    systemName: "订单平台",
+    componentName: "order-mysql",
+    environment: "prod",
+    docType: "runbook",
+    version: "v2.1",
+    status: "published",
+    tags: ["数据库", "连接池", "应急处置"],
+    summary: "覆盖连接池饱和、慢查询与连接泄漏的排查和处置步骤。",
+    qualityScore: 96,
+    createdAt: "2026-07-10T09:00:00+08:00",
+    updatedAt: "2026-07-23T17:30:00+08:00",
+    currentPublishedVersionId: 42,
+  },
+  {
+    id: 22,
+    title: "Kubernetes Pod 重启诊断手册",
+    fileName: "k8s-pod-restart-guide-v1.8.pdf",
+    fileType: "pdf",
+    systemName: "云原生平台",
+    componentName: "Kubernetes",
+    environment: "all",
+    docType: "guide",
+    version: "v1.8",
+    status: "published",
+    tags: ["Kubernetes", "OOM", "探针"],
+    summary: "针对 OOMKilled、探针失败和节点驱逐给出证据化诊断流程。",
+    qualityScore: 93,
+    createdAt: "2026-06-18T11:00:00+08:00",
+    updatedAt: "2026-07-22T14:05:00+08:00",
+    currentPublishedVersionId: 44,
+  },
+  {
+    id: 23,
+    title: "生产变更回滚检查清单",
+    fileName: "production-rollback-checklist.xlsx",
+    fileType: "xlsx",
+    systemName: "全局",
+    componentName: "发布平台",
+    environment: "prod",
+    docType: "checklist",
+    version: "v3.0",
+    status: "reviewing",
+    tags: ["变更", "回滚", "检查清单"],
+    summary: "覆盖发布前确认、异常判定、回滚执行与验证。",
+    qualityScore: 88,
+    createdAt: "2026-07-20T16:10:00+08:00",
+    updatedAt: "2026-07-24T09:20:00+08:00",
+  },
+];
+
 export function KnowledgePage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [selectedID, setSelectedID] = useState<number | null>(null);
+  const demoMode =
+    new URLSearchParams(window.location.search).get("demo") === "1";
+  const [selectedID, setSelectedID] = useState<number | null>(
+    demoMode ? demoKnowledgeDocuments[0].id : null,
+  );
   const [uploadForm, setUploadForm] = useState({
     title: "",
     systemName: "",
@@ -104,14 +164,17 @@ export function KnowledgePage() {
   const [retrievalRuns, setRetrievalRuns] = useState<RetrievalEvaluationRun[]>(
     [],
   );
-  const isAdmin = getCurrentUser()?.role === "admin";
+  const isAdmin = demoMode ? false : getCurrentUser()?.role === "admin";
 
   const documentsQuery = useQuery({
     queryKey: ["knowledge", "documents"],
     queryFn: listDocuments,
+    enabled: !demoMode,
   });
 
-  const documents = documentsQuery.data ?? [];
+  const documents = demoMode
+    ? demoKnowledgeDocuments
+    : documentsQuery.data ?? [];
   const standardsQuery = useQuery({
     queryKey: ["knowledge", "quality-standards"],
     queryFn: listQualityStandards,
@@ -1015,6 +1078,26 @@ export function KnowledgePage() {
                     会话 #{lastAnswer.conversation.id} · QA #
                     {lastAnswer.qaRecordId} · 召回 {lastAnswer.recallCount}
                   </p>
+                </div>
+              ) : demoMode ? (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                    <p className="text-sm font-semibold text-emerald-900">
+                      建议先确认连接池活跃连接、等待队列和慢查询是否同步上升。
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-emerald-700">
+                      当前案例中连接池使用率已达 98%，应优先终止异常慢查询，
+                      再按流量基线扩容连接池，并检查连接释放逻辑。
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-semibold text-slate-700">
+                      引用：数据库连接池调优与故障处置规范 v2.1
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      4.2 连接池耗尽 · 置信度 94%
+                    </p>
+                  </div>
                 </div>
               ) : (
                 <p className="mt-3 text-sm leading-6 text-slate-400">

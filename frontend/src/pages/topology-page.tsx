@@ -143,8 +143,59 @@ const topologyNodeTypes = {
   topologyNode: TopologyFlowNodeCard,
 };
 
+const demoNow = "2026-07-24T10:48:00+08:00";
+const demoTopologyGraph: TopologyGraph = {
+  nodes: [
+    ["service:api-gateway", "service", "api-gateway", "API Gateway"],
+    ["service:checkout-service", "service", "checkout-service", "Checkout Service"],
+    ["service:payment-api", "service", "payment-api", "Payment API"],
+    ["service:inventory-service", "service", "inventory-service", "Inventory Service"],
+    ["database:order-mysql", "database", "order-mysql", "Order MySQL"],
+    ["cache:redis-cart", "cache", "redis-cart", "Redis Cart"],
+    ["queue:kafka-orders", "queue", "kafka-orders", "Kafka Orders"],
+    ["external:bank-gateway", "external", "bank-gateway", "Bank Gateway"],
+  ].map(([nodeKey, kind, name, displayName], index) => ({
+    id: index + 1,
+    nodeKey,
+    kind,
+    name,
+    displayName,
+    environment: "prod",
+    cluster: "cn-sh-prod-01",
+    namespace: kind === "database" || kind === "external" ? undefined : "commerce",
+    labels:
+      nodeKey === "service:checkout-service"
+        ? { health: "degraded", errorRate: "8.7%" }
+        : { health: "healthy" },
+    sourceType: "discovery",
+    createdAt: demoNow,
+    updatedAt: demoNow,
+  })),
+  edges: [
+    ["api-checkout", "service:api-gateway", "service:checkout-service", "calls"],
+    ["checkout-payment", "service:checkout-service", "service:payment-api", "calls"],
+    ["checkout-inventory", "service:checkout-service", "service:inventory-service", "calls"],
+    ["checkout-db", "service:checkout-service", "database:order-mysql", "reads_from"],
+    ["checkout-cache", "service:checkout-service", "cache:redis-cart", "reads_from"],
+    ["checkout-kafka", "service:checkout-service", "queue:kafka-orders", "publishes_to"],
+    ["payment-bank", "service:payment-api", "external:bank-gateway", "calls"],
+  ].map(([edgeKey, fromNodeKey, toNodeKey, edgeType], index) => ({
+    id: index + 1,
+    edgeKey,
+    fromNodeKey,
+    toNodeKey,
+    edgeType,
+    confidence: 0.98,
+    sourceType: "discovery",
+    createdAt: demoNow,
+    updatedAt: demoNow,
+  })),
+};
+
 export function TopologyPage() {
   const queryClient = useQueryClient();
+  const demoMode =
+    new URLSearchParams(window.location.search).get("demo") === "1";
   const [query, setQuery] = useState<TopologyQueryState>(defaultQuery);
   const [graphMode, setGraphMode] = useState<"graph" | "expand">("graph");
   const [expanded, setExpanded] = useState<ExpandTopologyResult | null>(null);
@@ -164,11 +215,13 @@ export function TopologyPage() {
   const graphQuery = useQuery({
     queryKey: ["topology", "graph", query.maxNodes],
     queryFn: () => getTopologyGraph(query.maxNodes),
+    enabled: !demoMode,
   });
 
   const viewsQuery = useQuery({
     queryKey: ["topology", "views"],
     queryFn: () => listTopologySavedViews(30),
+    enabled: !demoMode,
   });
 
   const expandMutation = useMutation({
@@ -216,8 +269,10 @@ export function TopologyPage() {
     if (blast) {
       return { nodes: blast.nodes, edges: blast.edges };
     }
-    return graphQuery.data ?? { nodes: [], edges: [] };
-  }, [blast, expanded, graphQuery.data]);
+    return demoMode
+      ? demoTopologyGraph
+      : graphQuery.data ?? { nodes: [], edges: [] };
+  }, [blast, demoMode, expanded, graphQuery.data]);
 
   const selectedNode = useMemo(
     () => activeGraph.nodes.find((node) => node.nodeKey === selectedNodeKey),
@@ -516,7 +571,10 @@ export function TopologyPage() {
           <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-center shadow-sm">
             <Metric label="节点" value={activeGraph.nodes.length} />
             <Metric label="关系" value={activeGraph.edges.length} />
-            <Metric label="视图" value={viewsQuery.data?.length ?? 0} />
+            <Metric
+              label="视图"
+              value={demoMode ? 2 : (viewsQuery.data?.length ?? 0)}
+            />
           </div>
         </div>
       </section>
@@ -540,8 +598,13 @@ export function TopologyPage() {
         </div>
       )}
 
-      <div className="grid gap-6 2xl:grid-cols-[360px_minmax(0,1fr)_380px]">
-        <div className="space-y-6">
+      <div
+        className={cn(
+          "grid gap-6",
+          !demoMode && "2xl:grid-cols-[360px_minmax(0,1fr)_380px]",
+        )}
+      >
+        {!demoMode && <div className="space-y-6">
           <FilterCard
             query={query}
             loading={loading}
@@ -621,7 +684,7 @@ export function TopologyPage() {
               }
             }}
           />
-        </div>
+        </div>}
 
         <TopologyCanvasCard
           graph={activeGraph}
@@ -635,7 +698,7 @@ export function TopologyPage() {
           onConnect={createEdgeFromConnection}
         />
 
-        <div className="space-y-6">
+        {!demoMode && <div className="space-y-6">
           <NodeDrawer
             node={selectedNode}
             onClose={() => setSelectedNodeKey(null)}
@@ -652,7 +715,7 @@ export function TopologyPage() {
             selectedNodeKey={selectedNodeKey}
             onSelectNode={setSelectedNodeKey}
           />
-        </div>
+        </div>}
       </div>
     </div>
   );
