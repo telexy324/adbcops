@@ -8,6 +8,7 @@ import (
 
 	logssvc "aiops-platform/backend/internal/logs"
 	"aiops-platform/backend/internal/model"
+	ragsvc "aiops-platform/backend/internal/rag"
 )
 
 type KnowledgeSearcher interface {
@@ -18,6 +19,10 @@ type LogQuerier interface {
 	Query(ctx context.Context, actor *model.AppUser, input logssvc.QueryInput) (*logssvc.QueryResult, error)
 }
 
+type HybridKnowledgeSearcher interface {
+	SearchForRCA(ctx context.Context, actor *model.AppUser, input ragsvc.RCAKnowledgeSearchInput) (*ragsvc.RCAKnowledgeSearchResult, error)
+}
+
 func LogAndKnowledgeSkills(knowledge KnowledgeSearcher, logs LogQuerier) []Skill {
 	return []Skill{
 		SearchKnowledgeSkill{repository: knowledge},
@@ -25,6 +30,65 @@ func LogAndKnowledgeSkills(knowledge KnowledgeSearcher, logs LogQuerier) []Skill
 		AggregateLogTemplatesSkill{},
 		ExtractLogEntitiesSkill{},
 	}
+}
+
+func HybridKnowledgeSkills(searcher HybridKnowledgeSearcher) []Skill {
+	return []Skill{HybridSearchKnowledgeSkill{searcher: searcher}}
+}
+
+type HybridSearchKnowledgeSkill struct {
+	searcher HybridKnowledgeSearcher
+}
+
+func (s HybridSearchKnowledgeSkill) Definition() SkillDefinition {
+	return SkillDefinition{
+		Name:        "hybrid_search_knowledge",
+		Version:     "v1",
+		Description: "Search current published knowledge for RCA with query understanding, hybrid retrieval, RRF, rerank, context building, citations and degradation trace.",
+		InputSchema: json.RawMessage(`{
+			"type":"object",
+			"required":["originalQuestion"],
+			"properties":{
+				"originalQuestion":{"type":"string","minLength":1,"maxLength":8192},
+				"confirmedEntities":{"type":"array","maxItems":12,"items":{"type":"string"}},
+				"logTemplates":{"type":"array","maxItems":12,"items":{"type":"string"}},
+				"metricAnomalySummaries":{"type":"array","maxItems":12,"items":{"type":"string"}},
+				"limit":{"type":"integer","minimum":1,"maximum":10}
+			}
+		}`),
+		OutputSchema: json.RawMessage(`{
+			"type":"object",
+			"required":["retrievalInput","rewrittenQuery","citations","context","recallCount","retrievalTrace","degraded","degradedChannels"],
+			"properties":{
+				"retrievalInput":{"type":"object"},
+				"rewrittenQuery":{"type":"string"},
+				"citations":{"type":"array"},
+				"context":{"type":"array"},
+				"recallCount":{"type":"integer"},
+				"retrievalTrace":{"type":"object"},
+				"degraded":{"type":"boolean"},
+				"degradedChannels":{"type":"array","items":{"type":"string"}}
+			}
+		}`),
+		RiskLevel:     model.SkillRiskSafeRead,
+		ReadOnly:      true,
+		TimeoutSecond: 30,
+	}
+}
+
+func (s HybridSearchKnowledgeSkill) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+	if s.searcher == nil {
+		return nil, ErrInvalidInput
+	}
+	var request ragsvc.RCAKnowledgeSearchInput
+	if err := json.Unmarshal(input, &request); err != nil {
+		return nil, ErrInvalidInput
+	}
+	result, err := s.searcher.SearchForRCA(ctx, ActorFromContext(ctx), request)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 
 type SearchKnowledgeSkill struct {

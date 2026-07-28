@@ -3,11 +3,14 @@ package skillframework
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	logssvc "aiops-platform/backend/internal/logs"
 	"aiops-platform/backend/internal/model"
+	ragsvc "aiops-platform/backend/internal/rag"
+	"aiops-platform/backend/internal/repository"
 )
 
 func TestSearchKnowledgeSkillOutputMatchesSchema(t *testing.T) {
@@ -22,6 +25,49 @@ func TestSearchKnowledgeSkillOutputMatchesSchema(t *testing.T) {
 	}
 	if err := ValidateJSONSchema(skill.Definition().OutputSchema, output); err != nil {
 		t.Fatalf("output schema mismatch: %v, output=%s", err, string(output))
+	}
+}
+
+func TestHybridSearchKnowledgeSkillIsReadOnlyActorScopedAndAudited(t *testing.T) {
+	searcher := &fakeHybridKnowledgeSearcher{}
+	audit := newMemoryAudit()
+	registry, err := NewRegistry(nil, audit, HybridKnowledgeSkills(searcher)...)
+	if err != nil {
+		t.Fatalf("register hybrid skill: %v", err)
+	}
+	definition, err := registry.Get("hybrid_search_knowledge")
+	if err != nil || !definition.ReadOnly || definition.RiskLevel != model.SkillRiskSafeRead {
+		t.Fatalf("definition=%+v err=%v", definition, err)
+	}
+	actor := &model.AppUser{ID: 17, Role: model.RoleUser}
+	executed, err := registry.Execute(context.Background(), ExecuteInput{
+		Actor: actor, Name: "hybrid_search_knowledge",
+		Payload: json.RawMessage(`{
+			"originalQuestion":"订单服务变慢，请查询可能原因",
+			"confirmedEntities":["order-service"],
+			"logTemplates":["trace_id=abcdef0123456789 db call timeout"],
+			"metricAnomalySummaries":["db latency p99 high"],
+			"limit":5
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("execute hybrid skill: %v", err)
+	}
+	if searcher.actor == nil || searcher.actor.ID != actor.ID || searcher.input.OriginalQuestion == "" {
+		t.Fatalf("actor/input not forwarded: actor=%+v input=%+v", searcher.actor, searcher.input)
+	}
+	if err := ValidateJSONSchema(definition.OutputSchema, executed.Output); err != nil {
+		t.Fatalf("output schema: %v output=%s", err, executed.Output)
+	}
+	runs, err := audit.ListSkillRuns(context.Background(), 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("audit runs=%+v err=%v", runs, err)
+	}
+	output := string(runs[0].OutputSummary)
+	for _, expected := range []string{`"recallCount":1`, `"permissionScope":"actor_published"`, `"selectedCount":1`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("audit output missing %s: %s", expected, output)
+		}
 	}
 }
 
@@ -103,6 +149,31 @@ func TestExtractLogEntitiesSkillOutputMatchesSchemaAndRedacts(t *testing.T) {
 
 type fakeKnowledgeSearcher struct {
 	chunks []model.KBChunk
+}
+
+type fakeHybridKnowledgeSearcher struct {
+	actor *model.AppUser
+	input ragsvc.RCAKnowledgeSearchInput
+}
+
+func (f *fakeHybridKnowledgeSearcher) SearchForRCA(_ context.Context, actor *model.AppUser, input ragsvc.RCAKnowledgeSearchInput) (*ragsvc.RCAKnowledgeSearchResult, error) {
+	f.actor, f.input = actor, input
+	return &ragsvc.RCAKnowledgeSearchResult{
+		Input: ragsvc.RCARetrievalInput{
+			OriginalQuestion: input.OriginalQuestion, ComposedQuery: input.OriginalQuestion,
+		},
+		RewrittenQuery: "订单服务 数据库调用慢",
+		Citations: []ragsvc.Citation{{
+			CitationID: "KC-9-11", DocumentID: 3, DocumentVersionID: 9, ChunkID: 11, ChunkIDs: []int64{11},
+		}},
+		Context:     []ragsvc.ContextBlock{{CitationID: "KC-9-11", DocumentID: 3, DocumentVersionID: 9, ChunkIDs: []int64{11}}},
+		RecallCount: 1,
+		RetrievalTrace: ragsvc.RetrievalTrace{
+			Filters: repository.KnowledgeRetrievalFilter{PermissionScope: "actor_published", ActorUserID: actor.ID, ActorRole: actor.Role},
+			Context: ragsvc.ContextBuildTrace{Selected: 1},
+		},
+		DegradedChannels: []string{},
+	}, nil
 }
 
 func (f fakeKnowledgeSearcher) SearchChunks(context.Context, string, int) ([]model.KBChunk, error) {

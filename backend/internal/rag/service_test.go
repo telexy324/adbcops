@@ -291,7 +291,7 @@ func TestAskAppliesMetadataFilterBeforeChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ask() error = %v", err)
 	}
-	if store.lastFilter.PermissionScope != "authenticated_published" || store.lastFilter.Environment != "prod" {
+	if store.lastFilter.PermissionScope != "actor_published" || store.lastFilter.ActorUserID != 7 || store.lastFilter.Environment != "prod" {
 		t.Fatalf("filter = %+v", store.lastFilter)
 	}
 	if len(store.lastFilter.DocTypes) != 1 || store.lastFilter.DocTypes[0] != "incident_report" {
@@ -314,6 +314,93 @@ func TestAskRerankFailureFallsBackWithoutBlocking(t *testing.T) {
 	}
 	if !result.Retrieval.Rerank.Degraded || result.Retrieval.Rerank.Error == "" {
 		t.Fatalf("rerank trace = %+v", result.Retrieval.Rerank)
+	}
+}
+
+func TestBuildRCARetrievalInputRemovesDynamicLogFields(t *testing.T) {
+	input, err := buildRCARetrievalInput(RCAKnowledgeSearchInput{
+		OriginalQuestion:  "订单服务变慢，请查询可能原因",
+		ConfirmedEntities: []string{"order-service", "prod"},
+		LogTemplates: []string{
+			`2026-07-28T10:22:31.123Z trace_id=4bf92f3577b34da6a3ce929d0e0e4736 requestId=987654321 db 10.24.6.19:4000 call timeout`,
+		},
+		MetricAnomalySummaries: []string{"数据库调用 P99 从 80ms 升至 2.4s"},
+	})
+	if err != nil {
+		t.Fatalf("build RCA retrieval input: %v", err)
+	}
+	for _, dynamic := range []string{"2026-07-28", "4bf92f3577b34da6a3ce929d0e0e4736", "987654321", "10.24.6.19"} {
+		if strings.Contains(input.ComposedQuery, dynamic) {
+			t.Fatalf("dynamic value %q leaked into query %q", dynamic, input.ComposedQuery)
+		}
+	}
+	for _, term := range []string{"订单服务变慢", "order-service", "db", "call timeout", "P99"} {
+		if !strings.Contains(input.ComposedQuery, term) {
+			t.Fatalf("diagnostic term %q missing from %q", term, input.ComposedQuery)
+		}
+	}
+}
+
+func TestSearchForRCASemanticRecallUsesPublishedActorScopedPipeline(t *testing.T) {
+	base := newFakeRepository()
+	base.llmConfigs[model.LLMPurposeEmbedding] = &model.LLMConfig{ID: 2, Purpose: model.LLMPurposeEmbedding, Model: "embed-model", Enabled: true, IsDefault: true}
+	publishedID := base.addDocument(model.DocumentStatusPublished)
+	draftID := base.addDocument(model.DocumentStatusDraft)
+	base.addChunk(publishedID, "数据库连接池耗尽会导致订单请求排队，应检查活跃连接与慢 SQL。")
+	base.chunks[publishedID][0].DocumentVersionID = 41
+	base.addChunk(draftID, "未发布的内部处置草稿。")
+	store := &denseOnlyRepository{fakeRepository: base}
+	actor := &model.AppUser{ID: 7, Role: model.RoleUser}
+
+	result, err := NewService(store, nil, &semanticFakeClient{}).SearchForRCA(context.Background(), actor, RCAKnowledgeSearchInput{
+		OriginalQuestion:       "订单接口一直等待后端资源，为什么响应变慢？",
+		ConfirmedEntities:      []string{"order-service"},
+		MetricAnomalySummaries: []string{"数据库调用耗时持续升高"},
+		Limit:                  5,
+	})
+	if err != nil {
+		t.Fatalf("SearchForRCA() error = %v", err)
+	}
+	if result.RecallCount != 1 || len(result.Citations) != 1 || result.Citations[0].DocumentID != publishedID ||
+		result.Citations[0].DocumentVersionID != 41 || result.Citations[0].ChunkID == 0 {
+		t.Fatalf("semantic result = %+v", result)
+	}
+	if base.lastFilter.PermissionScope != "actor_published" || base.lastFilter.ActorUserID != actor.ID || base.lastFilter.ActorRole != actor.Role {
+		t.Fatalf("actor filter = %+v", base.lastFilter)
+	}
+	if len(base.qaRecords) != 0 || len(base.conversations) != 0 || len(base.messages) != 0 {
+		t.Fatalf("RCA retrieval wrote QA state: qa=%d conversations=%d messages=%d", len(base.qaRecords), len(base.conversations), len(base.messages))
+	}
+	foundDense := false
+	for _, candidate := range result.RetrievalTrace.Candidates {
+		for _, rank := range candidate.ChannelRanks {
+			foundDense = foundDense || rank.Channel == "dense_vector"
+		}
+	}
+	if !foundDense {
+		t.Fatalf("semantic channel missing from trace: %+v", result.RetrievalTrace)
+	}
+}
+
+func TestSearchForRCARejectsMissingActorAndMarksModelDegradation(t *testing.T) {
+	store := newFakeRepository()
+	documentID := store.addDocument(model.DocumentStatusPublished)
+	store.addChunk(documentID, "订单服务变慢时检查数据库慢查询。")
+	service := NewService(store, nil, nil)
+	if _, err := service.SearchForRCA(context.Background(), nil, RCAKnowledgeSearchInput{OriginalQuestion: "订单服务慢"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("missing actor error = %v, want ErrForbidden", err)
+	}
+	if _, err := service.SearchForRCA(context.Background(), &model.AppUser{ID: 9, Role: "guest"}, RCAKnowledgeSearchInput{OriginalQuestion: "订单服务慢"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("unauthorized role error = %v, want ErrForbidden", err)
+	}
+	result, err := service.SearchForRCA(context.Background(), &model.AppUser{ID: 8, Role: model.RoleUser}, RCAKnowledgeSearchInput{OriginalQuestion: "订单服务慢"})
+	if err != nil {
+		t.Fatalf("degraded search: %v", err)
+	}
+	for _, channel := range []string{"dense_vector", "rerank"} {
+		if !containsTerm(result.DegradedChannels, channel) {
+			t.Fatalf("degraded channels %v missing %q", result.DegradedChannels, channel)
+		}
 	}
 }
 
@@ -460,8 +547,9 @@ func (f *fakeRepository) SearchChunksPossibleQuestions(_ context.Context, _ stri
 	return nil, nil
 }
 
-func (f *fakeRepository) SearchChunksDense(_ context.Context, _ []float64, _ int64, _ string, _ repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
+func (f *fakeRepository) SearchChunksDense(_ context.Context, _ []float64, _ int64, _ string, filter repository.KnowledgeRetrievalFilter, limit int) ([]repository.RankedKnowledgeChunk, error) {
 	f.denseCalls++
+	f.lastFilter = filter
 	if f.failDense {
 		return nil, errors.New("dense index unavailable")
 	}
@@ -714,6 +802,26 @@ type semanticFakeClient struct {
 
 type restrictiveFilterRepository struct {
 	*fakeRepository
+}
+
+type denseOnlyRepository struct {
+	*fakeRepository
+}
+
+func (r *denseOnlyRepository) SearchChunksTrigram(context.Context, string, repository.KnowledgeRetrievalFilter, int) ([]repository.RankedKnowledgeChunk, error) {
+	return nil, nil
+}
+
+func (r *denseOnlyRepository) SearchChunksExact(context.Context, []string, repository.KnowledgeRetrievalFilter, int) ([]repository.RankedKnowledgeChunk, error) {
+	return nil, nil
+}
+
+func (r *denseOnlyRepository) SearchChunksTitleSection(context.Context, string, repository.KnowledgeRetrievalFilter, int) ([]repository.RankedKnowledgeChunk, error) {
+	return nil, nil
+}
+
+func (r *denseOnlyRepository) SearchChunksPossibleQuestions(context.Context, string, repository.KnowledgeRetrievalFilter, int) ([]repository.RankedKnowledgeChunk, error) {
+	return nil, nil
 }
 
 func (r *restrictiveFilterRepository) reject(filter repository.KnowledgeRetrievalFilter) bool {

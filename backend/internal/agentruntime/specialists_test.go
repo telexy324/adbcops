@@ -29,8 +29,8 @@ func TestBuiltinAgentsIncludeSpecialists(t *testing.T) {
 
 func TestKnowledgeAgentReturnsEvidenceBackedResult(t *testing.T) {
 	runtime := newSpecialistRuntime(t, KnowledgeAgent{}, namedOutputSkill{
-		name:   "search_knowledge",
-		output: json.RawMessage(`{"count":1,"chunks":[{"id":1,"content":"restart policy guide"}]}`),
+		name:   "hybrid_search_knowledge",
+		output: json.RawMessage(`{"recallCount":1,"citations":[{"chunkId":1}],"retrievalTrace":{"filters":{"permissionScope":"actor_published"}}}`),
 	})
 
 	output, err := runtime.Run(context.Background(), RunInput{

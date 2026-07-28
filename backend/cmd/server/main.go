@@ -160,6 +160,7 @@ func run() error {
 	skills = append(skills, skillframework.ComponentDiagnosisSkillsWithServices(nacosService, redisService, tidbService, nginxService)...)
 	skills = append(skills, skillframework.LinuxSkills(linuxSkillCollector)...)
 	skills = append(skills, skillframework.LogAndKnowledgeSkills(analysisRepository, logsService)...)
+	skills = append(skills, skillframework.HybridKnowledgeSkills(ragService)...)
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
 	skills = append(skills, skillframework.ChangeSkills(changeService)...)
 	skills = append(skills, skillframework.IncidentAnalysisSkills(timelineService, correlationService)...)

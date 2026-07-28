@@ -13,6 +13,8 @@ import (
 
 type KnowledgeRetrievalFilter struct {
 	PermissionScope        string    `json:"permissionScope"`
+	ActorUserID            int64     `json:"actorUserId,omitempty"`
+	ActorRole              string    `json:"actorRole,omitempty"`
 	DocumentVersionID      *int64    `json:"documentVersionId,omitempty"`
 	SystemName             string    `json:"systemName,omitempty"`
 	ComponentName          string    `json:"componentName,omitempty"`
@@ -61,6 +63,10 @@ func (r *GORMRAGRepository) retrievalScope(ctx context.Context, filter Knowledge
 	query := r.db.WithContext(ctx).Table("kb_chunk").
 		Joins("JOIN kb_document ON kb_document.id = kb_chunk.document_id").
 		Joins("JOIN kb_document_version ON kb_document_version.id = kb_chunk.document_version_id")
+	if filter.PermissionScope == "actor_published" &&
+		(filter.ActorUserID <= 0 || (filter.ActorRole != model.RoleAdmin && filter.ActorRole != model.RoleUser)) {
+		query = query.Where("1 = 0")
+	}
 	if filter.DocumentVersionID != nil {
 		query = query.Where("kb_chunk.document_version_id = ?", *filter.DocumentVersionID)
 	} else {

@@ -107,11 +107,15 @@ func (s *Service) rerankCandidates(ctx context.Context, query string, chunks []m
 		chunks = chunks[:rerankCandidateLimit]
 	}
 	trace := RerankTrace{InputCount: len(chunks), TopN: len(chunks)}
+	client, ok := s.client.(llmsvc.RerankClient)
 	if len(chunks) == 0 {
+		if !ready || config == nil || !ok {
+			trace.Degraded = true
+			trace.Error = "rerank model unavailable"
+		}
 		return nil, trace
 	}
 	fallback, fallbackScores := metadataFallbackRank(query, chunks, documents)
-	client, ok := s.client.(llmsvc.RerankClient)
 	if !ready || config == nil || !ok {
 		trace.Degraded = true
 		trace.Error = "rerank model unavailable"

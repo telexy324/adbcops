@@ -109,57 +109,14 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	if err != nil {
 		return nil, err
 	}
-	hasPublishedChunks, err := s.repository.HasPublishedChunks(ctx)
+	search, err := s.searchPublishedKnowledge(ctx, actor, question, limit)
 	if err != nil {
-		return nil, fmt.Errorf("check published knowledge: %w", err)
+		return nil, err
 	}
-	var llmConfig, embeddingConfig, rerankConfig *model.LLMConfig
-	var llmCredential, embeddingCredential, rerankCredential modelCredential
-	var llmReady, embeddingReady, rerankReady bool
-	if hasPublishedChunks {
-		llmConfig, llmCredential, llmReady, err = s.loadLLM(ctx)
-		if err != nil {
-			return nil, err
-		}
-		embeddingConfig, embeddingCredential, embeddingReady = s.loadOptionalModel(ctx, model.LLMPurposeEmbedding)
-		rerankConfig, rerankCredential, rerankReady = s.loadOptionalModel(ctx, model.LLMPurposeRerank)
-	}
-	embeddingRevision := s.readyEmbeddingRevision(ctx, embeddingConfig, embeddingReady, nil, "")
-	understood := s.understandQuery(ctx, question, llmConfig, llmCredential, llmReady)
-	rewritten := understood.NormalizedQuery
-	chunks, retrievalTrace := s.hybridRetrieve(ctx, understood, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
-	logRetrievalAttempt(ctx, "query_understanding", retrievalTrace, chunks)
-	if len(chunks) == 0 && llmReady {
-		fallbackUnderstanding := relaxedQueryUnderstanding(question, understood)
-		if !sameQueryUnderstanding(understood, fallbackUnderstanding) {
-			fallbackChunks, fallbackTrace := s.hybridRetrieve(ctx, fallbackUnderstanding, embeddingConfig, embeddingCredential, embeddingReady, retrievalOptions{EmbeddingModelRevision: embeddingRevision})
-			logRetrievalAttempt(ctx, "relaxed_fallback", fallbackTrace, fallbackChunks)
-			fallbackTrace.Channels = append([]ChannelTrace{{
-				Channel:  "local_query_fallback",
-				Count:    len(fallbackChunks),
-				Degraded: true,
-				Error:    "LLM query filters returned no candidates; retried with local terms",
-			}}, fallbackTrace.Channels...)
-			chunks, retrievalTrace = fallbackChunks, fallbackTrace
-			understood, rewritten = fallbackUnderstanding, fallbackUnderstanding.NormalizedQuery
-		}
-	}
-	retrievalTrace.Configuration = retrievalConfiguration(embeddingConfig, embeddingReady, embeddingRevision, rerankConfig, rerankReady, nil)
-	documents, documentErr := s.loadRetrievalDocuments(ctx, chunks)
-	if documentErr != nil {
-		documents = map[int64]model.KBDocument{}
-	}
-	chunks, rerankTrace := s.rerankCandidates(ctx, question, chunks, documents, rerankConfig, rerankCredential, rerankReady)
-	if documentErr != nil {
-		rerankTrace.Degraded = true
-		rerankTrace.Error = documentErr.Error()
-	}
-	contextBlocks, contextTrace := s.buildContext(ctx, chunks, documents, buildContextEvidence(retrievalTrace, rerankTrace), limit, defaultContextBudget)
-	retrievalTrace.Rerank = rerankTrace
-	retrievalTrace.Context = contextTrace
-	logRAGPipelineResult(ctx, retrievalTrace)
-	citations := buildContextCitations(contextBlocks)
-	answer, err := s.answer(ctx, question, rewritten, contextBlocks, citations, llmConfig, llmCredential, llmReady)
+	rewritten := search.Rewritten
+	retrievalTrace := search.Retrieval
+	citations := search.Citations
+	answer, err := s.answer(ctx, question, rewritten, search.ContextBlocks, citations, search.LLMConfig, search.LLMCredential, search.LLMReady)
 	if err != nil {
 		return nil, err
 	}
@@ -183,9 +140,9 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 	}
 	assistantMetadata, _ := json.Marshal(map[string]any{
 		"source":         "rag",
-		"recallCount":    len(contextBlocks),
-		"embeddingModel": modelName(embeddingConfig, embeddingReady),
-		"rerankModel":    modelName(rerankConfig, rerankReady),
+		"recallCount":    len(search.ContextBlocks),
+		"embeddingModel": modelName(search.EmbeddingConfig, search.EmbeddingReady),
+		"rerankModel":    modelName(search.RerankConfig, search.RerankReady),
 		"retrievalTrace": json.RawMessage(retrievalJSON),
 	})
 	assistantMessage := &model.Message{
@@ -199,8 +156,8 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		return nil, fmt.Errorf("create assistant message: %w", err)
 	}
 	var llmConfigID *int64
-	if llmReady && llmConfig != nil {
-		id := llmConfig.ID
+	if search.LLMReady && search.LLMConfig != nil {
+		id := search.LLMConfig.ID
 		llmConfigID = &id
 	}
 	conversationID := conversation.ID
@@ -211,7 +168,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		RewrittenQuery: rewritten,
 		Answer:         answer,
 		Citations:      citationJSON,
-		RecallCount:    len(contextBlocks),
+		RecallCount:    len(search.ContextBlocks),
 		LLMConfigID:    llmConfigID,
 		RetrievalTrace: retrievalJSON,
 	}
@@ -227,7 +184,7 @@ func (s *Service) Ask(ctx context.Context, actor *model.AppUser, input AskInput)
 		Rewritten:    rewritten,
 		Answer:       answer,
 		Citations:    citations,
-		RecallCount:  len(contextBlocks),
+		RecallCount:  len(search.ContextBlocks),
 		Retrieval:    retrievalTrace,
 	}, nil
 }

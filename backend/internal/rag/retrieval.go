@@ -97,6 +97,7 @@ type retrievalOptions struct {
 	StrategyID             *int64
 	EmbeddingModelRevision string
 	DocumentVersionID      *int64
+	Actor                  *model.AppUser
 }
 
 func (s *Service) understandQuery(ctx context.Context, question string, config *model.LLMConfig, credential modelCredential, ready bool) QueryUnderstanding {
@@ -192,6 +193,11 @@ func (s *Service) hybridRetrieve(ctx context.Context, understood QueryUnderstand
 		Environment: understood.Environment, DocTypes: understood.DocTypes,
 		NegativeTerms: understood.NegativeTerms, Now: time.Now().UTC(),
 		StrategyID: options.StrategyID, EmbeddingModelRevision: options.EmbeddingModelRevision,
+	}
+	if options.Actor != nil {
+		filter.PermissionScope = "actor_published"
+		filter.ActorUserID = options.Actor.ID
+		filter.ActorRole = options.Actor.Role
 	}
 	trace := RetrievalTrace{Understanding: understood, Filters: filter, RRFK: defaultRRFK}
 	trace.Channels = append(trace.Channels, ChannelTrace{Channel: "metadata_filter"})

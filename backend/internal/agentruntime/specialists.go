@@ -26,12 +26,13 @@ func (KnowledgeAgent) Analyze(ctx context.Context, input AgentContext, runtime *
 	if strings.TrimSpace(query) == "" {
 		return needsScopeResult("knowledge_agent", "query is required to search knowledge"), nil
 	}
-	payload := map[string]any{"query": query, "limit": intVariable(input, "limit", 5)}
-	result, err := executeJSONSkill(ctx, runtime, "search_knowledge", payload)
+	payload := map[string]any{"originalQuestion": query, "limit": intVariable(input, "limit", 5)}
+	copyOptional(input, payload, "confirmedEntities", "logTemplates", "metricAnomalySummaries")
+	result, err := executeJSONSkill(ctx, runtime, "hybrid_search_knowledge", payload)
 	if err != nil {
 		return nil, err
 	}
-	return skillResult("knowledge_agent", "search_knowledge", result, "knowledge search completed", 0.72), nil
+	return skillResult("knowledge_agent", "hybrid_search_knowledge", result, "hybrid knowledge search completed", 0.72), nil
 }
 
 type LogAgent struct{}
