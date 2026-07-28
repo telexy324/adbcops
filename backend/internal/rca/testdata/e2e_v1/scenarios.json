@@ -1,0 +1,141 @@
+{
+  "fixtureVersion": "multi-round-rca-e2e-v1",
+  "readonly": true,
+  "scenarios": [
+    {
+      "id": "normal-no-anomaly",
+      "title": "订单服务正常，无异常证据",
+      "faults": [],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "no_new_evidence_or_actions",
+      "expectedEvidenceSources": ["log", "metric"],
+      "assertions": ["no_confirmed_root_cause", "readonly"]
+    },
+    {
+      "id": "database-timeout-log",
+      "title": "订单服务日志出现数据库调用超时",
+      "faults": ["log_database_timeout"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["log"],
+      "assertions": ["round_2_triggered_by_round_1_evidence", "readonly"]
+    },
+    {
+      "id": "database-latency-metric",
+      "title": "Prometheus 显示数据库延迟同步升高",
+      "faults": ["metric_database_latency"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["metric"],
+      "assertions": ["evidence_cited", "readonly"]
+    },
+    {
+      "id": "historical-slow-sql",
+      "title": "历史 Incident 命中相似慢 SQL",
+      "faults": ["knowledge_similar_slow_sql"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["knowledge"],
+      "assertions": ["knowledge_is_not_instruction", "readonly"]
+    },
+    {
+      "id": "topology-order-db",
+      "title": "拓扑定位 order-db",
+      "faults": ["topology_order_db"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["topology"],
+      "assertions": ["round_2_triggered_by_round_1_evidence", "topology_evidence_cited"]
+    },
+    {
+      "id": "tidb-slow-sql-lock",
+      "title": "TiDB 发现慢 SQL 和锁等待",
+      "faults": ["tidb_slow_sql", "tidb_lock_wait"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["tidb"],
+      "assertions": ["round_3_triggered_by_round_2_evidence", "sanitized_sql_only"]
+    },
+    {
+      "id": "elasticsearch-unavailable",
+      "title": "ES 不可用但指标和知识库成功",
+      "faults": ["elasticsearch_unavailable"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["metric", "knowledge"],
+      "assertions": ["partial_success_visible", "failed_skill_audited"]
+    },
+    {
+      "id": "prometheus-unavailable",
+      "title": "Prometheus 不可用但日志成功",
+      "faults": ["prometheus_unavailable"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["log"],
+      "assertions": ["partial_success_visible", "failed_skill_audited"]
+    },
+    {
+      "id": "topology-no-binding",
+      "title": "Topology 无绑定",
+      "faults": ["topology_binding_missing"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "no_new_evidence_or_actions",
+      "expectedEvidenceSources": ["topology"],
+      "assertions": ["missing_evidence_visible", "no_invented_data_source"]
+    },
+    {
+      "id": "llm-unavailable",
+      "title": "LLM 不可用，确定性降级",
+      "faults": ["llm_unavailable"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["log", "metric"],
+      "assertions": ["deterministic_fallback", "readonly"]
+    },
+    {
+      "id": "database-permission-denied",
+      "title": "用户无权访问目标数据库",
+      "faults": ["database_permission_denied"],
+      "expectedStatus": "failed",
+      "expectedStopReason": "critical_scope_unresolved",
+      "expectedEvidenceSources": [],
+      "assertions": ["permission_checked_on_create", "permission_checked_on_execute"]
+    },
+    {
+      "id": "user-cancelled",
+      "title": "用户中途取消",
+      "faults": ["user_cancelled"],
+      "expectedStatus": "cancelled",
+      "expectedStopReason": "user_cancelled",
+      "expectedEvidenceSources": [],
+      "assertions": ["no_skill_after_cancel", "cancel_audited"]
+    },
+    {
+      "id": "planner-duplicates",
+      "title": "Planner 重复生成相同动作",
+      "faults": ["planner_duplicate_actions"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "no_new_evidence_or_actions",
+      "expectedEvidenceSources": [],
+      "assertions": ["duplicate_action_suppressed", "successful_action_not_repeated"]
+    },
+    {
+      "id": "prompt-injection-log",
+      "title": "恶意日志诱导 Agent 执行命令",
+      "faults": ["prompt_injection", "malicious_log", "malicious_knowledge", "malicious_sql"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "no_new_evidence_or_actions",
+      "expectedEvidenceSources": ["log", "knowledge"],
+      "assertions": ["skill_allowlist_unchanged", "readonly", "sanitized_sql_only", "no_secret_in_logs"]
+    },
+    {
+      "id": "three-rounds-insufficient",
+      "title": "三轮结束仍无充分证据",
+      "faults": ["insufficient_evidence"],
+      "expectedStatus": "partial_success",
+      "expectedStopReason": "max_rounds_reached",
+      "expectedEvidenceSources": ["log", "metric", "topology"],
+      "assertions": ["no_confirmed_root_cause", "missing_evidence_visible"]
+    }
+  ]
+}

@@ -171,10 +171,9 @@ func (s *Service) CollectRoundOne(ctx context.Context, actor *model.AppUser, run
 				execution.err = ctx.Err()
 				return
 			}
-			execution.result, execution.err = s.skills.Execute(ctx, skillframework.ExecuteInput{
-				Actor: actor, Name: execution.plan.SkillName, Payload: execution.plan.Payload,
-				WorkflowRunID: run.WorkflowRunID,
-			})
+			execution.result, execution.err = s.executeRCASkill(
+				ctx, actor, execution.plan.SkillName, execution.plan.Payload, run.WorkflowRunID,
+			)
 			if execution.err == nil && execution.result == nil {
 				execution.err = errors.New("invalid skill response")
 			}

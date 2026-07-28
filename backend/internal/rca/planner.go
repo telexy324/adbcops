@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	datasourcesvc "aiops-platform/backend/internal/datasource"
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
 	"aiops-platform/backend/internal/skillframework"
 )
@@ -26,7 +29,21 @@ func (s *Service) WithPlanner(catalog PlannerSkillCatalog, plannerModel PlannerM
 	return s
 }
 
-func (s *Service) PlanNext(ctx context.Context, actor *model.AppUser, runID int64, request PlanRequest) (*PlannerResult, error) {
+func (s *Service) PlanNext(ctx context.Context, actor *model.AppUser, runID int64, request PlanRequest) (planned *PlannerResult, resultErr error) {
+	startedAt := time.Now()
+	defer func() {
+		status, degraded, actionCount, hypothesisCount := "error", false, 0, 0
+		if planned != nil {
+			status, degraded = "success", planned.PlannerDegraded
+			actionCount, hypothesisCount = len(planned.NextActions), len(planned.Hypotheses)
+		}
+		observability.ObserveRCAPlanner(status, degraded, time.Since(startedAt))
+		slog.InfoContext(ctx, "rca planner completed",
+			"rca_run_id", runID, "status", status, "degraded", degraded,
+			"action_count", actionCount, "hypothesis_count", hypothesisCount,
+			"duration_ms", time.Since(startedAt).Milliseconds(), "error", safeRCAErrorCode(resultErr),
+		)
+	}()
 	if actor == nil || runID <= 0 || s.skillCatalog == nil {
 		return nil, ErrInvalidInput
 	}

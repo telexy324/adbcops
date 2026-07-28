@@ -79,3 +79,13 @@ helm upgrade --install aiops deploy/helm/aiops-platform \
 - `GET /api/ready`：readiness probe，会检查数据库连接；
 - `GET /api/health`：兼容的基础健康检查；
 - `GET /api/metrics`：Prometheus 文本格式指标。
+
+多轮 RCA 重点指标：
+
+- `aiops_rca_runs_created_total`、`aiops_rca_runs_total`、`aiops_rca_run_duration_seconds`；
+- `aiops_rca_rounds_total`、`aiops_rca_round_duration_seconds`；
+- `aiops_rca_planner_runs_total`、`aiops_rca_planner_duration_seconds`；
+- `aiops_rca_actions_total`、`aiops_rca_evidence_total`；
+- `aiops_rca_active_orchestrations`、`aiops_rca_limit_rejections_total`、`aiops_rca_budget_stops_total`。
+
+这些指标仅使用状态、Round、Skill、Evidence 类型和安全错误码等有界标签，不包含 Run ID、User ID、查询、凭据或 Evidence 原文。

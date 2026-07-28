@@ -54,6 +54,19 @@ func (r *Registry) Set(name string, labels map[string]string, value float64) {
 	r.gauges[seriesKey(name, labels)] = value
 }
 
+func (r *Registry) AddGauge(name string, labels map[string]string, value float64) {
+	if r == nil || name == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := seriesKey(name, labels)
+	r.gauges[key] += value
+	if r.gauges[key] < 0 {
+		r.gauges[key] = 0
+	}
+}
+
 func (r *Registry) Observe(name string, labels map[string]string, value float64) {
 	if r == nil || name == "" {
 		return
@@ -140,6 +153,66 @@ func SetDatasourceHealth(sourceType string, id int64, healthy bool) {
 		value = 1
 	}
 	Default.Set("aiops_datasource_health", map[string]string{"source_type": sourceType, "id": strconv.FormatInt(id, 10)}, value)
+}
+
+func ObserveRCARunCreated() {
+	Default.Inc("aiops_rca_runs_created_total", nil)
+}
+
+func ObserveRCAOrchestration(status, stopReason string, duration time.Duration) {
+	if status == "" {
+		status = "error"
+	}
+	if stopReason == "" {
+		stopReason = "none"
+	}
+	labels := map[string]string{"status": status, "stop_reason": stopReason}
+	Default.Inc("aiops_rca_runs_total", labels)
+	Default.Observe("aiops_rca_run_duration_seconds", labels, duration.Seconds())
+	if strings.Contains(stopReason, "budget") || strings.Contains(stopReason, "wall_time") || strings.Contains(stopReason, "max_rounds") {
+		Default.Inc("aiops_rca_budget_stops_total", map[string]string{"reason": stopReason})
+	}
+}
+
+func AddActiveRCA(scope string, value float64) {
+	if scope == "" {
+		scope = "global"
+	}
+	Default.AddGauge("aiops_rca_active_orchestrations", map[string]string{"scope": scope}, value)
+}
+
+func ObserveRCALimit(scope string) {
+	if scope == "" {
+		scope = "unknown"
+	}
+	Default.Inc("aiops_rca_limit_rejections_total", map[string]string{"scope": scope})
+}
+
+func ObserveRCARound(round int, status string, duration time.Duration) {
+	labels := map[string]string{"round": strconv.Itoa(round), "status": status}
+	Default.Inc("aiops_rca_rounds_total", labels)
+	Default.Observe("aiops_rca_round_duration_seconds", labels, duration.Seconds())
+}
+
+func ObserveRCAPlanner(status string, degraded bool, duration time.Duration) {
+	labels := map[string]string{"status": status, "degraded": strconv.FormatBool(degraded)}
+	Default.Inc("aiops_rca_planner_runs_total", labels)
+	Default.Observe("aiops_rca_planner_duration_seconds", labels, duration.Seconds())
+}
+
+func ObserveRCAAction(skill, status, errorCode string) {
+	if errorCode == "" {
+		errorCode = "none"
+	}
+	Default.Inc("aiops_rca_actions_total", map[string]string{
+		"skill": skill, "status": status, "error_code": errorCode,
+	})
+}
+
+func ObserveRCAEvidence(kind, sourceType string) {
+	Default.Inc("aiops_rca_evidence_total", map[string]string{
+		"kind": kind, "source_type": sourceType,
+	})
 }
 
 func writeMap(buffer *bytes.Buffer, values map[string]float64) {

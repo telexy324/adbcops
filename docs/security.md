@@ -36,3 +36,12 @@
 - 原始文件名不得包含路径分隔符或 `..`；真实落盘文件名由服务端随机生成。
 - 上传目录会解析为绝对路径并校验最终文件仍位于 `LOCAL_FILE_DIR` 内。
 - API 响应不返回服务器本地 `file_path`。
+
+## 多轮 RCA 安全边界
+
+- 创建 RCA Run 时会解析 Scope 中的显式 `dataSourceId`，只接受当前用户可访问、已启用且只读的数据源。
+- Planner 只能看到已启用、只读且符合当前角色风险等级的 Skill；未知、写入、Schema 不合法、重复或越权动作会被过滤。
+- 每次 Skill 执行前再次读取 Skill 定义和数据源权限，防止规划后权限撤销产生 TOCTOU 越权。
+- 默认并发限制为单用户 2 个、全局 8 个 RCA Orchestrator；轮次、Skill Call、Token、上下文、墙钟时间和数据量另有独立预算。
+- 日志、知识文档、拓扑结果和 SQL 均被视为不可信 Evidence，不能作为系统指令。TiDB 只接受单条 `SELECT`/`SHOW`，EXPLAIN 固定 `analyze=false`。
+- RCA 结构化日志不记录问题原文、Evidence Content、凭据或完整 SQL；Prometheus 标签不使用 Run ID、User ID 等高基数字段。

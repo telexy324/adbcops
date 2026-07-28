@@ -3,11 +3,17 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
-const baseURL = env("E2E_BASE_URL", "http://127.0.0.1:8080").replace(/\/+$/, "");
+const baseURL = env("E2E_BASE_URL", "http://127.0.0.1:8080").replace(
+  /\/+$/,
+  "",
+);
 const adminUsername = env("E2E_ADMIN_USERNAME", "admin");
 const adminPassword = env("E2E_ADMIN_PASSWORD", "initial-admin-password");
 const strictExternal = env("E2E_STRICT_EXTERNAL", "0") === "1";
-const runID = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+const runID = new Date()
+  .toISOString()
+  .replace(/[-:.TZ]/g, "")
+  .slice(0, 14);
 
 const state = {
   adminToken: "",
@@ -30,6 +36,7 @@ const steps = [
   ["Prometheus 数据源", createPrometheusDataSource],
   ["Agent 分析", runAgentAnalysis],
   ["Workflow", runWorkflow],
+  ["多轮 RCA 安全链路", runMultiRoundRCA],
   ["Alert Webhook", sendAlertWebhook],
   ["Incident", createIncident],
   ["Topology", createTopology],
@@ -52,7 +59,9 @@ async function main() {
       return;
     }
   }
-  console.log(`PASS all ${steps.length} E2E checks (${Date.now() - startedAt}ms)`);
+  console.log(
+    `PASS all ${steps.length} E2E checks (${Date.now() - startedAt}ms)`,
+  );
 }
 
 async function adminBootstrap() {
@@ -82,7 +91,10 @@ async function createUser() {
   assertOneOf(create.status, [200, 409], "create user status");
 
   const login = await request("POST", "/api/auth/login", {
-    body: { username: state.operator.username, password: state.operator.password },
+    body: {
+      username: state.operator.username,
+      password: state.operator.password,
+    },
   });
   assertEqual(login.status, 200, "operator login status");
   state.userToken = must(login.body, "data.accessToken");
@@ -99,13 +111,17 @@ async function createLLMConfig() {
       model: "e2e-model",
       apiKey: "e2e-api-key",
       temperature: 0.2,
-      enabled: true,
-      isDefault: true,
+      enabled: strictExternal,
+      isDefault: strictExternal,
     },
   });
   assertEqual(create.status, 200, "create llm status");
   state.ids.llm = must(create.body, "data.id");
-  assertEqual(must(create.body, "data.apiKeyConfigured"), true, "api key configured");
+  assertEqual(
+    must(create.body, "data.apiKeyConfigured"),
+    true,
+    "api key configured",
+  );
 }
 
 async function uploadAndPublishDocument() {
@@ -123,7 +139,11 @@ async function uploadAndPublishDocument() {
   form.set("docType", "runbook");
   form.set("version", "v1");
   form.set("tags", JSON.stringify(["e2e", "runbook"]));
-  form.set("file", new Blob([content], { type: "text/markdown" }), `e2e-${runID}.md`);
+  form.set(
+    "file",
+    new Blob([content], { type: "text/markdown" }),
+    `e2e-${runID}.md`,
+  );
 
   const upload = await request("POST", "/api/documents/upload", {
     token: state.adminToken,
@@ -132,36 +152,63 @@ async function uploadAndPublishDocument() {
   assertEqual(upload.status, 200, "upload document status");
   state.ids.document = must(upload.body, "data.id");
 
-  const quality = await request("POST", `/api/documents/${state.ids.document}/review`, {
-    token: state.adminToken,
-    body: {
-      result: {
-        score: 85,
-        summary: "内容包含范围、症状和处理建议，适合发布。",
-        findings: ["scope clear", "actionable steps"],
-        suggestions: ["keep ownership updated"],
+  const reprocess = await request(
+    "POST",
+    `/api/documents/${state.ids.document}/reprocess`,
+    {
+      token: state.adminToken,
+    },
+  );
+  assertEqual(reprocess.status, 200, "reprocess document status");
+  assert(
+    must(reprocess.body, "data.chunkCount") > 0,
+    "document reprocess generated chunks",
+  );
+
+  const quality = await request(
+    "POST",
+    `/api/documents/${state.ids.document}/review`,
+    {
+      token: state.adminToken,
+      body: {
+        result: {
+          score: 85,
+          summary: "内容包含范围、症状和处理建议，适合发布。",
+          findings: ["scope clear", "actionable steps"],
+          suggestions: ["keep ownership updated"],
+        },
       },
     },
-  });
+  );
   assertEqual(quality.status, 200, "quality review status");
-  assertEqual(must(quality.body, "data.canPublish"), true, "document can publish");
+  assertEqual(
+    must(quality.body, "data.canPublish"),
+    true,
+    "document can publish",
+  );
 
-  const publish = await request("POST", `/api/documents/${state.ids.document}/review`, {
-    token: state.adminToken,
-    body: { action: "publish", comment: "E2E publish" },
-  });
+  const publish = await request(
+    "POST",
+    `/api/documents/${state.ids.document}/review`,
+    {
+      token: state.adminToken,
+      body: { action: "publish", comment: "E2E publish" },
+    },
+  );
   assertEqual(publish.status, 200, "publish document status");
-  assertEqual(must(publish.body, "data.document.status"), "published", "document published");
+  assertEqual(
+    must(publish.body, "data.document.status"),
+    "published",
+    "document published",
+  );
 
-  const reprocess = await request("POST", `/api/documents/${state.ids.document}/reprocess`, {
-    token: state.adminToken,
-  });
-  assertEqual(reprocess.status, 200, "reprocess document status");
-  assert(must(reprocess.body, "data.chunkCount") > 0, "document reprocess generated chunks");
-
-  const chunks = await request("GET", `/api/documents/${state.ids.document}/chunks`, {
-    token: state.adminToken,
-  });
+  const chunks = await request(
+    "GET",
+    `/api/documents/${state.ids.document}/chunks`,
+    {
+      token: state.adminToken,
+    },
+  );
   assertEqual(chunks.status, 200, "list chunks status");
   assert(must(chunks.body, "data.chunkCount") > 0, "document chunks generated");
 }
@@ -192,7 +239,10 @@ async function createK8sDataSource() {
   state.ids.k8s = await createDataSource({
     name: `e2e-k8s-${runID}`,
     sourceType: "kubernetes",
-    config: { apiServer: "https://kubernetes.example.com", namespace: "default" },
+    config: {
+      apiServer: "https://kubernetes.example.com",
+      namespace: "default",
+    },
     credential: { bearerToken: "k8s-token" },
   });
 }
@@ -220,10 +270,16 @@ async function createDataSource(input) {
   });
   assertEqual(create.status, 200, `create ${input.sourceType} data source`);
   const id = must(create.body, "data.id");
-  assertEqual(must(create.body, "data.credentialConfigured"), true, "credential configured");
+  assertEqual(
+    must(create.body, "data.credentialConfigured"),
+    true,
+    "credential configured",
+  );
 
   if (strictExternal) {
-    const test = await request("POST", `/api/data-sources/${id}/test`, { token: state.adminToken });
+    const test = await request("POST", `/api/data-sources/${id}/test`, {
+      token: state.adminToken,
+    });
     assertEqual(test.status, 200, `test ${input.sourceType} data source`);
     assertEqual(must(test.body, "data.ok"), true, "data source test ok");
   }
@@ -242,13 +298,20 @@ async function runAgentAnalysis() {
     },
   });
   assertEqual(agent.status, 200, "agent status");
-  assert(must(agent.body, "data.result.summary").length > 0, "agent summary exists");
+  assert(
+    must(agent.body, "data.result.summary").length > 0,
+    "agent summary exists",
+  );
 }
 
 async function runWorkflow() {
-  const list = await request("GET", "/api/workflows?limit=50", { token: state.adminToken });
+  const list = await request("GET", "/api/workflows?limit=50", {
+    token: state.adminToken,
+  });
   assertEqual(list.status, 200, "list workflow status");
-  const workflow = must(list.body, "data").find((item) => item.name === "knowledge_qa_workflow");
+  const workflow = must(list.body, "data").find(
+    (item) => item.name === "knowledge_qa_workflow",
+  );
   assert(workflow, "knowledge_qa_workflow exists");
 
   const run = await request("POST", `/api/workflows/${workflow.id}/run`, {
@@ -261,7 +324,66 @@ async function runWorkflow() {
   });
   assertEqual(run.status, 200, "run workflow status");
   state.ids.workflowRun = must(run.body, "data.id");
-  assertOneOf(must(run.body, "data.status"), ["success", "failed"], "workflow terminal status");
+  assertOneOf(
+    must(run.body, "data.status"),
+    ["success", "failed"],
+    "workflow terminal status",
+  );
+}
+
+async function runMultiRoundRCA() {
+  const create = await request("POST", "/api/rca/runs", {
+    token: state.adminToken,
+    body: {
+      query: "订单服务变慢，请查询可能原因",
+      scope: {
+        serviceName: "payments-api",
+        environment: "prod",
+        from: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+        to: new Date().toISOString(),
+      },
+      maxRounds: 3,
+      timeoutSeconds: 300,
+    },
+  });
+  assertEqual(create.status, 200, "create RCA run status");
+  state.ids.rcaRun = must(create.body, "data.id");
+
+  const detail = await request("GET", `/api/rca/runs/${state.ids.rcaRun}`, {
+    token: state.adminToken,
+  });
+  assertEqual(detail.status, 200, "get RCA run status");
+  assertEqual(must(detail.body, "data.run.maxRounds"), 3, "RCA max rounds");
+
+  const isolated = await request("GET", `/api/rca/runs/${state.ids.rcaRun}`, {
+    token: state.userToken,
+  });
+  assertEqual(
+    isolated.status,
+    403,
+    "operator cannot read another user's RCA run",
+  );
+
+  const cancelled = await request(
+    "POST",
+    `/api/rca/runs/${state.ids.rcaRun}/cancel`,
+    {
+      token: state.adminToken,
+    },
+  );
+  assertEqual(cancelled.status, 200, "cancel RCA run status");
+  assertEqual(
+    must(cancelled.body, "data.status"),
+    "cancelled",
+    "RCA cancelled",
+  );
+
+  const metrics = await request("GET", "/api/metrics");
+  assertEqual(metrics.status, 200, "RCA metrics status");
+  assert(
+    String(metrics.body.raw || "").includes("aiops_rca_runs_created_total"),
+    "RCA metrics are exported",
+  );
 }
 
 async function sendAlertWebhook() {
@@ -312,16 +434,24 @@ async function createIncident() {
       eventIds: [state.ids.event],
       evidenceKeys: [],
       rootCauses: [
-        { summary: "数据库连接池耗尽", score: 0.72, details: { source: "e2e" } },
+        {
+          summary: "数据库连接池耗尽",
+          score: 0.72,
+          details: { source: "e2e" },
+        },
       ],
     },
   });
   assertEqual(incident.status, 200, "create incident status");
   state.ids.incident = must(incident.body, "data.incident.id");
 
-  const similar = await request("GET", `/api/incidents/${state.ids.incident}/similar?limit=5`, {
-    token: state.adminToken,
-  });
+  const similar = await request(
+    "GET",
+    `/api/incidents/${state.ids.incident}/similar?limit=5`,
+    {
+      token: state.adminToken,
+    },
+  );
   assertEqual(similar.status, 200, "similar incident status");
 }
 
@@ -332,7 +462,7 @@ async function createTopology() {
     name: "payments-api",
     environment: "prod",
     namespace: "payments",
-    sourceType: "e2e",
+    sourceType: "manual",
   };
   const dbNode = {
     nodeKey: `database:prod:payments:postgres:${runID}`,
@@ -340,7 +470,7 @@ async function createTopology() {
     name: "payments-postgres",
     environment: "prod",
     namespace: "payments",
-    sourceType: "e2e",
+    sourceType: "manual",
   };
   for (const node of [serviceNode, dbNode]) {
     const upsert = await request("POST", "/api/topology/nodes", {
@@ -357,16 +487,25 @@ async function createTopology() {
       toNodeKey: dbNode.nodeKey,
       edgeType: "depends_on",
       confidence: 0.9,
-      sourceType: "e2e",
+      sourceType: "manual",
     },
   });
   assertEqual(edge.status, 200, "upsert topology edge");
 
-  const graph = await request("GET", "/api/topology/graph?environment=prod&limit=50", {
-    token: state.adminToken,
-  });
+  const graph = await request(
+    "GET",
+    "/api/topology/graph?environment=prod&limit=50",
+    {
+      token: state.adminToken,
+    },
+  );
   assertEqual(graph.status, 200, "topology graph status");
-  assert(must(graph.body, "data.nodes").some((node) => node.nodeKey === serviceNode.nodeKey), "topology node in graph");
+  assert(
+    must(graph.body, "data.nodes").some(
+      (node) => node.nodeKey === serviceNode.nodeKey,
+    ),
+    "topology node in graph",
+  );
 }
 
 async function checkAudit() {
@@ -379,7 +518,9 @@ async function checkAudit() {
 }
 
 async function checkRBACIsolation() {
-  const forbiddenUsers = await request("GET", "/api/users", { token: state.userToken });
+  const forbiddenUsers = await request("GET", "/api/users", {
+    token: state.userToken,
+  });
   assertEqual(forbiddenUsers.status, 403, "operator cannot list users");
 
   const forbiddenDataSource = await request("POST", "/api/data-sources", {
@@ -391,7 +532,11 @@ async function checkRBACIsolation() {
       credential: { bearerToken: "nope" },
     },
   });
-  assertEqual(forbiddenDataSource.status, 403, "operator cannot create data source");
+  assertEqual(
+    forbiddenDataSource.status,
+    403,
+    "operator cannot create data source",
+  );
 }
 
 async function request(method, path, options = {}) {
@@ -444,13 +589,17 @@ function assert(condition, message) {
 
 function assertEqual(actual, expected, message) {
   if (actual !== expected) {
-    throw new Error(`${message}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`);
+    throw new Error(
+      `${message}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`,
+    );
   }
 }
 
 function assertOneOf(actual, expected, message) {
   if (!expected.includes(actual)) {
-    throw new Error(`${message}: got ${JSON.stringify(actual)}, want one of ${JSON.stringify(expected)}`);
+    throw new Error(
+      `${message}: got ${JSON.stringify(actual)}, want one of ${JSON.stringify(expected)}`,
+    );
   }
 }
 

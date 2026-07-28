@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/resourcelimit"
 	"aiops-platform/backend/internal/skillframework"
 )
 
@@ -95,7 +98,22 @@ type plannedExecution struct {
 	evidence []int64
 }
 
-func (s *Service) Orchestrate(ctx context.Context, actor *model.AppUser, runID int64, input OrchestrateInput) (*OrchestratorResult, error) {
+func (s *Service) Orchestrate(ctx context.Context, actor *model.AppUser, runID int64, input OrchestrateInput) (result *OrchestratorResult, resultErr error) {
+	startedAt := time.Now()
+	defer func() {
+		status, stopReason := "error", ""
+		if result != nil {
+			stopReason = result.StopReason
+			if result.Run != nil {
+				status = result.Run.Status
+			}
+		}
+		observability.ObserveRCAOrchestration(status, stopReason, time.Since(startedAt))
+		slog.InfoContext(ctx, "rca orchestration completed",
+			"rca_run_id", runID, "status", status, "stop_reason", stopReason,
+			"duration_ms", time.Since(startedAt).Milliseconds(), "error", safeRCAErrorCode(resultErr),
+		)
+	}()
 	if actor == nil || runID <= 0 || s.skills == nil || s.skillCatalog == nil {
 		return nil, ErrInvalidInput
 	}
@@ -106,6 +124,30 @@ func (s *Service) Orchestrate(ctx context.Context, actor *model.AppUser, runID i
 	if terminalRunStatus(run.Status) || run.FinishedAt != nil {
 		return nil, ErrInvalidTransition
 	}
+	releaseUser, err := s.userOrchestratorLimiter.Acquire(ctx, rcaUserLimiterKey(actor.ID))
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			observability.ObserveRCALimit("user")
+			return nil, ErrOrchestratorLimited
+		}
+		return nil, err
+	}
+	defer releaseUser()
+	releaseGlobal, err := s.globalOrchestratorLimiter.Acquire(ctx)
+	if err != nil {
+		if errors.Is(err, resourcelimit.ErrLimitExceeded) {
+			observability.ObserveRCALimit("global")
+			return nil, ErrOrchestratorLimited
+		}
+		return nil, err
+	}
+	defer releaseGlobal()
+	observability.AddActiveRCA("global", 1)
+	defer observability.AddActiveRCA("global", -1)
+	slog.InfoContext(ctx, "rca orchestration started",
+		"rca_run_id", runID, "user_id", actor.ID, "current_round", run.CurrentRound,
+		"max_rounds", run.MaxRounds,
+	)
 	budget, err := normalizeOrchestratorBudget(input.Budget, run.MaxRounds)
 	if err != nil {
 		return nil, err
@@ -428,10 +470,10 @@ func (s *Service) executePlannerRound(ctx context.Context, actor *model.AppUser,
 				execution.err = ctx.Err()
 				return
 			}
-			execution.result, execution.err = s.skills.Execute(ctx, skillframework.ExecuteInput{
-				Actor: actor, Name: execution.plan.SkillName, Payload: execution.plan.Input,
-				WorkflowRunID: mustRunWorkflowID(s.repository.FindRCARunByID(ctx, runID)),
-			})
+			execution.result, execution.err = s.executeRCASkill(
+				ctx, actor, execution.plan.SkillName, execution.plan.Input,
+				mustRunWorkflowID(s.repository.FindRCARunByID(ctx, runID)),
+			)
 			if execution.err == nil && execution.result == nil {
 				execution.err = errors.New("invalid skill response")
 			}
@@ -778,7 +820,7 @@ func (s *Service) resumeRunningRound(ctx context.Context, actor *model.AppUser, 
 				execution.err = ctx.Err()
 				return
 			}
-			execution.result, execution.err = s.skills.Execute(ctx, skillframework.ExecuteInput{Actor: actor, Name: execution.plan.SkillName, Payload: execution.plan.Input})
+			execution.result, execution.err = s.executeRCASkill(ctx, actor, execution.plan.SkillName, execution.plan.Input, nil)
 		}(&executions[index])
 	}
 	wait.Wait()
@@ -788,6 +830,23 @@ func (s *Service) resumeRunningRound(ctx context.Context, actor *model.AppUser, 
 		usage.RoundsCompleted++
 	}
 	return result, completeErr
+}
+
+func safeRCAErrorCode(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrForbidden):
+		return "forbidden"
+	case errors.Is(err, ErrOrchestratorLimited):
+		return "concurrency_limited"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	default:
+		return "internal_error"
+	}
 }
 
 func (s *Service) finishAfterExecutionError(ctx context.Context, actor *model.AppUser, runID int64, outcome *OrchestratorResult, err error) (*OrchestratorResult, error) {

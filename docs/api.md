@@ -1142,6 +1142,8 @@ RCA Evidence 复用 Evidence Center，并增加 `rcaRunId`、`rcaRoundId`、`rca
 
 失败恢复会返回 `skippedActionIds` 和 `retryableActionIds`。已经成功的敏感读取保留原结果，不会重复执行；失败、超时和部分成功 Action 增加 attempt 后回到 `pending`。
 
+Run 创建会校验 Scope 中所有显式数据源权限；Skill 执行前会再次校验 Registry 定义、只读属性、风险等级、输入 Schema 和数据源权限。默认单用户最多同时运行 2 个、全局最多 8 个 Orchestrator，超限返回 HTTP `429`、业务码 `42905`。权限不足返回 `40301`，不会创建或执行越权动作。
+
 ### 多轮智能分析前端调用链
 
 “智能分析”页面先通过 `POST /api/rca/runs` 提交问题和显式 Scope，再调用 `POST /api/rca/runs/{id}/orchestrate` 启动受预算约束的多轮编排。执行期间前端每 1.5 秒读取 `GET /api/rca/runs/{id}`，Round 内的 Action 独立显示状态；Run 结束后读取确定性 `/report`。活动 Run ID 同时保存到 URL 和浏览器本地存储，刷新后从详情接口恢复，不依赖易丢失的内存状态。

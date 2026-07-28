@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -251,6 +252,7 @@ func TestRCACancelAndTimeoutAreTerminal(t *testing.T) {
 }
 
 type memoryRCARepository struct {
+	mu              sync.Mutex
 	nextRunID       int64
 	nextRoundID     int64
 	nextActionID    int64
@@ -273,6 +275,8 @@ func newMemoryRCARepository() *memoryRCARepository {
 }
 
 func (r *memoryRCARepository) CreateRCARun(_ context.Context, run *model.RCARun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	run.ID = r.nextRunID
 	r.nextRunID++
 	run.CreatedAt = fixedRCATime()
@@ -282,6 +286,8 @@ func (r *memoryRCARepository) CreateRCARun(_ context.Context, run *model.RCARun)
 }
 
 func (r *memoryRCARepository) FindRCARunByID(_ context.Context, id int64) (*model.RCARun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	run, ok := r.runs[id]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -290,6 +296,8 @@ func (r *memoryRCARepository) FindRCARunByID(_ context.Context, id int64) (*mode
 }
 
 func (r *memoryRCARepository) ListRCARuns(_ context.Context, filters repository.RCARunFilters) ([]model.RCARun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	result := []model.RCARun{}
 	for _, run := range r.runs {
 		if filters.UserID > 0 && run.UserID != filters.UserID {
@@ -305,6 +313,8 @@ func (r *memoryRCARepository) ListRCARuns(_ context.Context, filters repository.
 }
 
 func (r *memoryRCARepository) UpdateRCARun(_ context.Context, id int64, updates repository.RCARunUpdates) (*model.RCARun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	run, ok := r.runs[id]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -346,6 +356,8 @@ func (r *memoryRCARepository) UpdateRCARun(_ context.Context, id int64, updates 
 }
 
 func (r *memoryRCARepository) MarkTimedOutRCARuns(_ context.Context, now time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for id, run := range r.runs {
 		if (run.Status == model.RCARunStatusPending || run.Status == model.RCARunStatusRunning) &&
 			run.TimeoutAt != nil && !run.TimeoutAt.After(now) {
@@ -371,6 +383,8 @@ func (r *memoryRCARepository) MarkTimedOutRCARuns(_ context.Context, now time.Ti
 }
 
 func (r *memoryRCARepository) CreateRCARound(_ context.Context, round *model.RCARound) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	round.ID = r.nextRoundID
 	r.nextRoundID++
 	r.rounds[round.ID] = *round
@@ -378,6 +392,8 @@ func (r *memoryRCARepository) CreateRCARound(_ context.Context, round *model.RCA
 }
 
 func (r *memoryRCARepository) FindRCARoundByID(_ context.Context, id int64) (*model.RCARound, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	round, ok := r.rounds[id]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -386,6 +402,8 @@ func (r *memoryRCARepository) FindRCARoundByID(_ context.Context, id int64) (*mo
 }
 
 func (r *memoryRCARepository) ListRCARounds(_ context.Context, runID int64) ([]model.RCARound, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	result := []model.RCARound{}
 	for _, round := range r.rounds {
 		if round.RunID == runID {
@@ -397,6 +415,8 @@ func (r *memoryRCARepository) ListRCARounds(_ context.Context, runID int64) ([]m
 }
 
 func (r *memoryRCARepository) UpdateRCARound(_ context.Context, id int64, updates repository.RCARoundUpdates) (*model.RCARound, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	round, ok := r.rounds[id]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -432,6 +452,8 @@ func (r *memoryRCARepository) UpdateRCARound(_ context.Context, id int64, update
 }
 
 func (r *memoryRCARepository) CreateOrGetRCAAction(_ context.Context, action *model.RCAAction) (*model.RCAAction, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, stored := range r.actions {
 		if stored.RunID == action.RunID && stored.ActionKey == action.ActionKey {
 			copy := stored
@@ -446,6 +468,8 @@ func (r *memoryRCARepository) CreateOrGetRCAAction(_ context.Context, action *mo
 }
 
 func (r *memoryRCARepository) FindRCAActionByID(_ context.Context, id int64) (*model.RCAAction, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	action, ok := r.actions[id]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -454,6 +478,8 @@ func (r *memoryRCARepository) FindRCAActionByID(_ context.Context, id int64) (*m
 }
 
 func (r *memoryRCARepository) ListRCAActions(_ context.Context, runID int64) ([]model.RCAAction, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	result := []model.RCAAction{}
 	for _, action := range r.actions {
 		if action.RunID == runID {
@@ -465,6 +491,8 @@ func (r *memoryRCARepository) ListRCAActions(_ context.Context, runID int64) ([]
 }
 
 func (r *memoryRCARepository) UpdateRCAAction(_ context.Context, id int64, updates repository.RCAActionUpdates) (*model.RCAAction, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	action, ok := r.actions[id]
 	if !ok {
 		return nil, repository.ErrNotFound
@@ -504,6 +532,8 @@ func (r *memoryRCARepository) UpdateRCAAction(_ context.Context, id int64, updat
 }
 
 func (r *memoryRCARepository) CreateRCARootCauseCandidate(_ context.Context, candidate *model.RCARootCauseCandidate) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	candidate.ID = r.nextCandidateID
 	r.nextCandidateID++
 	r.candidates[candidate.ID] = *candidate
@@ -511,6 +541,8 @@ func (r *memoryRCARepository) CreateRCARootCauseCandidate(_ context.Context, can
 }
 
 func (r *memoryRCARepository) ListRCARootCauseCandidates(_ context.Context, runID int64) ([]model.RCARootCauseCandidate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	result := []model.RCARootCauseCandidate{}
 	for _, candidate := range r.candidates {
 		if candidate.RunID == runID {
@@ -521,6 +553,8 @@ func (r *memoryRCARepository) ListRCARootCauseCandidates(_ context.Context, runI
 }
 
 func (r *memoryRCARepository) EvidenceIDsBelongToRCARun(_ context.Context, runID int64, evidenceIDs []int64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, id := range uniqueIDs(evidenceIDs) {
 		record, ok := r.evidence[id]
 		if !ok || record.RCARunID == nil || *record.RCARunID != runID {
@@ -531,6 +565,8 @@ func (r *memoryRCARepository) EvidenceIDsBelongToRCARun(_ context.Context, runID
 }
 
 func (r *memoryRCARepository) ListRCAEvidence(_ context.Context, runID int64) ([]model.EvidenceRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	result := []model.EvidenceRecord{}
 	for _, record := range r.evidence {
 		if record.RCARunID != nil && *record.RCARunID == runID {
@@ -546,6 +582,8 @@ type memoryEvidenceCreator struct {
 }
 
 func (c *memoryEvidenceCreator) Create(_ context.Context, input evidencesvc.CreateInput) (*model.EvidenceRecord, error) {
+	c.repository.mu.Lock()
+	defer c.repository.mu.Unlock()
 	record := model.EvidenceRecord{
 		ID: c.repository.nextEvidenceID, EvidenceKey: input.EvidenceKey, SourceType: input.SourceType,
 		SourceRef: input.SourceRef, ObservedAt: input.ObservedAt, Title: input.Title, Summary: input.Summary,

@@ -188,11 +188,11 @@ func TestRoundOneRejectsUnauthorizedExplicitDataSource(t *testing.T) {
 	}).WithSkillExecutor(newRoundOneFakeExecutor())
 	service.now = fixedRCATime
 	actor := &model.AppUser{ID: 7, Role: model.RoleUser}
-	run, _ := service.CreateRun(context.Background(), actor, CreateRunInput{
+	_, err := service.CreateRun(context.Background(), actor, CreateRunInput{
 		Query: "订单服务变慢",
 		Scope: json.RawMessage(`{"serviceName":"order-service","logDataSourceId":99,"from":"2026-07-28T05:30:00Z","to":"2026-07-28T06:00:00Z"}`),
 	})
-	if _, err := service.CollectRoundOne(context.Background(), actor, run.ID, RoundOneCollectionInput{}); !errors.Is(err, ErrForbidden) {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("unauthorized data source error=%v, want ErrForbidden", err)
 	}
 }

@@ -221,6 +221,8 @@ func handleRCAError(c *gin.Context, err error, fallback string) bool {
 		failure(c, http.StatusBadRequest, 40001, err.Error())
 	case errors.Is(err, rcasvc.ErrOrchestratorActive):
 		failure(c, http.StatusConflict, 40901, err.Error())
+	case errors.Is(err, rcasvc.ErrOrchestratorLimited):
+		failure(c, http.StatusTooManyRequests, 42905, "RCA concurrency limit exceeded")
 	case errors.Is(err, rcasvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40301, "RCA access forbidden")
 	case errors.Is(err, repository.ErrNotFound):

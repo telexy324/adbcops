@@ -35,3 +35,9 @@ Incident 和 Markdown RCA 文档均以只读草稿 Payload 生成。生成草稿
 智能分析工作台以服务端 RCA Run 为唯一事实源。创建后并行启动 Orchestrator 请求与详情轮询，页面按 Round 和 Action 展示独立状态；`running`、`partial_success`、`timed_out`、`permission_denied`、`missing_evidence` 和普通失败不会合并成模糊的成功/失败提示。URL `runId` 与本地活动 Run ID 只负责恢复定位，刷新后重新读取 Run、Round、Action、Evidence 和报告，不在浏览器重放 Skill。
 
 拓扑视图只消费编排结果或 `find_dependencies` Evidence 重建节点和方向边；数据库视图只消费 TiDB 诊断中的 SQL 指纹与脱敏结构。Evidence 按 FACT、RULE、KNOWLEDGE、HYPOTHESIS 分组，根因候选同时展示支持、反证和缺失证据。取消、恢复和重试均调用专用 RCA API，前端不持有 Tool 调用能力，也不提供自动修复、任意 SQL 或其他生产写入口。
+
+### RCA Security 与 Observability
+
+RCA 采用两阶段授权：Run 创建时校验 Scope 中显式数据源；Skill 执行前再次读取当前 Registry 和数据源权限，避免规划与执行之间的权限变化。未知、禁用、非只读、风险等级不匹配、Schema 非法或数据源越权的动作均默认拒绝。Orchestrator 使用单用户和全局两层并发限制，Round、Skill Call、Token、Context、Wall Time 和数据量预算继续在单次 Run 内限制资源。
+
+Run、Planner、Round、Action 和 Evidence 只记录结构化 ID、状态、计数、安全错误码和耗时。Prometheus 使用状态、Round、Skill、Evidence 类型等有界标签，不包含 Run ID、User ID、Query 或 Evidence 原文。版本化 E2E Fixture 固定 15 个场景，确保第二、三轮由前序 Evidence 触发，并覆盖降级、取消、恢复、无证据、权限撤销及 Prompt Injection。

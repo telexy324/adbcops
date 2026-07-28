@@ -12135,6 +12135,17 @@ status
 9. 无证据时不会生成确定性根因；
 10. `go test ./...`、`go vet ./...`、前端 lint、build 和 E2E 全部通过。
 
+实现状态（2026-07-28）：已完成。
+
+- Run 创建时校验 Scope 中所有显式数据源均为当前用户可访问、已启用且只读；每次 Skill 真正执行前重新读取权限、启停和只读状态，权限撤销后不再调用执行器；
+- Orchestrator 增加默认单用户 2 个、全局 8 个并发限制，超限返回 `42905`；现有轮次、Skill Call、Token、上下文、墙钟时间和数据量预算继续生效；
+- Planner 和执行边界均采用默认拒绝策略，只允许 Registry 中已启用、只读、风险等级匹配且 Schema/数据源校验通过的 Skill；恶意日志和知识内容不能扩展 Allowlist；
+- 新增 Run、Round、Planner、Action/Skill、Evidence、预算停止、活动编排和并发拒绝 Prometheus 指标，标签不包含 Run ID、User ID、查询或 Evidence 原文；
+- Run、Planner、Round、Action 和 Evidence 增加结构化日志，仅记录 ID、状态、计数、安全错误码和耗时，不记录问题原文、凭据或完整 SQL；
+- 新增版本化 `multi-round-rca-e2e-v1` Fixture，覆盖规定的 15 个正常、故障、降级、权限、取消、重复动作、Prompt Injection 和证据不足场景；
+- E2E 脚本增加 RCA 创建、所有者隔离、取消和指标导出链路；Go E2E/安全测试验证三轮证据触发、取消、恢复、部分成功、确定性降级、并发限制、执行前权限复验和恶意 SQL 拒绝；
+- 所有外部动作保持只读；未知/写入 Skill、未授权数据源、多语句或非只读 SQL 均在执行前拒绝。
+
 ## 208. 推荐实施顺序
 
 ```text

@@ -10,7 +10,6 @@ import (
 
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
-	"aiops-platform/backend/internal/skillframework"
 )
 
 const TopologyInvestigationVersion = "rca-topology-investigation-v1"
@@ -305,9 +304,7 @@ func (s *Service) executeGuidedAction(ctx context.Context, actor *model.AppUser,
 		result.errorCode = "start_action_failed"
 		return result
 	}
-	executed, executeErr := s.skills.Execute(ctx, skillframework.ExecuteInput{
-		Actor: actor, Name: action.SkillName, Payload: action.Input,
-	})
+	executed, executeErr := s.executeRCASkill(ctx, actor, action.SkillName, action.Input, nil)
 	output := json.RawMessage(`{}`)
 	if executed != nil {
 		output = executed.Output

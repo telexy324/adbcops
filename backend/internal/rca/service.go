@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,17 +14,20 @@ import (
 	datasourcesvc "aiops-platform/backend/internal/datasource"
 	evidencesvc "aiops-platform/backend/internal/evidence"
 	"aiops-platform/backend/internal/model"
+	"aiops-platform/backend/internal/observability"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/resourcelimit"
 	"aiops-platform/backend/internal/skillframework"
 )
 
 var (
-	ErrInvalidInput       = errors.New("invalid input")
-	ErrForbidden          = errors.New("rca access forbidden")
-	ErrInvalidTransition  = errors.New("invalid rca state transition")
-	ErrEvidenceRequired   = errors.New("root cause candidate requires evidence")
-	ErrRoundLimit         = errors.New("rca round limit reached")
-	ErrOrchestratorActive = errors.New("rca orchestrator already active")
+	ErrInvalidInput        = errors.New("invalid input")
+	ErrForbidden           = errors.New("rca access forbidden")
+	ErrInvalidTransition   = errors.New("invalid rca state transition")
+	ErrEvidenceRequired    = errors.New("root cause candidate requires evidence")
+	ErrRoundLimit          = errors.New("rca round limit reached")
+	ErrOrchestratorActive  = errors.New("rca orchestrator already active")
+	ErrOrchestratorLimited = errors.New("rca orchestrator concurrency limit exceeded")
 )
 
 const (
@@ -56,6 +61,8 @@ type Service struct {
 	now                        func() time.Time
 	orchestratorMu             sync.Mutex
 	activeOrchestrators        map[int64]context.CancelFunc
+	userOrchestratorLimiter    *resourcelimit.KeyedLimiter
+	globalOrchestratorLimiter  *resourcelimit.Limiter
 }
 
 type RoundOneSkillExecutor interface {
@@ -167,7 +174,15 @@ func NewService(repository Repository, evidence EvidenceCreator, dataSources Dat
 		repository: repository, evidence: evidence, dataSources: dataSources,
 		databaseDiagnosisProviders: []DatabaseDiagnosisProvider{NewTiDBDatabaseDiagnosisProvider()},
 		now:                        func() time.Time { return time.Now().UTC() }, activeOrchestrators: map[int64]context.CancelFunc{},
+		userOrchestratorLimiter:   resourcelimit.NewKeyedLimiter(2),
+		globalOrchestratorLimiter: resourcelimit.NewLimiter(8),
 	}
+}
+
+func (s *Service) WithOrchestratorLimits(perUser, global int) *Service {
+	s.userOrchestratorLimiter = resourcelimit.NewKeyedLimiter(perUser)
+	s.globalOrchestratorLimiter = resourcelimit.NewLimiter(global)
+	return s
 }
 
 func (s *Service) WithSkillExecutor(skills RoundOneSkillExecutor) *Service {
@@ -197,6 +212,9 @@ func (s *Service) CreateRun(ctx context.Context, actor *model.AppUser, input Cre
 	if scope == nil {
 		return nil, ErrInvalidInput
 	}
+	if err := s.authorizeScopeDataSources(ctx, actor, scope); err != nil {
+		return nil, err
+	}
 	now := s.now()
 	timeoutAt := now.Add(timeout)
 	run := &model.RCARun{
@@ -208,6 +226,11 @@ func (s *Service) CreateRun(ctx context.Context, actor *model.AppUser, input Cre
 	if err := s.repository.CreateRCARun(ctx, run); err != nil {
 		return nil, err
 	}
+	observability.ObserveRCARunCreated()
+	slog.InfoContext(ctx, "rca run created",
+		"rca_run_id", run.ID, "user_id", actor.ID, "max_rounds", maxRounds,
+		"timeout_seconds", int(timeout/time.Second),
+	)
 	return run, nil
 }
 
@@ -410,10 +433,20 @@ func (s *Service) CompleteAction(ctx context.Context, actor *model.AppUser, runI
 	evidenceIDs, _ := json.Marshal(uniqueIDs(input.EvidenceIDs))
 	now := s.now()
 	code, message := safeFailure(input.ErrorCode, input.ErrorMessage)
-	return s.repository.UpdateRCAAction(ctx, actionID, repository.RCAActionUpdates{
+	updated, err := s.repository.UpdateRCAAction(ctx, actionID, repository.RCAActionUpdates{
 		Status: input.Status, Output: output, EvidenceIDs: evidenceIDs,
 		ErrorCode: code, ErrorMessage: message, FinishedAt: &now,
 	})
+	if err != nil {
+		return nil, err
+	}
+	observability.ObserveRCAAction(action.SkillName, input.Status, input.ErrorCode)
+	slog.InfoContext(ctx, "rca action completed",
+		"rca_run_id", runID, "rca_round_id", action.RoundID, "rca_action_id", actionID,
+		"skill", action.SkillName, "status", input.Status, "error_code", input.ErrorCode,
+		"evidence_count", len(input.EvidenceIDs),
+	)
+	return updated, nil
 }
 
 func (s *Service) AddEvidence(ctx context.Context, actor *model.AppUser, runID int64, input CreateEvidenceInput) (*model.EvidenceRecord, error) {
@@ -449,7 +482,7 @@ func (s *Service) AddEvidence(ctx context.Context, actor *model.AppUser, runID i
 		}
 	}
 	ownerID := actor.ID
-	return s.evidence.Create(ctx, evidencesvc.CreateInput{
+	record, err := s.evidence.Create(ctx, evidencesvc.CreateInput{
 		EvidenceKey: input.EvidenceKey, SourceType: input.SourceType, SourceRef: input.SourceRef,
 		ObservedAt: input.ObservedAt, Title: input.Title, Summary: input.Summary, Content: input.Content,
 		Confidence: input.Confidence, Sensitivity: input.Sensitivity,
@@ -458,6 +491,16 @@ func (s *Service) AddEvidence(ctx context.Context, actor *model.AppUser, runID i
 		WindowEnd: input.WindowEnd, SourceSkill: input.SourceSkill, DataSourceID: input.DataSourceID,
 		OwnerUserID: &ownerID,
 	})
+	if err != nil {
+		return nil, err
+	}
+	observability.ObserveRCAEvidence(input.EvidenceKind, input.SourceType)
+	slog.InfoContext(ctx, "rca evidence persisted",
+		"rca_run_id", runID, "rca_round_id", input.RoundID, "evidence_id", record.ID,
+		"evidence_kind", input.EvidenceKind, "source_type", input.SourceType,
+		"source_skill", input.SourceSkill,
+	)
+	return record, nil
 }
 
 func (s *Service) AddRootCauseCandidate(ctx context.Context, actor *model.AppUser, runID int64, input CreateCandidateInput) (*model.RCARootCauseCandidate, error) {
@@ -542,6 +585,16 @@ func (s *Service) CompleteRound(ctx context.Context, actor *model.AppUser, runID
 	if input.Status == model.RCARoundStatusPartialSuccess {
 		_, _ = s.repository.UpdateRCARun(ctx, runID, repository.RCARunUpdates{Status: model.RCARunStatusPartialSuccess})
 	}
+	duration := time.Duration(0)
+	if round.StartedAt != nil {
+		duration = now.Sub(*round.StartedAt)
+	}
+	observability.ObserveRCARound(round.RoundNumber, input.Status, duration)
+	slog.InfoContext(ctx, "rca round completed",
+		"rca_run_id", runID, "rca_round_id", roundID, "round", round.RoundNumber,
+		"status", input.Status, "error_code", input.ErrorCode,
+		"evidence_count", len(input.NewEvidenceIDs), "next_action_count", len(input.NextActions),
+	)
 	return updated, nil
 }
 
@@ -738,6 +791,80 @@ func (s *Service) allowedDataSourceSet(ctx context.Context, actor *model.AppUser
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) authorizeScopeDataSources(ctx context.Context, actor *model.AppUser, scope json.RawMessage) error {
+	ids := explicitDataSourceIDs(scope)
+	if len(ids) == 0 {
+		return nil
+	}
+	allowed, err := s.allowedDataSourceSet(ctx, actor)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, ok := allowed[id]; !ok {
+			return ErrForbidden
+		}
+	}
+	return nil
+}
+
+func explicitDataSourceIDs(raw json.RawMessage) []int64 {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	ids := []int64{}
+	var walk func(any, string)
+	walk = func(current any, key string) {
+		switch typed := current.(type) {
+		case map[string]any:
+			for childKey, child := range typed {
+				walk(child, childKey)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child, key)
+			}
+		case float64:
+			normalized := strings.ToLower(key)
+			if typed > 0 && (strings.HasSuffix(normalized, "datasourceid") || strings.HasSuffix(normalized, "datasourceids")) {
+				ids = append(ids, int64(typed))
+			}
+		}
+	}
+	walk(value, "")
+	return uniqueIDs(ids)
+}
+
+func (s *Service) executeRCASkill(ctx context.Context, actor *model.AppUser, name string, payload json.RawMessage, workflowRunID *int64) (*skillframework.ExecuteResult, error) {
+	if actor == nil || s.skills == nil {
+		return nil, ErrInvalidInput
+	}
+	sources, err := s.accessiblePlannerDataSources(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	if !plannerDataSourceAllowed(name, payload, sources) {
+		return nil, ErrForbidden
+	}
+	if s.skillCatalog != nil {
+		definition, getErr := s.skillCatalog.Get(name)
+		if getErr != nil || !definition.Enabled || !definition.ReadOnly || !plannerSkillAuthorized(actor, definition) {
+			return nil, ErrForbidden
+		}
+		if skillframework.ValidateJSONSchema(definition.InputSchema, payload) != nil {
+			return nil, ErrInvalidInput
+		}
+	}
+	return s.skills.Execute(ctx, skillframework.ExecuteInput{
+		Actor: actor, Name: name, Payload: payload, WorkflowRunID: workflowRunID,
+	})
+}
+
+func rcaUserLimiterKey(userID int64) string {
+	return strconv.FormatInt(userID, 10)
 }
 
 func (s *Service) validateHypothesisEvidence(ctx context.Context, runID int64, hypotheses []Hypothesis) error {
