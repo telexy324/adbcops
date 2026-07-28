@@ -43,6 +43,7 @@ func BuiltinDefinitions() []Definition {
 		nginxStatusDiagnosisWorkflow("nginx_502_diagnosis_workflow", "Nginx 502 Diagnosis", "Diagnose upstream failure Nginx 502 responses.", "diagnose_nginx_502"),
 		nginxStatusDiagnosisWorkflow("nginx_503_diagnosis_workflow", "Nginx 503 Diagnosis", "Diagnose unavailable or overloaded upstream Nginx 503 responses.", "diagnose_nginx_503"),
 		nginxStatusDiagnosisWorkflow("nginx_504_diagnosis_workflow", "Nginx 504 Diagnosis", "Diagnose upstream timeout Nginx 504 responses.", "diagnose_nginx_504"),
+		generalRCAWorkflow(),
 		linuxBasicHostDiagnosisWorkflow(),
 		linuxCPUWorkflow(),
 		linuxMemoryWorkflow(),
@@ -50,6 +51,32 @@ func BuiltinDefinitions() []Definition {
 		linuxNetworkWorkflow(),
 		linuxBatchHealthWorkflow(),
 	}
+}
+
+func generalRCAWorkflow() Definition {
+	return linearWorkflow(
+		"general_rca_workflow",
+		"General RCA",
+		"Validate resolved scope and dispatch the bounded multi-round RCA orchestrator without introducing a cycle into the workflow DAG.",
+		[]Node{
+			{
+				ID: "validate_scope", Type: NodeTypeCondition, Name: "Validate resolved RCA scope",
+				Config: rawConfig(map[string]any{"condition": map[string]any{"path": "$.workflowInput.scope.serviceName", "operator": "exists", "required": true}}),
+			},
+			{
+				ID: "coordinator", Type: NodeTypeAgent, Name: "Confirm RCA route", AgentName: "coordinator_agent",
+				Config: rawConfig(map[string]any{"inputMapping": map[string]any{
+					"query": "$.workflowInput.query", "scope": "$.workflowInput.scope",
+				}}),
+			},
+			{
+				ID: "route_is_rca", Type: NodeTypeCondition, Name: "Confirm general RCA workflow",
+				Config: rawConfig(map[string]any{"condition": map[string]any{
+					"path": "$.previous.coordinator.structured.workflow", "operator": "equals", "value": "general_rca_workflow", "required": true,
+				}}),
+			},
+		},
+	)
 }
 
 func BootstrapBuiltinDefinitions(ctx context.Context, repo BootstrapRepository, createdBy *int64) error {

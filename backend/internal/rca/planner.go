@@ -34,7 +34,7 @@ func (s *Service) PlanNext(ctx context.Context, actor *model.AppUser, runID int6
 	if err != nil {
 		return nil, err
 	}
-	if terminalRunStatus(detail.Run.Status) || len(detail.Rounds) == 0 {
+	if terminalRunStatus(detail.Run.Status) || detail.Run.FinishedAt != nil || len(detail.Rounds) == 0 {
 		return nil, ErrInvalidTransition
 	}
 	input := buildPlannerInput(detail, request)
@@ -103,8 +103,12 @@ func buildPlannerInput(detail *Detail, request PlanRequest) PlannerInput {
 	for _, candidate := range detail.Candidates {
 		var ids []int64
 		_ = json.Unmarshal(candidate.EvidenceIDs, &ids)
+		hypothesisID := plannerHypothesisID(candidate.Summary)
+		if hypothesisID == "" {
+			hypothesisID = "candidate-" + strconv.FormatInt(candidate.ID, 10)
+		}
 		existing = append(existing, PlannerHypothesis{
-			ID: "candidate-" + strconv.FormatInt(candidate.ID, 10), Summary: candidate.Summary,
+			ID: hypothesisID, Summary: candidate.Summary,
 			Confidence: candidate.Confidence, SupportingEvidenceIDs: ids,
 		})
 	}
@@ -116,6 +120,32 @@ func buildPlannerInput(detail *Detail, request PlanRequest) PlannerInput {
 		Version: PlannerVersion, RunID: detail.Run.ID, Round: detail.Run.CurrentRound,
 		Query: detail.Run.Query, Scope: detail.Run.Scope, History: history, Evidence: evidence,
 		ExistingHypotheses: existing, CompletedActionKeys: actionKeys, Budget: budget,
+	}
+}
+
+func plannerHypothesisID(summary string) string {
+	value := strings.ToLower(summary)
+	switch {
+	case strings.Contains(value, "数据库") || strings.Contains(value, "slow sql"):
+		return "database-latency"
+	case strings.Contains(value, "redis"):
+		return "redis-latency"
+	case strings.Contains(value, "nginx"):
+		return "nginx-upstream"
+	case strings.Contains(value, "kubernetes"):
+		return "k8s-pressure"
+	case strings.Contains(value, "cpu"):
+		return "linux-cpu"
+	case strings.Contains(value, "内存") || strings.Contains(value, "memory"):
+		return "linux-memory"
+	case strings.Contains(value, "磁盘") || strings.Contains(value, "disk"):
+		return "linux-disk-io"
+	case strings.Contains(value, "网络") || strings.Contains(value, "network"):
+		return "linux-network"
+	case strings.Contains(value, "下游") || strings.Contains(value, "downstream"):
+		return "downstream-latency"
+	default:
+		return ""
 	}
 }
 
@@ -152,7 +182,7 @@ func compactSignalValue(value any, depth int) any {
 				continue
 			}
 			switch lower {
-			case "summary", "durationms", "latencyms", "deltapercent", "value", "baseline", "status", "severity", "metric", "name", "count", "partial", "facts", "findings":
+			case "summary", "durationms", "latencyms", "deltapercent", "value", "baseline", "status", "severity", "metric", "name", "count", "partial", "facts", "findings", "items", "message", "templateclusters", "template":
 				result[key] = compactSignalValue(item, depth+1)
 			}
 		}

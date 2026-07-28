@@ -328,6 +328,11 @@ func (r *memoryRCARepository) UpdateRCARun(_ context.Context, id int64, updates 
 			run.ErrorMessage = updates.ErrorMessage
 		}
 	}
+	if updates.ClearStopReason {
+		run.StopReason = nil
+	} else if updates.StopReason != nil {
+		run.StopReason = updates.StopReason
+	}
 	if updates.StartedAt != nil {
 		run.StartedAt = updates.StartedAt
 	}
@@ -345,7 +350,8 @@ func (r *memoryRCARepository) MarkTimedOutRCARuns(_ context.Context, now time.Ti
 		if (run.Status == model.RCARunStatusPending || run.Status == model.RCARunStatusRunning) &&
 			run.TimeoutAt != nil && !run.TimeoutAt.After(now) {
 			code, message := "run_timeout", "RCA run exceeded its configured deadline"
-			run.Status, run.ErrorCode, run.ErrorMessage, run.FinishedAt = model.RCARunStatusTimedOut, &code, &message, &now
+			stopReason := StopReasonWallTime
+			run.Status, run.ErrorCode, run.ErrorMessage, run.StopReason, run.FinishedAt = model.RCARunStatusTimedOut, &code, &message, &stopReason, &now
 			r.runs[id] = run
 			for roundID, round := range r.rounds {
 				if round.RunID == id && (round.Status == model.RCARoundStatusPending || round.Status == model.RCARoundStatusRunning) {

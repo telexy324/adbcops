@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"aiops-platform/backend/internal/auditutil"
@@ -16,11 +17,12 @@ import (
 )
 
 var (
-	ErrInvalidInput      = errors.New("invalid input")
-	ErrForbidden         = errors.New("rca access forbidden")
-	ErrInvalidTransition = errors.New("invalid rca state transition")
-	ErrEvidenceRequired  = errors.New("root cause candidate requires evidence")
-	ErrRoundLimit        = errors.New("rca round limit reached")
+	ErrInvalidInput       = errors.New("invalid input")
+	ErrForbidden          = errors.New("rca access forbidden")
+	ErrInvalidTransition  = errors.New("invalid rca state transition")
+	ErrEvidenceRequired   = errors.New("root cause candidate requires evidence")
+	ErrRoundLimit         = errors.New("rca round limit reached")
+	ErrOrchestratorActive = errors.New("rca orchestrator already active")
 )
 
 const (
@@ -42,13 +44,15 @@ type DataSourceLister interface {
 }
 
 type Service struct {
-	repository   Repository
-	evidence     EvidenceCreator
-	dataSources  DataSourceLister
-	skills       RoundOneSkillExecutor
-	skillCatalog PlannerSkillCatalog
-	plannerModel PlannerModel
-	now          func() time.Time
+	repository          Repository
+	evidence            EvidenceCreator
+	dataSources         DataSourceLister
+	skills              RoundOneSkillExecutor
+	skillCatalog        PlannerSkillCatalog
+	plannerModel        PlannerModel
+	now                 func() time.Time
+	orchestratorMu      sync.Mutex
+	activeOrchestrators map[int64]context.CancelFunc
 }
 
 type RoundOneSkillExecutor interface {
@@ -138,6 +142,7 @@ type CompleteRunInput struct {
 	Status       string `json:"status"`
 	ErrorCode    string `json:"errorCode"`
 	ErrorMessage string `json:"errorMessage"`
+	StopReason   string `json:"stopReason"`
 }
 
 type Detail struct {
@@ -157,7 +162,7 @@ type RecoveryPlan struct {
 func NewService(repository Repository, evidence EvidenceCreator, dataSources DataSourceLister) *Service {
 	return &Service{
 		repository: repository, evidence: evidence, dataSources: dataSources,
-		now: func() time.Time { return time.Now().UTC() },
+		now: func() time.Time { return time.Now().UTC() }, activeOrchestrators: map[int64]context.CancelFunc{},
 	}
 }
 
@@ -284,6 +289,9 @@ func (s *Service) StartRound(ctx context.Context, actor *model.AppUser, runID in
 		return nil, err
 	}
 	if run.Status != model.RCARunStatusPending && run.Status != model.RCARunStatusRunning && run.Status != model.RCARunStatusPartialSuccess {
+		return nil, ErrInvalidTransition
+	}
+	if run.FinishedAt != nil {
 		return nil, ErrInvalidTransition
 	}
 	if run.CurrentRound >= run.MaxRounds {
@@ -559,8 +567,13 @@ func (s *Service) CompleteRun(ctx context.Context, actor *model.AppUser, runID i
 	}
 	now := s.now()
 	code, message := safeFailure(input.ErrorCode, input.ErrorMessage)
+	stopReason := truncateText(auditutil.SanitizeText(strings.TrimSpace(input.StopReason)), 80)
+	var stopReasonPointer *string
+	if stopReason != "" {
+		stopReasonPointer = &stopReason
+	}
 	return s.repository.UpdateRCARun(ctx, runID, repository.RCARunUpdates{
-		Status: input.Status, ErrorCode: code, ErrorMessage: message, FinishedAt: &now,
+		Status: input.Status, ErrorCode: code, ErrorMessage: message, StopReason: stopReasonPointer, FinishedAt: &now,
 	})
 }
 
@@ -571,6 +584,12 @@ func (s *Service) Cancel(ctx context.Context, actor *model.AppUser, runID int64)
 	}
 	if terminalRunStatus(run.Status) {
 		return nil, ErrInvalidTransition
+	}
+	s.orchestratorMu.Lock()
+	cancel := s.activeOrchestrators[runID]
+	s.orchestratorMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	now := s.now()
 	rounds, err := s.repository.ListRCARounds(ctx, runID)
@@ -601,9 +620,10 @@ func (s *Service) Cancel(ctx context.Context, actor *model.AppUser, runID int64)
 	}
 	code := "cancelled"
 	message := "RCA run was cancelled"
+	stopReason := "user_cancelled"
 	return s.repository.UpdateRCARun(ctx, runID, repository.RCARunUpdates{
 		Status: model.RCARunStatusCancelled, CancelRequestedAt: &now,
-		ErrorCode: &code, ErrorMessage: &message, FinishedAt: &now,
+		ErrorCode: &code, ErrorMessage: &message, StopReason: &stopReason, FinishedAt: &now,
 	})
 }
 
@@ -651,7 +671,7 @@ func (s *Service) Recover(ctx context.Context, actor *model.AppUser, runID int64
 		}
 	}
 	updated, err := s.repository.UpdateRCARun(ctx, runID, repository.RCARunUpdates{
-		Status: model.RCARunStatusRunning, ClearError: true, ClearFinishedAt: true,
+		Status: model.RCARunStatusRunning, ClearError: true, ClearStopReason: true, ClearFinishedAt: true,
 	})
 	if err != nil {
 		return nil, err

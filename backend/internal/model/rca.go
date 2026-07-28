@@ -47,6 +47,7 @@ type RCARun struct {
 	CancelRequestedAt *time.Time      `gorm:"column:cancel_requested_at" json:"cancelRequestedAt,omitempty"`
 	ErrorCode         *string         `gorm:"column:error_code;size:80" json:"errorCode,omitempty"`
 	ErrorMessage      *string         `gorm:"column:error_message" json:"errorMessage,omitempty"`
+	StopReason        *string         `gorm:"column:stop_reason;size:80" json:"stopReason,omitempty"`
 	StartedAt         *time.Time      `gorm:"column:started_at" json:"startedAt,omitempty"`
 	FinishedAt        *time.Time      `gorm:"column:finished_at" json:"finishedAt,omitempty"`
 	CreatedAt         time.Time       `gorm:"column:created_at;autoCreateTime" json:"createdAt"`

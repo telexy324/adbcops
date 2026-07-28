@@ -132,6 +132,23 @@ func (h *RCAHandler) PlanNext(c *gin.Context) {
 	success(c, result)
 }
 
+func (h *RCAHandler) Orchestrate(c *gin.Context) {
+	actor, runID, ok := currentUserAndRCAID(c)
+	if !ok {
+		return
+	}
+	var request rcasvc.OrchestrateInput
+	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.Orchestrate(c.Request.Context(), actor, runID, request)
+	if handleRCAError(c, err, "orchestrate RCA run failed") {
+		return
+	}
+	success(c, result)
+}
+
 func (h *RCAHandler) Cancel(c *gin.Context) {
 	actor, runID, ok := currentUserAndRCAID(c)
 	if !ok {
@@ -178,6 +195,8 @@ func handleRCAError(c *gin.Context, err error, fallback string) bool {
 	case errors.Is(err, rcasvc.ErrInvalidInput), errors.Is(err, rcasvc.ErrEvidenceRequired),
 		errors.Is(err, rcasvc.ErrRoundLimit), errors.Is(err, rcasvc.ErrInvalidTransition):
 		failure(c, http.StatusBadRequest, 40001, err.Error())
+	case errors.Is(err, rcasvc.ErrOrchestratorActive):
+		failure(c, http.StatusConflict, 40901, err.Error())
 	case errors.Is(err, rcasvc.ErrForbidden):
 		failure(c, http.StatusForbidden, 40301, "RCA access forbidden")
 	case errors.Is(err, repository.ErrNotFound):

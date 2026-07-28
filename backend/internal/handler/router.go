@@ -95,6 +95,7 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		rcaRoutes.GET("/:id/evidence", dependencies.RCAHandler.ListEvidence)
 		rcaRoutes.POST("/:id/round-one/collect", dependencies.RCAHandler.CollectRoundOne)
 		rcaRoutes.POST("/:id/plan", dependencies.RCAHandler.PlanNext)
+		rcaRoutes.POST("/:id/orchestrate", dependencies.RCAHandler.Orchestrate)
 		rcaRoutes.POST("/:id/cancel", dependencies.RCAHandler.Cancel)
 		rcaRoutes.POST("/:id/recover", dependencies.RCAHandler.Recover)
 	}

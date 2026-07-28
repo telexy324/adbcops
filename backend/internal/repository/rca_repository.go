@@ -45,7 +45,9 @@ type RCARunUpdates struct {
 	CancelRequestedAt *time.Time
 	ErrorCode         *string
 	ErrorMessage      *string
+	StopReason        *string
 	ClearError        bool
+	ClearStopReason   bool
 	StartedAt         *time.Time
 	FinishedAt        *time.Time
 	ClearFinishedAt   bool
@@ -140,6 +142,11 @@ func (r *GORMRCARepository) UpdateRCARun(ctx context.Context, id int64, updates 
 			values["error_message"] = *updates.ErrorMessage
 		}
 	}
+	if updates.ClearStopReason {
+		values["stop_reason"] = nil
+	} else if updates.StopReason != nil {
+		values["stop_reason"] = *updates.StopReason
+	}
 	if updates.StartedAt != nil {
 		values["started_at"] = *updates.StartedAt
 	}
@@ -173,7 +180,8 @@ func (r *GORMRCARepository) MarkTimedOutRCARuns(ctx context.Context, now time.Ti
 		}
 		if err := tx.Model(&model.RCARun{}).Where("id IN ?", runIDs).Updates(map[string]any{
 			"status": model.RCARunStatusTimedOut, "error_code": "run_timeout",
-			"error_message": "RCA run exceeded its configured deadline", "finished_at": now, "updated_at": now,
+			"error_message": "RCA run exceeded its configured deadline", "stop_reason": "wall_time_budget_exhausted",
+			"finished_at": now, "updated_at": now,
 		}).Error; err != nil {
 			return fmt.Errorf("mark timed out rca runs: %w", err)
 		}

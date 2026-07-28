@@ -104,6 +104,39 @@ func TestExecutorRunsReadyCollectorNodesInParallel(t *testing.T) {
 	}
 }
 
+func TestWorkflowConditionEvaluatesResolvedInput(t *testing.T) {
+	config := json.RawMessage(`{"condition":{"path":"$.workflowInput.scope.serviceName","operator":"exists"}}`)
+	input := json.RawMessage(`{"workflowInput":{"scope":{"serviceName":"order-service"}},"previous":{}}`)
+	matched, detail, err := evaluateWorkflowCondition(config, input)
+	if err != nil || !matched || detail == "legacy_control" {
+		t.Fatalf("condition did not evaluate real input: matched=%v detail=%q err=%v", matched, detail, err)
+	}
+	missing := json.RawMessage(`{"workflowInput":{"scope":{}},"previous":{}}`)
+	matched, _, err = evaluateWorkflowCondition(config, missing)
+	if err != nil || matched {
+		t.Fatalf("missing scope unexpectedly matched condition: matched=%v err=%v", matched, err)
+	}
+}
+
+func TestWorkflowInputMappingSafelyUsesPreviousNodeOutput(t *testing.T) {
+	mapping := json.RawMessage(`{"dataSourceId":"$.previous.bindings.dataSourceId","serviceName":"$.workflowInput.scope.serviceName"}`)
+	workflowInput := json.RawMessage(`{"scope":{"serviceName":"order-service"}}`)
+	previous := map[string]json.RawMessage{"bindings": json.RawMessage(`{"dataSourceId":27}`)}
+	raw, err := resolveWorkflowInputMapping(mapping, workflowInput, previous)
+	if err != nil {
+		t.Fatalf("resolve mapping: %v", err)
+	}
+	var result map[string]any
+	_ = json.Unmarshal(raw, &result)
+	if result["dataSourceId"] != float64(27) || result["serviceName"] != "order-service" {
+		t.Fatalf("unexpected mapped input: %s", raw)
+	}
+	_, err = resolveWorkflowInputMapping(json.RawMessage(`{"unsafe":"$.environment.HOME"}`), workflowInput, previous)
+	if !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("unsafe mapping path was accepted: %v", err)
+	}
+}
+
 func TestExecutorCancelStopsActiveNodesAndPersistsCancelled(t *testing.T) {
 	definition := Definition{
 		Name: "cancel_workflow", Version: "v1",

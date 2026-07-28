@@ -38,6 +38,8 @@ type RoundOneCollectionInput struct {
 	TraceID             string   `json:"traceId,omitempty"`
 	DependencyNames     []string `json:"dependencyNames,omitempty"`
 	LogTemplates        []string `json:"logTemplates,omitempty"`
+	MaxConcurrency      int      `json:"-"`
+	MaxSkillCalls       int      `json:"-"`
 }
 
 type RoundOneWindows struct {
@@ -124,6 +126,10 @@ func (s *Service) CollectRoundOne(ctx context.Context, actor *model.AppUser, run
 	if err != nil {
 		return nil, err
 	}
+	if input.MaxSkillCalls > 0 && len(plans) > input.MaxSkillCalls {
+		plans = plans[:input.MaxSkillCalls]
+		missing = append(missing, "round one plans were limited by the Skill Call budget")
+	}
 	round, err := s.StartRound(ctx, actor, runID, StartRoundInput{})
 	if err != nil {
 		return nil, err
@@ -145,6 +151,11 @@ func (s *Service) CollectRoundOne(ctx context.Context, actor *model.AppUser, run
 	}
 
 	var wait sync.WaitGroup
+	concurrency := input.MaxConcurrency
+	if concurrency <= 0 || concurrency > len(executions) {
+		concurrency = len(executions)
+	}
+	sem := make(chan struct{}, maxIntRCA(concurrency, 1))
 	for index := range executions {
 		if !executions[index].plan.Execute {
 			executions[index].err = errors.New(executions[index].plan.MissingReason)
@@ -153,6 +164,13 @@ func (s *Service) CollectRoundOne(ctx context.Context, actor *model.AppUser, run
 		wait.Add(1)
 		go func(execution *roundOneExecution) {
 			defer wait.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				execution.err = ctx.Err()
+				return
+			}
 			execution.result, execution.err = s.skills.Execute(ctx, skillframework.ExecuteInput{
 				Actor: actor, Name: execution.plan.SkillName, Payload: execution.plan.Payload,
 				WorkflowRunID: run.WorkflowRunID,

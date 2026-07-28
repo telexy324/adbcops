@@ -237,6 +237,7 @@ func plannerTestCatalog() fakePlannerCatalog {
 	add("find_topology_node", model.SkillRiskSafeRead, `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"environment":{"type":"string"},"limit":{"type":"integer"}}}`)
 	add("find_dependencies", model.SkillRiskSafeRead, `{"type":"object","required":["nodeKey"],"properties":{"nodeKey":{"type":"string"},"direction":{"type":"string"},"depth":{"type":"integer"},"maxNodes":{"type":"integer"},"maxEdges":{"type":"integer"},"environment":{"type":"string"}}}`)
 	add("query_tidb_slow_queries", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"minutes":{"type":"integer"},"limit":{"type":"integer"}}}`)
+	add("query_tidb_processlist", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"limit":{"type":"integer"}}}`)
 	add("query_redis_latency", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"}}}`)
 	add("diagnose_redis_connection_pool", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"}}}`)
 	add("diagnose_nginx_504", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"limit":{"type":"integer"}}}`)

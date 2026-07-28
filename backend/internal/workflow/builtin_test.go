@@ -15,8 +15,8 @@ import (
 
 func TestBuiltinDefinitionsValidate(t *testing.T) {
 	definitions := BuiltinDefinitions()
-	if len(definitions) != 30 {
-		t.Fatalf("builtin workflow count = %d, want 30", len(definitions))
+	if len(definitions) != 31 {
+		t.Fatalf("builtin workflow count = %d, want 31", len(definitions))
 	}
 	assertBuiltinWorkflowNames(t, definitions, []string{
 		"service_diagnosis_workflow",
@@ -38,6 +38,7 @@ func TestBuiltinDefinitionsValidate(t *testing.T) {
 		"nginx_502_diagnosis_workflow",
 		"nginx_503_diagnosis_workflow",
 		"nginx_504_diagnosis_workflow",
+		"general_rca_workflow",
 		"linux_basic_host_diagnosis_workflow",
 		"linux_cpu_diagnosis_workflow",
 		"linux_memory_diagnosis_workflow",
@@ -108,6 +109,46 @@ func TestBuiltinWorkflowProducesCompleteRunRecord(t *testing.T) {
 		if node.Status == "" || node.StartedAt == nil || node.FinishedAt == nil {
 			t.Fatalf("node run is incomplete: %+v", node)
 		}
+	}
+}
+
+func TestGeneralRCAWorkflowExecutesRealConditionsAndCoordinatorRoute(t *testing.T) {
+	var definition Definition
+	for _, candidate := range BuiltinDefinitions() {
+		if candidate.Name == "general_rca_workflow" {
+			definition = candidate
+			break
+		}
+	}
+	if definition.Name == "" {
+		t.Fatal("general_rca_workflow is not registered")
+	}
+	agents, err := agentruntime.NewRuntime(nil, nil, agentruntime.Limits{}, agentruntime.CoordinatorAgent{})
+	if err != nil {
+		t.Fatalf("create agent runtime: %v", err)
+	}
+	repo := newExecutorMemoryRepo(definition)
+	executor := NewExecutor(repo, agents, builtinTestSkills{}, time.Second)
+	run, err := executor.Run(context.Background(), ExecutorInput{
+		Actor: adminWorkflowActor(), WorkflowID: 1,
+		Input: json.RawMessage(`{"query":"订单服务变慢，请查询可能原因","scope":{"serviceName":"order-service","symptom":"performance_degradation"}}`),
+	})
+	if err != nil || run.Status != model.WorkflowRunStatusSuccess {
+		t.Fatalf("execute general RCA workflow: run=%+v err=%v", run, err)
+	}
+	matchedConditions := 0
+	for _, node := range run.NodeRuns {
+		if node.NodeType != NodeTypeCondition {
+			continue
+		}
+		var output map[string]any
+		_ = json.Unmarshal(node.Output, &output)
+		if output["matched"] == true && output["status"] == "evaluated" {
+			matchedConditions++
+		}
+	}
+	if matchedConditions != 2 {
+		t.Fatalf("general RCA conditions did not evaluate real state: %+v", run.NodeRuns)
 	}
 }
 

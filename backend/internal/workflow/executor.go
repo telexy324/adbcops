@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -281,7 +282,10 @@ func (e *Executor) executeBatch(ctx context.Context, workflowRunID int64, actor 
 
 func (e *Executor) executeNode(ctx context.Context, workflowRunID int64, actor *model.AppUser, node Node, input json.RawMessage, previous map[string]json.RawMessage) (json.RawMessage, error) {
 	startedAt := e.now()
-	nodeInput := nodeInputPayload(node, input, previous)
+	nodeInput, mappingErr := nodeInputPayload(node, input, previous)
+	if mappingErr != nil {
+		return nil, mappingErr
+	}
 	nodeRun := &model.WorkflowNodeRun{
 		WorkflowRunID: workflowRunID,
 		NodeID:        node.ID,
@@ -363,8 +367,17 @@ func isPartialWorkflowOutput(output json.RawMessage) bool {
 
 func (e *Executor) dispatchNode(ctx context.Context, workflowRunID, nodeRunID int64, actor *model.AppUser, node Node, input json.RawMessage) (json.RawMessage, error) {
 	switch node.Type {
-	case NodeTypeStart, NodeTypeEnd, NodeTypeCondition, NodeTypeMerge:
+	case NodeTypeStart, NodeTypeEnd, NodeTypeMerge:
 		return json.Marshal(map[string]any{"status": "ok", "nodeType": node.Type})
+	case NodeTypeCondition:
+		matched, detail, err := evaluateWorkflowCondition(node.Config, input)
+		if err != nil {
+			return nil, err
+		}
+		if !matched && workflowConditionRequired(node.Config) {
+			return nil, fmt.Errorf("%w: required condition did not match", ErrInvalidDefinition)
+		}
+		return json.Marshal(map[string]any{"status": "evaluated", "nodeType": node.Type, "matched": matched, "detail": detail})
 	case NodeTypeSkill:
 		result, err := e.skills.Execute(ctx, skillframework.ExecuteInput{
 			Actor:         actor,
@@ -446,19 +459,172 @@ func normalizedJSON(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-func nodeInputPayload(node Node, workflowInput json.RawMessage, previous map[string]json.RawMessage) json.RawMessage {
+func nodeInputPayload(node Node, workflowInput json.RawMessage, previous map[string]json.RawMessage) (json.RawMessage, error) {
 	var config map[string]json.RawMessage
 	if len(node.Config) > 0 && json.Unmarshal(node.Config, &config) == nil {
+		if mapping, ok := config["inputMapping"]; ok {
+			return resolveWorkflowInputMapping(mapping, workflowInput, previous)
+		}
 		if input, ok := config["input"]; ok && json.Valid(input) {
-			return input
+			return input, nil
 		}
 		if contextInput, ok := config["context"]; ok && json.Valid(contextInput) {
-			return contextInput
+			return contextInput, nil
 		}
 	}
 	envelope := map[string]any{"workflowInput": json.RawMessage(workflowInput), "previous": previous}
 	raw, _ := json.Marshal(envelope)
-	return raw
+	return raw, nil
+}
+
+func resolveWorkflowInputMapping(mappingRaw, workflowInput json.RawMessage, previous map[string]json.RawMessage) (json.RawMessage, error) {
+	var mappings map[string]string
+	if json.Unmarshal(mappingRaw, &mappings) != nil || len(mappings) == 0 || len(mappings) > 32 {
+		return nil, ErrInvalidDefinition
+	}
+	envelope := map[string]any{}
+	var workflowValue any
+	if json.Unmarshal(workflowInput, &workflowValue) != nil {
+		return nil, ErrInvalidDefinition
+	}
+	previousValue := map[string]any{}
+	for key, raw := range previous {
+		var value any
+		if json.Unmarshal(raw, &value) == nil {
+			previousValue[key] = value
+		}
+	}
+	envelope["workflowInput"], envelope["previous"] = workflowValue, previousValue
+	result := map[string]any{}
+	for target, path := range mappings {
+		if !safeMappingKey(target) {
+			return nil, ErrInvalidDefinition
+		}
+		value, ok := resolveWorkflowPath(envelope, path)
+		if !ok {
+			return nil, fmt.Errorf("%w: mapping path not found", ErrInvalidDefinition)
+		}
+		result[target] = value
+	}
+	raw, _ := json.Marshal(result)
+	if len(raw) > 8192 {
+		return nil, fmt.Errorf("%w: mapped input too large", ErrInvalidDefinition)
+	}
+	return raw, nil
+}
+
+func evaluateWorkflowCondition(configRaw, input json.RawMessage) (bool, string, error) {
+	var config struct {
+		Condition struct {
+			Path     string `json:"path"`
+			Operator string `json:"operator"`
+			Value    any    `json:"value"`
+			Required bool   `json:"required"`
+		} `json:"condition"`
+	}
+	if len(configRaw) == 0 {
+		return true, "legacy_control", nil
+	}
+	if json.Unmarshal(configRaw, &config) != nil {
+		return false, "", fmt.Errorf("%w: invalid condition config", ErrInvalidDefinition)
+	}
+	if strings.TrimSpace(config.Condition.Path) == "" {
+		return true, "legacy_control", nil
+	}
+	var envelope map[string]any
+	if json.Unmarshal(input, &envelope) != nil {
+		return false, "", fmt.Errorf("%w: invalid condition input", ErrInvalidDefinition)
+	}
+	value, exists := resolveWorkflowPath(envelope, config.Condition.Path)
+	operator := strings.ToLower(strings.TrimSpace(config.Condition.Operator))
+	matched := false
+	switch operator {
+	case "exists":
+		matched = exists && !workflowZeroValue(value)
+	case "not_exists":
+		matched = !exists || workflowZeroValue(value)
+	case "equals":
+		matched = exists && fmt.Sprint(value) == fmt.Sprint(config.Condition.Value)
+	case "not_equals":
+		matched = !exists || fmt.Sprint(value) != fmt.Sprint(config.Condition.Value)
+	case "truthy":
+		matched = exists && !workflowZeroValue(value)
+	default:
+		return false, "", fmt.Errorf("%w: unsupported condition operator", ErrInvalidDefinition)
+	}
+	return matched, operator + ":" + config.Condition.Path, nil
+}
+
+func workflowConditionRequired(configRaw json.RawMessage) bool {
+	var config struct {
+		Condition struct {
+			Required bool `json:"required"`
+		} `json:"condition"`
+	}
+	return json.Unmarshal(configRaw, &config) == nil && config.Condition.Required
+}
+
+func resolveWorkflowPath(root map[string]any, path string) (any, bool) {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "$.") || len(path) > 256 {
+		return nil, false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "$."), ".")
+	if len(parts) < 2 || parts[0] != "workflowInput" && parts[0] != "previous" {
+		return nil, false
+	}
+	var current any = root
+	for _, part := range parts {
+		if !safeMappingKey(part) {
+			return nil, false
+		}
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false
+		}
+		if raw, ok := current.(string); ok && json.Valid([]byte(raw)) {
+			var decoded any
+			if json.Unmarshal([]byte(raw), &decoded) == nil {
+				current = decoded
+			}
+		}
+	}
+	return current, true
+}
+
+func safeMappingKey(value string) bool {
+	if value == "" || len(value) > 80 {
+		return false
+	}
+	for _, character := range value {
+		if character != '_' && character != '-' && (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func workflowZeroValue(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case float64:
+		return typed == 0
+	case bool:
+		return !typed
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	default:
+		return false
+	}
 }
 
 func skillPayload(input json.RawMessage) json.RawMessage {

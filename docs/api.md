@@ -21,6 +21,30 @@ Content-Type: application/json
 
 响应包含版本化假设、支持/反证 Evidence ID、证据缺口、下一步已校验的只读 Skill 动作、停止判断及确定性降级状态。省略请求体时按当前 RCA Run 计算默认预算。
 
+### 受控多轮执行
+
+```http
+POST /api/rca/runs/{id}/orchestrate
+Content-Type: application/json
+
+{
+  "roundOne": {},
+  "budget": {
+    "maxRounds": 3,
+    "maxSkillCallsPerRound": 12,
+    "maxSkillCalls": 24,
+    "maxConcurrentSkills": 4,
+    "maxTokens": 16000,
+    "maxContextBytes": 65536,
+    "maxWallTimeSeconds": 300,
+    "confidenceThreshold": 0.85
+  },
+  "useLlm": true
+}
+```
+
+Orchestrator 执行“第一轮多源采集 → 规划 → 并行只读 Skill → Evidence 归一化 → 重新规划”。最多执行三轮，并在 `rca_run.stop_reason` 保存明确停止原因。恢复执行复用成功 Action 和已有 Evidence Key，不重复执行或写入。
+
 ## Auth
 
 除登录与健康检查外，认证接口使用：
