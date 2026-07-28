@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -95,6 +96,23 @@ func (h *RCAHandler) ListEvidence(c *gin.Context) {
 		return
 	}
 	success(c, evidence)
+}
+
+func (h *RCAHandler) CollectRoundOne(c *gin.Context) {
+	actor, runID, ok := currentUserAndRCAID(c)
+	if !ok {
+		return
+	}
+	var request rcasvc.RoundOneCollectionInput
+	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
+		failure(c, http.StatusBadRequest, 40001, "invalid request")
+		return
+	}
+	result, err := h.service.CollectRoundOne(c.Request.Context(), actor, runID, request)
+	if handleRCAError(c, err, "collect RCA round one evidence failed") {
+		return
+	}
+	success(c, result)
 }
 
 func (h *RCAHandler) Cancel(c *gin.Context) {

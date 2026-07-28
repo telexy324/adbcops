@@ -216,11 +216,15 @@ func TestRCARunAPIRequiresAuthentication(t *testing.T) {
 		RCAHandler:   &RCAHandler{},
 		Authenticate: appmiddleware.Authenticate(&routerFakeAuthenticator{}),
 	})
-	request := httptest.NewRequest(http.MethodGet, "/api/rca/runs", nil)
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/rca/runs", nil),
+		httptest.NewRequest(http.MethodPost, "/api/rca/runs/1/round-one/collect", nil),
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s status = %d, want %d", request.Method, request.URL.Path, response.Code, http.StatusUnauthorized)
+		}
 	}
 }
 

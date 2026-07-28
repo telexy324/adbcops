@@ -12,6 +12,7 @@ import (
 	evidencesvc "aiops-platform/backend/internal/evidence"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
+	"aiops-platform/backend/internal/skillframework"
 )
 
 var (
@@ -44,7 +45,12 @@ type Service struct {
 	repository  Repository
 	evidence    EvidenceCreator
 	dataSources DataSourceLister
+	skills      RoundOneSkillExecutor
 	now         func() time.Time
+}
+
+type RoundOneSkillExecutor interface {
+	Execute(ctx context.Context, input skillframework.ExecuteInput) (*skillframework.ExecuteResult, error)
 }
 
 type CreateRunInput struct {
@@ -151,6 +157,11 @@ func NewService(repository Repository, evidence EvidenceCreator, dataSources Dat
 		repository: repository, evidence: evidence, dataSources: dataSources,
 		now: func() time.Time { return time.Now().UTC() },
 	}
+}
+
+func (s *Service) WithSkillExecutor(skills RoundOneSkillExecutor) *Service {
+	s.skills = skills
+	return s
 }
 
 func (s *Service) CreateRun(ctx context.Context, actor *model.AppUser, input CreateRunInput) (*model.RCARun, error) {
