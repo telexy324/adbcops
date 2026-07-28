@@ -70,6 +70,18 @@ func (r *GORMAgentRunRepository) ListAgentRuns(ctx context.Context, limit int) (
 	return runs, nil
 }
 
+func (r *GORMAgentRunRepository) ListAgentRunsByWorkflowRunID(ctx context.Context, workflowRunID int64) ([]model.AgentRun, error) {
+	if workflowRunID <= 0 {
+		return []model.AgentRun{}, nil
+	}
+	var runs []model.AgentRun
+	if err := r.db.WithContext(ctx).Where("workflow_run_id = ?", workflowRunID).
+		Order("id ASC").Find(&runs).Error; err != nil {
+		return nil, fmt.Errorf("list agent runs by workflow run: %w", err)
+	}
+	return runs, nil
+}
+
 func (r *GORMAgentRunRepository) FindAgentRunByID(ctx context.Context, id int64) (*model.AgentRun, error) {
 	var run model.AgentRun
 	if err := r.db.WithContext(ctx).First(&run, id).Error; err != nil {

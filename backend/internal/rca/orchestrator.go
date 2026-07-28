@@ -79,6 +79,7 @@ type OrchestratorRoundResult struct {
 type OrchestratorResult struct {
 	Version    string                    `json:"version"`
 	Run        *model.RCARun             `json:"run"`
+	Report     *RCAReport                `json:"report,omitempty"`
 	StopReason string                    `json:"stopReason"`
 	Usage      OrchestratorUsage         `json:"usage"`
 	Rounds     []OrchestratorRoundResult `json:"rounds"`
@@ -824,6 +825,7 @@ func (s *Service) finishOrchestration(ctx context.Context, actor *model.AppUser,
 			}
 		}
 		outcome.Run, outcome.StopReason = run, reason
+		outcome.Report, _ = s.BuildReport(ctx, actor, runID)
 		return outcome, nil
 	}
 	if status == model.RCARunStatusSuccess {
@@ -837,6 +839,7 @@ func (s *Service) finishOrchestration(ctx context.Context, actor *model.AppUser,
 		return nil, err
 	}
 	outcome.Run, outcome.StopReason = updated, reason
+	outcome.Report, _ = s.BuildReport(ctx, actor, runID)
 	return outcome, nil
 }
 

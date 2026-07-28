@@ -51,6 +51,8 @@ type Service struct {
 	skillCatalog               PlannerSkillCatalog
 	plannerModel               PlannerModel
 	databaseDiagnosisProviders []DatabaseDiagnosisProvider
+	reportAgentRuns            ReportAgentRunLister
+	reportSkillRuns            ReportSkillRunLister
 	now                        func() time.Time
 	orchestratorMu             sync.Mutex
 	activeOrchestrators        map[int64]context.CancelFunc

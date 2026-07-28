@@ -72,3 +72,15 @@ func (r *GORMSkillRunRepository) ListSkillRuns(ctx context.Context, limit int) (
 	}
 	return runs, nil
 }
+
+func (r *GORMSkillRunRepository) ListSkillRunsByWorkflowRunID(ctx context.Context, workflowRunID int64) ([]model.SkillRun, error) {
+	if workflowRunID <= 0 {
+		return []model.SkillRun{}, nil
+	}
+	var runs []model.SkillRun
+	if err := r.db.WithContext(ctx).Where("workflow_run_id = ?", workflowRunID).
+		Order("id ASC").Find(&runs).Error; err != nil {
+		return nil, fmt.Errorf("list skill runs by workflow run: %w", err)
+	}
+	return runs, nil
+}

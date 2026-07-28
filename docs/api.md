@@ -33,6 +33,27 @@ Content-Type: application/json
 
 当前 Provider 仅实现 `tidb`。缺少安全 SQL 时不会调度 EXPLAIN；TiDB 查询失败时对应 Action 和 Round 返回 `partial_success`，并保留明确缺失证据。
 
+## RCA Report
+
+```http
+GET  /api/rca/runs/{id}/report
+POST /api/rca/runs/{id}/report/drafts
+```
+
+`GET /report` 使用已持久化的三轮 RCA 数据生成确定性结构化报告，不依赖 LLM。响应包括：
+
+- `scope`、`impactScope` 和跨 Round/Action/Evidence 的 `timeline`；
+- 按 FACT、RULE、KNOWLEDGE、HYPOTHESIS 分组的 Evidence，每项提供 `/api/evidence/{id}` 链接；
+- 按证据强度排序的 `rootCauseCandidates`，分别列出支持证据、反证、置信度和候选状态；
+- 每轮 `checked`、`findings`、`continueReason` 和最终 `stopReason`；
+- 显著的 `incomplete`、`missingEvidence`、`partial_success` 与无法定位结论；
+- 仅供人工评估且固定 `autoExecute=false` 的建议和风险提示；
+- RCA Run、Workflow Run、Agent Run、Skill Run、Round、Action 与 Evidence 的 `traceability`。
+
+`POST /report/drafts` 只生成 Incident 请求草稿和 Markdown RCA 文档草稿，不写入 Incident、知识中心或文件系统，也不会执行任何修复。调用方必须经过用户复核后，再显式调用现有 Incident 或文档接口保存。
+
+报告和草稿只包含脱敏 Scope、摘要和 Evidence 引用，不返回 Evidence 原始 Content、凭据或未脱敏 SQL。
+
 ### 受控多轮执行
 
 ```http
@@ -1109,6 +1130,8 @@ GET  /api/rca/runs/{id}
 GET  /api/rca/runs/{id}/rounds
 GET  /api/rca/runs/{id}/actions
 GET  /api/rca/runs/{id}/evidence
+GET  /api/rca/runs/{id}/report
+POST /api/rca/runs/{id}/report/drafts
 POST /api/rca/runs/{id}/cancel
 POST /api/rca/runs/{id}/recover
 ```

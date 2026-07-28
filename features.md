@@ -12047,6 +12047,16 @@ status
 7. 报告不包含凭据和未脱敏原文；
 8. 报告可追溯到 Workflow Run、Agent Run 和 Skill Run。
 
+实现状态（2026-07-28）：已完成。
+
+- 新增确定性 RCA Report Aggregator，汇总三轮 Scope、Timeline、四类 Evidence、根因候选、缺失证据、调查过程、建议和风险；
+- 根因候选按多源 Evidence、Evidence 数量和置信度形成的证据强度排序，同时展示支持证据与反证；
+- 每个 Evidence 返回可访问链接，候选和已驳回假设不会显示为确认事实；
+- `partial_success`、失败数据源和“暂无法定位”作为结构化报告结果显著返回；
+- 报告不依赖 LLM，并在输出边界再次脱敏凭据、账号、个人信息及 SQL Literal；
+- Traceability 覆盖 RCA Run、Workflow Run、Agent Run、Skill Run、Round、Action 和 Evidence；
+- 支持生成 Incident 与 Markdown RCA 文档草稿，但不自动保存、发布或执行建议。
+
 ### Task 4.12：多轮智能分析前端
 
 目标：

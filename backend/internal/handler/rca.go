@@ -98,6 +98,30 @@ func (h *RCAHandler) ListEvidence(c *gin.Context) {
 	success(c, evidence)
 }
 
+func (h *RCAHandler) GetReport(c *gin.Context) {
+	actor, runID, ok := currentUserAndRCAID(c)
+	if !ok {
+		return
+	}
+	report, err := h.service.BuildReport(c.Request.Context(), actor, runID)
+	if handleRCAError(c, err, "build RCA report failed") {
+		return
+	}
+	success(c, report)
+}
+
+func (h *RCAHandler) GenerateReportDrafts(c *gin.Context) {
+	actor, runID, ok := currentUserAndRCAID(c)
+	if !ok {
+		return
+	}
+	drafts, err := h.service.BuildReportDrafts(c.Request.Context(), actor, runID)
+	if handleRCAError(c, err, "generate RCA report drafts failed") {
+		return
+	}
+	success(c, drafts)
+}
+
 func (h *RCAHandler) CollectRoundOne(c *gin.Context) {
 	actor, runID, ok := currentUserAndRCAID(c)
 	if !ok {

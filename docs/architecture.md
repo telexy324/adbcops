@@ -21,3 +21,11 @@
 TiDB Provider 最多调度 `query_tidb_slow_queries`、`query_tidb_processlist`、`query_tidb_lock_waits`、`query_tidb_hot_regions`、`query_tidb_statistics_health` 和 `explain_tidb_sql`。EXPLAIN 仅在共享的单条 `SELECT/SHOW` 校验通过时加入，固定 `analyze=false`；无安全 SQL 时记录缺失执行计划证据，不断言索引失效。
 
 慢查询按 Digest 的累计 `total_query_time` 和执行次数排序，而不是只按单次最大耗时。SQL Evidence 保留脱敏结构和稳定指纹，Literal、注释、Token、账号及个人信息不会进入 Evidence。诊断计划显式保留服务、时间窗、Trace、调用量和基线关联维度，缺失的关联 Evidence 会进入 `missingEvidence`。Assessment 分别标记慢 SQL 影响、连接压力、资源压力、锁竞争、热点 Region、统计异常和执行计划回退；只有慢 SQL Evidence 与至少一种补充 Evidence 同时存在时，才将 slow SQL 标记为中等置信度的 contributing factor，否则保持低置信度和 `partial_success`。
+
+### 确定性 RCA 报告聚合
+
+RCA Report Aggregator 直接读取已经过权限过滤的 Run、Round、Action、Evidence 和根因候选，不要求 LLM 可用，也不复制 Evidence 原始 Content。报告按 Evidence Kind 分组，以 Evidence 来源数量、引用数量和候选置信度计算可解释的证据强度并排序；候选与已驳回假设始终明确区分，不会把推测渲染成确认事实。
+
+每轮报告保存“查询了什么、发现了什么、继续原因和停止原因”，并将 `partial_success`、失败 Skill、数据源缺失及“暂无法定位”作为一等结果。Evidence 使用 `/api/evidence/{id}` 引用，Traceability 同时连接 RCA Run、Workflow Run、Agent Run、Skill Run、Round 和 Action。
+
+Incident 和 Markdown RCA 文档均以只读草稿 Payload 生成。生成草稿不会创建 Incident、写入知识中心、发布文档或执行建议；保存和发布仍必须经过现有显式 API 与权限流程。
