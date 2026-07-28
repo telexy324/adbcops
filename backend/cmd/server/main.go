@@ -39,6 +39,7 @@ import (
 	qualityeval "aiops-platform/backend/internal/qualityevaluation"
 	qualitysvc "aiops-platform/backend/internal/qualitystandard"
 	ragsvc "aiops-platform/backend/internal/rag"
+	rcasvc "aiops-platform/backend/internal/rca"
 	redissvc "aiops-platform/backend/internal/redis"
 	"aiops-platform/backend/internal/repository"
 	retrievaleval "aiops-platform/backend/internal/retrievalevaluation"
@@ -100,6 +101,7 @@ func run() error {
 	analysisRepository := repository.NewAnalysisRepository(databaseConnection.GORM)
 	eventRepository := repository.NewEventRepository(databaseConnection.GORM)
 	evidenceRepository := repository.NewEvidenceRepository(databaseConnection.GORM)
+	rcaRepository := repository.NewRCARepository(databaseConnection.GORM)
 	topologyRepository := repository.NewTopologyRepository(databaseConnection.GORM)
 	incidentRepository := repository.NewIncidentRepository(databaseConnection.GORM)
 	skillRunRepository := repository.NewSkillRunRepository(databaseConnection.GORM)
@@ -139,7 +141,8 @@ func run() error {
 	tidbService := tidbsvc.NewService(dataSourceRepository, credentialManager, nil)
 	changeService := changesvc.NewService(dataSourceRepository, credentialManager, nil)
 	alertService := alertsvc.NewService(eventRepository)
-	evidenceService := evidencesvc.NewService(evidenceRepository)
+	evidenceService := evidencesvc.NewService(evidenceRepository).WithDataSourceLister(dataSourceService)
+	rcaService := rcasvc.NewService(rcaRepository, evidenceService, dataSourceService)
 	linuxEventService := linuxeventsvc.NewService(eventRepository, evidenceRepository, incidentRepository)
 	topologyService := topologysvc.NewService(topologyRepository, k8sService).WithLinuxTopologyReader(linuxHostRepository)
 	timelineService := timelinesvc.NewService(eventRepository, evidenceRepository)
@@ -232,6 +235,7 @@ func run() error {
 	analysisHandler := handler.NewAnalysisHandler(logsService, analysisService)
 	eventHandler := handler.NewEventHandler(alertService).WithLinuxEvents(linuxEventService)
 	evidenceHandler := handler.NewEvidenceHandler(evidenceService)
+	rcaHandler := handler.NewRCAHandler(rcaService)
 	topologyHandler := handler.NewTopologyHandler(topologyService)
 	timelineHandler := handler.NewTimelineHandler(timelineService)
 	correlationHandler := handler.NewCorrelationHandler(correlationService)
@@ -266,6 +270,7 @@ func run() error {
 			AnalysisHandler:            analysisHandler,
 			EventHandler:               eventHandler,
 			EvidenceHandler:            evidenceHandler,
+			RCAHandler:                 rcaHandler,
 			TopologyHandler:            topologyHandler,
 			TimelineHandler:            timelineHandler,
 			CorrelationHandler:         correlationHandler,

@@ -18,11 +18,14 @@ type EvidenceRepository interface {
 }
 
 type EvidenceFilters struct {
-	Limit       int
-	SourceType  string
-	Sensitivity string
-	From        *time.Time
-	To          *time.Time
+	Limit                int
+	SourceType           string
+	Sensitivity          string
+	From                 *time.Time
+	To                   *time.Time
+	OwnerUserID          *int64
+	AllowedDataSourceIDs []int64
+	IncludeAllRCA        bool
 }
 
 type GORMEvidenceRepository struct {
@@ -73,6 +76,16 @@ func (r *GORMEvidenceRepository) ListEvidence(ctx context.Context, filters Evide
 	}
 	if filters.To != nil {
 		query = query.Where("observed_at <= ?", *filters.To)
+	}
+	if !filters.IncludeAllRCA && filters.OwnerUserID != nil {
+		if len(filters.AllowedDataSourceIDs) > 0 {
+			query = query.Where(
+				"rca_run_id IS NULL OR (owner_user_id = ? AND (data_source_id IS NULL OR data_source_id IN ?))",
+				*filters.OwnerUserID, filters.AllowedDataSourceIDs,
+			)
+		} else {
+			query = query.Where("rca_run_id IS NULL OR (owner_user_id = ? AND data_source_id IS NULL)", *filters.OwnerUserID)
+		}
 	}
 	var evidence []model.EvidenceRecord
 	if err := query.Find(&evidence).Error; err != nil {

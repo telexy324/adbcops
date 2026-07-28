@@ -2,10 +2,14 @@ package evidence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
+	datasourcesvc "aiops-platform/backend/internal/datasource"
 	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/repository"
 )
@@ -86,10 +90,54 @@ func TestValidateReferencesFailsForMissingEvidence(t *testing.T) {
 	}
 }
 
+func TestRCAEvidenceIsStructuredRedactedBoundedAndOwnerProtected(t *testing.T) {
+	repo := newMemoryEvidenceRepository()
+	service := NewService(repo).WithDataSourceLister(fakeEvidenceDataSources{views: []datasourcesvc.DataSourceView{{
+		ID: 7, Name: "logs", SourceType: model.DataSourceTypeElasticsearch, Enabled: true, ReadOnly: true,
+	}}})
+	runID, roundID, actionID, ownerID, dataSourceID := int64(1), int64(2), int64(3), int64(11), int64(7)
+	start := time.Date(2026, 7, 28, 5, 0, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+	confidence := 0.88
+	content := `{"password":"plain-secret","log":"token=plain-token ` + strings.Repeat("x", 70000) + `"}`
+	record, err := service.Create(context.Background(), CreateInput{
+		SourceType: "log", SourceRef: json.RawMessage(`{"authorization":"Bearer secret"}`),
+		Summary: "slow SQL password=plain-secret", Content: json.RawMessage(content), Confidence: &confidence,
+		RCARunID: &runID, RCARoundID: &roundID, RCAActionID: &actionID,
+		EvidenceKind: model.EvidenceKindFact, Entity: json.RawMessage(`{"service":"order-service"}`),
+		WindowStart: &start, WindowEnd: &end, SourceSkill: "query_logs",
+		DataSourceID: &dataSourceID, OwnerUserID: &ownerID,
+	})
+	if err != nil {
+		t.Fatalf("create RCA evidence: %v", err)
+	}
+	combined := record.Summary + string(record.SourceRef) + string(record.Content)
+	if strings.Contains(combined, "plain-secret") || strings.Contains(combined, "plain-token") ||
+		!strings.Contains(combined, "[REDACTED]") || !strings.Contains(string(record.Content), `"truncated":true`) {
+		t.Fatalf("RCA evidence was not redacted and bounded: %s", combined)
+	}
+	owner := &model.AppUser{ID: ownerID, Role: model.RoleUser}
+	if _, err := service.GetByIDAuthorized(context.Background(), owner, record.ID); err != nil {
+		t.Fatalf("owner could not read accessible evidence: %v", err)
+	}
+	other := &model.AppUser{ID: 12, Role: model.RoleUser}
+	if _, err := service.GetByIDAuthorized(context.Background(), other, record.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("other user read RCA evidence: %v", err)
+	}
+}
+
 type memoryEvidenceRepository struct {
 	nextID int64
 	byID   map[int64]*model.EvidenceRecord
 	byKey  map[string]*model.EvidenceRecord
+}
+
+type fakeEvidenceDataSources struct {
+	views []datasourcesvc.DataSourceView
+}
+
+func (f fakeEvidenceDataSources) List(context.Context, *model.AppUser) ([]datasourcesvc.DataSourceView, error) {
+	return f.views, nil
 }
 
 func newMemoryEvidenceRepository() *memoryEvidenceRepository {

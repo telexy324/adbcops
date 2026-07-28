@@ -1036,6 +1036,25 @@ Content-Type: application/json
 
 Topology Skill 均为 `safe_read` 且 `ReadOnly=true`。数据源绑定只返回当前用户可访问、已启用并标记为只读的数据源；低置信度候选和同类型冲突不会进入 `bindings`，缺少可靠绑定时返回 `missingEvidence`。
 
+## RCA Run、Round、Action 与 Evidence
+
+```http
+POST /api/rca/runs
+GET  /api/rca/runs
+GET  /api/rca/runs/{id}
+GET  /api/rca/runs/{id}/rounds
+GET  /api/rca/runs/{id}/actions
+GET  /api/rca/runs/{id}/evidence
+POST /api/rca/runs/{id}/cancel
+POST /api/rca/runs/{id}/recover
+```
+
+Run 详情同时返回 Round、Action、统一 Evidence 和 Root Cause Candidate。Round 保存输入假设、新增证据、被否定假设和下一步动作；`partial_success` 是独立状态，不会被展示为 `success`。
+
+RCA Evidence 复用 Evidence Center，并增加 `rcaRunId`、`rcaRoundId`、`rcaActionId`、`evidenceKind`、`entity`、时间窗、`sourceSkill`、`dataSourceId` 和所有者字段。日志、SQL 和外部结果在保存前经过脱敏和长度限制；外部失败仅保存安全错误码和固定说明。普通用户只能读取自己的 RCA Run，以及当前仍有权限的数据源证据。
+
+失败恢复会返回 `skippedActionIds` 和 `retryableActionIds`。已经成功的敏感读取保留原结果，不会重复执行；失败、超时和部分成功 Action 增加 attempt 后回到 `pending`。
+
 ## Agent Runtime
 
 Agent Runtime 是后续自动诊断 Agent 的执行边界。Agent 只接收受限 `RunContext`，可记录 step、调用 Skill，但不能直接访问 Tool Registry；所有底层能力仍必须经过 Skill Framework 的 Schema、风险等级、Tool 启停和审计校验。

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	evidencesvc "aiops-platform/backend/internal/evidence"
+	appmiddleware "aiops-platform/backend/internal/middleware"
 	"aiops-platform/backend/internal/repository"
 	"github.com/gin-gonic/gin"
 )
@@ -34,6 +35,11 @@ func (h *EvidenceHandler) Create(c *gin.Context) {
 }
 
 func (h *EvidenceHandler) List(c *gin.Context) {
+	actor, ok := appmiddleware.AuthenticatedUser(c)
+	if !ok {
+		failure(c, http.StatusUnauthorized, 40101, "authentication required")
+		return
+	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	from, ok := optionalEvidenceQueryTime(c, "from")
 	if !ok {
@@ -43,7 +49,7 @@ func (h *EvidenceHandler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.service.List(c.Request.Context(), evidencesvc.Query{
+	result, err := h.service.ListAuthorized(c.Request.Context(), actor, evidencesvc.Query{
 		Limit:       limit,
 		SourceType:  c.Query("sourceType"),
 		Sensitivity: c.Query("sensitivity"),
@@ -57,16 +63,21 @@ func (h *EvidenceHandler) List(c *gin.Context) {
 }
 
 func (h *EvidenceHandler) Get(c *gin.Context) {
+	actor, ok := appmiddleware.AuthenticatedUser(c)
+	if !ok {
+		failure(c, http.StatusUnauthorized, 40101, "authentication required")
+		return
+	}
 	value := c.Param("idOrKey")
 	if id, err := strconv.ParseInt(value, 10, 64); err == nil && id > 0 {
-		record, err := h.service.GetByID(c.Request.Context(), id)
+		record, err := h.service.GetByIDAuthorized(c.Request.Context(), actor, id)
 		if handleEvidenceError(c, err, "get evidence failed") {
 			return
 		}
 		success(c, record)
 		return
 	}
-	record, err := h.service.GetByKey(c.Request.Context(), value)
+	record, err := h.service.GetByKeyAuthorized(c.Request.Context(), actor, value)
 	if handleEvidenceError(c, err, "get evidence failed") {
 		return
 	}
@@ -117,6 +128,8 @@ func handleEvidenceError(c *gin.Context, err error, fallback string) bool {
 	switch {
 	case errors.Is(err, evidencesvc.ErrInvalidInput):
 		failure(c, http.StatusBadRequest, 40001, "invalid request")
+	case errors.Is(err, evidencesvc.ErrForbidden):
+		failure(c, http.StatusForbidden, 40301, "evidence access forbidden")
 	case errors.Is(err, repository.ErrNotFound):
 		failure(c, http.StatusNotFound, 40401, "evidence not found")
 	default:

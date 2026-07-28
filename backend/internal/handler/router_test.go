@@ -210,6 +210,20 @@ func TestUserAccessingAdminAPIIsForbidden(t *testing.T) {
 	}
 }
 
+func TestRCARunAPIRequiresAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := NewRouter(discardLogger(), RouterDependencies{
+		RCAHandler:   &RCAHandler{},
+		Authenticate: appmiddleware.Authenticate(&routerFakeAuthenticator{}),
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/rca/runs", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestUserCannotConfigureLinuxCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	normalUser := &model.AppUser{ID: 11, Username: "operator", Role: model.RoleUser, Enabled: true}

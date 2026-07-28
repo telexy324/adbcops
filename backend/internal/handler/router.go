@@ -33,6 +33,7 @@ type RouterDependencies struct {
 	SkillHandler               *SkillHandler
 	AgentHandler               *AgentHandler
 	WorkflowHandler            *WorkflowHandler
+	RCAHandler                 *RCAHandler
 	SFTPHandler                *SFTPHandler
 	K8sHandler                 *K8sHandler
 	MetricsHandler             *MetricsHandler
@@ -82,6 +83,18 @@ func NewRouter(logger *slog.Logger, dependencies RouterDependencies) *gin.Engine
 		evidenceRoutes.GET("/:idOrKey", dependencies.EvidenceHandler.Get)
 		evidenceRoutes.POST("", dependencies.RequireAdmin, dependencies.EvidenceHandler.Create)
 		evidenceRoutes.POST("/validate", dependencies.RequireAdmin, dependencies.EvidenceHandler.Validate)
+	}
+	if dependencies.RCAHandler != nil && dependencies.Authenticate != nil {
+		rcaRoutes := router.Group("/api/rca/runs")
+		rcaRoutes.Use(dependencies.Authenticate)
+		rcaRoutes.GET("", dependencies.RCAHandler.ListRuns)
+		rcaRoutes.POST("", dependencies.RCAHandler.CreateRun)
+		rcaRoutes.GET("/:id", dependencies.RCAHandler.GetRun)
+		rcaRoutes.GET("/:id/rounds", dependencies.RCAHandler.ListRounds)
+		rcaRoutes.GET("/:id/actions", dependencies.RCAHandler.ListActions)
+		rcaRoutes.GET("/:id/evidence", dependencies.RCAHandler.ListEvidence)
+		rcaRoutes.POST("/:id/cancel", dependencies.RCAHandler.Cancel)
+		rcaRoutes.POST("/:id/recover", dependencies.RCAHandler.Recover)
 	}
 	if dependencies.TopologyHandler != nil && dependencies.Authenticate != nil && dependencies.RequireAdmin != nil {
 		topologyRoutes := router.Group("/api/topology")
