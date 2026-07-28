@@ -34,6 +34,7 @@ import {
   type ServiceDiagnosisResponse,
 } from "@/api/analysis";
 import { getTopologyGraph, type TopologyNode } from "@/api/operations";
+import { MultiRoundRCAWorkbench } from "@/components/analysis/multi-round-rca-workbench";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -527,7 +528,9 @@ export function AnalysisPage() {
             智能分析
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-            面向日志、Kubernetes、指标和告警的只读分析入口。任务列表调用后端“我的任务”接口，普通用户只会看到自己的分析任务。
+            通过最多三轮的 Evidence
+            驱动调查定位根因；日志、Kubernetes、指标和告警工具仍可用于单项只读验证。
+            普通用户只会看到自己的分析任务。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -551,6 +554,11 @@ export function AnalysisPage() {
           {error ?? notice}
         </div>
       )}
+
+      <MultiRoundRCAWorkbench
+        demoMode={demoMode}
+        initialNodeKey={topologyNodeKey}
+      />
 
       <Card className="border-brand-200 bg-brand-50/40 shadow-none">
         <CardHeader>

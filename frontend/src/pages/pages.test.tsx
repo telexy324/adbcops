@@ -71,6 +71,16 @@ vi.mock("@/api/analysis", () => ({
   toAPIErrorMessage: vi.fn(() => "请求失败"),
 }));
 
+vi.mock("@/api/rca", () => ({
+  cancelRCARun: vi.fn(),
+  createRCARun: vi.fn(),
+  getRCADetail: vi.fn(),
+  getRCAReport: vi.fn(),
+  listRCARuns: vi.fn().mockResolvedValue([]),
+  orchestrateRCARun: vi.fn(),
+  recoverRCARun: vi.fn(),
+}));
+
 vi.mock("@/api/workflows", () => ({
   createWorkflow: vi.fn(),
   listWorkflowRuns: vi.fn().mockResolvedValue([

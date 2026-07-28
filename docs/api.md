@@ -1142,6 +1142,12 @@ RCA Evidence 复用 Evidence Center，并增加 `rcaRunId`、`rcaRoundId`、`rca
 
 失败恢复会返回 `skippedActionIds` 和 `retryableActionIds`。已经成功的敏感读取保留原结果，不会重复执行；失败、超时和部分成功 Action 增加 attempt 后回到 `pending`。
 
+### 多轮智能分析前端调用链
+
+“智能分析”页面先通过 `POST /api/rca/runs` 提交问题和显式 Scope，再调用 `POST /api/rca/runs/{id}/orchestrate` 启动受预算约束的多轮编排。执行期间前端每 1.5 秒读取 `GET /api/rca/runs/{id}`，Round 内的 Action 独立显示状态；Run 结束后读取确定性 `/report`。活动 Run ID 同时保存到 URL 和浏览器本地存储，刷新后从详情接口恢复，不依赖易丢失的内存状态。
+
+取消使用 `/cancel`，后续状态以服务端结果为准；失败、超时或部分成功的 Run 使用 `/recover` 获取保留与重试 Action 列表，再显式重新调用 `/orchestrate`。前端不会直接调用 Tool，不暴露任意 SQL、自动修复或外部写入入口。SQL 详情仅渲染服务端返回的指纹和脱敏语句，Evidence 原文仍受现有权限与脱敏边界保护。
+
 ## Agent Runtime
 
 Agent Runtime 是后续自动诊断 Agent 的执行边界。Agent 只接收受限 `RunContext`，可记录 step、调用 Skill，但不能直接访问 Tool Registry；所有底层能力仍必须经过 Skill Framework 的 Schema、风险等级、Tool 启停和审计校验。
