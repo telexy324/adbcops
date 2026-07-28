@@ -21,6 +21,18 @@ Content-Type: application/json
 
 响应包含版本化假设、支持/反证 Evidence ID、证据缺口、下一步已校验的只读 Skill 动作、停止判断及确定性降级状态。省略请求体时按当前 RCA Run 计算默认预算。
 
+当第三轮进入 Slow SQL 深度诊断时，`rounds[].databaseDiagnosis` 额外返回：
+
+- `provider`、`sourceType`、`dataSourceId`；
+- `windowMinutes` 与 `correlationDimensions`，显式记录服务、时间窗、Trace、调用量和基线的关联情况；
+- `sqlFingerprint` 和不含 Literal 的 `sanitizedSql`；
+- 实际调度的只读 `actions` 与 `supportingEvidenceIds`；
+- `missingEvidence`；
+- `assessment.categories`，区分慢 SQL 影响、连接压力、资源压力、锁竞争、热点、统计异常和执行计划回退；
+- `assessment.rootCauseEligible`、`confidence` 与引用的 `evidenceIds`。
+
+当前 Provider 仅实现 `tidb`。缺少安全 SQL 时不会调度 EXPLAIN；TiDB 查询失败时对应 Action 和 Round 返回 `partial_success`，并保留明确缺失证据。
+
 ### 受控多轮执行
 
 ```http

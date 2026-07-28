@@ -2,11 +2,13 @@ package tidb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,7 +139,27 @@ func (s *Service) QuerySlowQueries(ctx context.Context, actor *model.AppUser, in
 	if input.Minutes <= 0 || input.Minutes > 24*60 {
 		input.Minutes = 60
 	}
-	return s.query(ctx, actor, input.DataSourceID, "SELECT time, digest, query, query_time, process_time, wait_time, memory_max FROM information_schema.cluster_slow_query WHERE time >= NOW() - INTERVAL ? MINUTE ORDER BY query_time DESC LIMIT ?", []any{input.Minutes}, input.Limit)
+	// Rank digests by accumulated database time rather than one unusually long
+	// sample. This makes the first row the highest-impact fingerprint in the
+	// requested window while keeping the original SQL sanitized at the service
+	// boundary.
+	return s.query(ctx, actor, input.DataSourceID, `
+SELECT
+	digest,
+	ANY_VALUE(query) AS query,
+	COUNT(*) AS execution_count,
+	SUM(query_time) AS total_query_time,
+	MAX(query_time) AS max_query_time,
+	SUM(process_time) AS total_process_time,
+	SUM(wait_time) AS total_wait_time,
+	MAX(memory_max) AS memory_max,
+	MIN(time) AS first_seen_at,
+	MAX(time) AS last_seen_at
+FROM information_schema.cluster_slow_query
+WHERE time >= NOW() - INTERVAL ? MINUTE
+GROUP BY digest
+ORDER BY total_query_time DESC, execution_count DESC
+LIMIT ?`, []any{input.Minutes}, input.Limit)
 }
 
 func (s *Service) QueryLockWaits(ctx context.Context, actor *model.AppUser, input QueryInput) (*QueryResult, error) {
@@ -371,6 +393,13 @@ func normalizeReadonlySQL(input string) (string, error) {
 	return sqlText, nil
 }
 
+// NormalizeReadonlySQL exposes the same single-statement guard used by
+// controlled EXPLAIN so RCA planning cannot schedule SQL that the TiDB tool
+// would later reject.
+func NormalizeReadonlySQL(input string) (string, error) {
+	return normalizeReadonlySQL(input)
+}
+
 func normalizeLimit(requested, configured int) int {
 	limit := requested
 	if limit <= 0 {
@@ -411,7 +440,7 @@ func sanitizeRows(rows []map[string]any, cfg Config) ([]map[string]string, bool,
 	return result, truncated, nil
 }
 
-var sensitiveColumnPattern = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|authorization|cookie|credential|api[_-]?key)`)
+var sensitiveColumnPattern = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|authorization|cookie|credential|api[_-]?key|user(?:name)?|account|email|phone|mobile|id[_-]?card|ssn)`)
 
 func sanitizeValue(column, value string) string {
 	if sensitiveColumnPattern.MatchString(column) || sensitiveColumnPattern.MatchString(value) {
@@ -419,19 +448,73 @@ func sanitizeValue(column, value string) string {
 	}
 	upperColumn := strings.ToUpper(column)
 	if upperColumn == "INFO" || upperColumn == "QUERY" || upperColumn == "SQL" {
-		return redactSQLText(value)
+		return SanitizeSQLForEvidence(value)
 	}
 	return value
 }
 
-func redactSQLText(value string) string {
+var (
+	sqlBlockCommentPattern = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	sqlLineCommentPattern  = regexp.MustCompile(`(?m)(--[^\r\n]*|#[^\r\n]*)`)
+	sqlQuotedPattern       = regexp.MustCompile(`(?s)('(?:''|\\.|[^'])*'|"(?:""|\\.|[^"])*")`)
+	sqlHexPattern          = regexp.MustCompile(`(?i)\b(?:0x[0-9a-f]+|x'[0-9a-f]+')\b`)
+	sqlNumberPattern       = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
+	sqlWhitespacePattern   = regexp.MustCompile(`\s+`)
+	sqlPlaceholderPattern  = regexp.MustCompile(`(?:\?\s*,\s*)+\?`)
+)
+
+// SanitizeSQLForEvidence keeps enough SQL structure for a reviewer to identify
+// the statement shape while removing literals, comments, credentials, tokens,
+// account names embedded as values, and other user data.
+func SanitizeSQLForEvidence(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return ""
 	}
-	fields := strings.Fields(trimmed)
-	if len(fields) == 0 {
+	trimmed = sqlBlockCommentPattern.ReplaceAllString(trimmed, " ")
+	trimmed = sqlLineCommentPattern.ReplaceAllString(trimmed, " ")
+	trimmed = sqlHexPattern.ReplaceAllString(trimmed, "?")
+	trimmed = sqlQuotedPattern.ReplaceAllString(trimmed, "?")
+	trimmed = sqlNumberPattern.ReplaceAllString(trimmed, "?")
+	trimmed = sqlPlaceholderPattern.ReplaceAllString(trimmed, "?")
+	trimmed = strings.TrimSpace(sqlWhitespacePattern.ReplaceAllString(trimmed, " "))
+	if trimmed == "" {
 		return ""
 	}
-	return strings.ToUpper(fields[0]) + " [text redacted]"
+	const maxEvidenceSQLBytes = 2048
+	if len(trimmed) > maxEvidenceSQLBytes {
+		trimmed = trimmed[:maxEvidenceSQLBytes] + "…"
+	}
+	return trimmed
+}
+
+// SQLFingerprint is deterministic across literal-only changes. A native TiDB
+// digest should be preferred when present; this fallback exists for explicitly
+// supplied read-only SQL and for future database providers.
+func SQLFingerprint(value string) string {
+	sanitized := strings.ToLower(SanitizeSQLForEvidence(value))
+	if sanitized == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sanitized))
+	return "sha256:" + fmt.Sprintf("%x", sum[:12])
+}
+
+// SlowQueryImpactScore is intentionally simple and deterministic. Total
+// database time is primary, then execution count and maximum latency provide
+// bounded tie-breaking signals.
+func SlowQueryImpactScore(totalQueryTime string, executionCount string, maxQueryTime string) float64 {
+	total, _ := strconv.ParseFloat(strings.TrimSpace(totalQueryTime), 64)
+	count, _ := strconv.ParseFloat(strings.TrimSpace(executionCount), 64)
+	maximum, _ := strconv.ParseFloat(strings.TrimSpace(maxQueryTime), 64)
+	if total < 0 {
+		total = 0
+	}
+	if count < 0 {
+		count = 0
+	}
+	if maximum < 0 {
+		maximum = 0
+	}
+	return total + count*0.01 + maximum*0.001
 }

@@ -70,11 +70,83 @@ func TestProcessListSanitizesSensitiveColumnsAndSQLText(t *testing.T) {
 		t.Fatalf("QueryProcessList() error = %v", err)
 	}
 	row := result.Rows[0]
-	if row["api_token"] != "***" || row["info"] != "***" {
+	if row["api_token"] != "***" || row["info"] != "***" || row["user"] != "***" {
 		t.Fatalf("row was not sanitized: %+v", row)
 	}
 	if got := executor.args[0][0]; got != 50 {
 		t.Fatalf("unexpected limit arg: %v", got)
+	}
+}
+
+func TestSanitizeValueMasksDatabaseAccountsAndPersonalInformation(t *testing.T) {
+	for _, testCase := range []struct {
+		column string
+		value  string
+	}{
+		{column: "USER", value: "application_writer"},
+		{column: "account_name", value: "customer-42"},
+		{column: "email", value: "alice@example.com"},
+		{column: "mobile", value: "13800138000"},
+	} {
+		if got := sanitizeValue(testCase.column, testCase.value); got != "***" {
+			t.Fatalf("sanitizeValue(%q, %q) = %q, want masked", testCase.column, testCase.value, got)
+		}
+	}
+}
+
+func TestSlowQueriesRankFingerprintsByAccumulatedImpactAndSanitizeSQL(t *testing.T) {
+	executor := &fakeExecutor{rows: []map[string]any{{
+		"digest":             "tidb-digest-1",
+		"query":              "select * from customer where email='alice@example.com' and id=42",
+		"execution_count":    "120",
+		"total_query_time":   "84.5",
+		"max_query_time":     "2.7",
+		"total_wait_time":    "12.3",
+		"total_process_time": "70.0",
+	}}}
+	service := NewService(tidbRepository{dataSource: tidbDataSource(t, Config{DSN: "readonly@tcp(tidb:4000)/test"})}, nil, executor)
+
+	result, err := service.QuerySlowQueries(context.Background(), &model.AppUser{ID: 1}, SlowQueryInput{
+		DataSourceID: 1, Minutes: 30, Limit: 20,
+	})
+	if err != nil {
+		t.Fatalf("QuerySlowQueries() error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0]["digest"] != "tidb-digest-1" {
+		t.Fatalf("unexpected slow-query result: %+v", result)
+	}
+	if strings.Contains(result.Rows[0]["query"], "alice@example.com") || strings.Contains(result.Rows[0]["query"], "42") {
+		t.Fatalf("SQL literals were not sanitized: %+v", result.Rows[0])
+	}
+	query := executor.queries[0]
+	if !strings.Contains(query, "SUM(query_time) AS total_query_time") ||
+		!strings.Contains(query, "ORDER BY total_query_time DESC, execution_count DESC") {
+		t.Fatalf("slow queries were not ranked by accumulated impact: %s", query)
+	}
+	if executor.args[0][0] != 30 || executor.args[0][1] != 20 {
+		t.Fatalf("unexpected slow-query bounds: %+v", executor.args[0])
+	}
+}
+
+func TestSQLFingerprintIgnoresLiteralsAndReadonlyGuardRejectsWrites(t *testing.T) {
+	left := SQLFingerprint("SELECT * FROM orders WHERE customer_id=42 AND email='a@example.com'")
+	right := SQLFingerprint("select * from orders where customer_id=7 and email='b@example.com'")
+	if left == "" || left != right {
+		t.Fatalf("literal-only changes should share a fingerprint: %q != %q", left, right)
+	}
+	sanitized := SanitizeSQLForEvidence("SELECT * FROM orders WHERE customer_id=42 AND email='a@example.com'")
+	if strings.Contains(sanitized, "42") || strings.Contains(sanitized, "a@example.com") {
+		t.Fatalf("sanitized SQL leaked literals: %s", sanitized)
+	}
+	for _, statement := range []string{
+		"insert into orders(id) values (1)",
+		"delete from orders",
+		"begin",
+		"call rebuild_stats()",
+	} {
+		if _, err := NormalizeReadonlySQL(statement); !errors.Is(err, ErrUnsafeSQL) {
+			t.Fatalf("expected readonly guard to reject %q, got %v", statement, err)
+		}
 	}
 }
 

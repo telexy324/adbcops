@@ -12016,6 +12016,15 @@ status
 8. TiDB 不可用时返回 `partial_success` 和明确缺失证据；
 9. Provider 接口不得伪装已经支持 MySQL 或 PostgreSQL。
 
+实现状态（2026-07-28）：已完成。
+
+- 第三轮仅在第二轮 TiDB Evidence 确认慢 SQL 后触发，并按剩余预算调度六类只读诊断 Skill；
+- 慢查询按 Digest 的累计耗时和执行次数排序，SQL Literal、账号、Token 与个人信息在 Evidence 边界脱敏；
+- 受控 EXPLAIN 复用 TiDB 单语句只读校验并固定 `analyze=false`；
+- 诊断结果保留服务、时间窗、Trace、调用量和基线关联维度，分别呈现计划退化、锁竞争、统计异常、热点、连接压力和资源压力；
+- 仅注册 TiDB `DatabaseDiagnosisProvider`，未伪装支持 MySQL 或 PostgreSQL；
+- 缺失执行计划或数据源不可用时保留 `partial_success`、`missingEvidence` 和低置信度约束。
+
 ### Task 3.12H：RCA Report Aggregation
 
 目标：

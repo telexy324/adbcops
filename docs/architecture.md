@@ -13,3 +13,11 @@
 第一轮结束后，Orchestrator 从日志 Evidence 和 Scope 提取依赖名，先通过 Topology Alias 解析真实节点，再以根服务为起点执行受 `depth`、`maxNodes`、`maxEdges` 限制的上下游遍历。候选节点按边类型、方向、置信度、跳数、时间新鲜度及 Alias 命中排序；同类候选分数接近时标记冲突，不静默选择。
 
 只有证据相关且绑定到当前用户可访问只读数据源的组件会进入调查。目前覆盖 TiDB、Redis、Nacos、Nginx、Kubernetes 和 Linux。拓扑或绑定缺失时记录 `missingEvidence`，并仅在 Scope 明确给出对应数据源时降级。组件 Skill Evidence 的 `sourceRef.inputEvidenceIds` 保留首轮及拓扑 Evidence ID，形成可追溯证据链；重复节点和重复动作在执行前去重。
+
+### 第三轮 Slow SQL 深度诊断
+
+第二轮假设必须以 TiDB Evidence 确认 slow SQL，第三轮才会进入数据库深度诊断。`DatabaseDiagnosisProvider` 负责将已解析的数据源、服务、时间窗和支持 Evidence 转换为受限只读动作；当前只注册 TiDB Provider，不会把 MySQL 或 PostgreSQL 伪装为已支持。
+
+TiDB Provider 最多调度 `query_tidb_slow_queries`、`query_tidb_processlist`、`query_tidb_lock_waits`、`query_tidb_hot_regions`、`query_tidb_statistics_health` 和 `explain_tidb_sql`。EXPLAIN 仅在共享的单条 `SELECT/SHOW` 校验通过时加入，固定 `analyze=false`；无安全 SQL 时记录缺失执行计划证据，不断言索引失效。
+
+慢查询按 Digest 的累计 `total_query_time` 和执行次数排序，而不是只按单次最大耗时。SQL Evidence 保留脱敏结构和稳定指纹，Literal、注释、Token、账号及个人信息不会进入 Evidence。诊断计划显式保留服务、时间窗、Trace、调用量和基线关联维度，缺失的关联 Evidence 会进入 `missingEvidence`。Assessment 分别标记慢 SQL 影响、连接压力、资源压力、锁竞争、热点 Region、统计异常和执行计划回退；只有慢 SQL Evidence 与至少一种补充 Evidence 同时存在时，才将 slow SQL 标记为中等置信度的 contributing factor，否则保持低置信度和 `partial_success`。

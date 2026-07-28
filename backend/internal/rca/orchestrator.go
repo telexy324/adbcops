@@ -70,6 +70,7 @@ type OrchestratorRoundResult struct {
 	Status      string                       `json:"status"`
 	Plan        *PlannerResult               `json:"plan,omitempty"`
 	Topology    *TopologyInvestigationResult `json:"topologyInvestigation,omitempty"`
+	Database    *DatabaseDiagnosisPlan       `json:"databaseDiagnosis,omitempty"`
 	ActionIDs   []int64                      `json:"actionIds"`
 	EvidenceIDs []int64                      `json:"evidenceIds"`
 	Errors      []string                     `json:"errors,omitempty"`
@@ -228,12 +229,17 @@ func (s *Service) Orchestrate(ctx context.Context, actor *model.AppUser, runID i
 			continue
 		}
 		actions := plan.NextActions
+		var databasePlan *DatabaseDiagnosisPlan
 		if run.CurrentRound == 2 {
-			actions = highestPriorityActions(plan.Hypotheses, actions)
+			detail := mustDetail(s.GetDetail(runCtx, actor, runID))
+			databasePlan, actions = s.buildDatabaseDeepDiagnosisPlan(runCtx, actor, detail, plan, remainingCalls)
 			if len(actions) == 0 {
-				actions = s.validatedDeepeningActions(runCtx, actor, buildPlannerInput(mustDetail(s.GetDetail(runCtx, actor, runID)), PlanRequest{
-					Budget: PlannerBudget{RemainingRounds: remainingRounds, RemainingSkillCalls: remainingCalls, RemainingWallTimeSeconds: budget.MaxWallTimeSeconds},
-				}), plan)
+				actions = highestPriorityActions(plan.Hypotheses, plan.NextActions)
+				if len(actions) == 0 {
+					actions = s.validatedDeepeningActions(runCtx, actor, buildPlannerInput(detail, PlanRequest{
+						Budget: PlannerBudget{RemainingRounds: remainingRounds, RemainingSkillCalls: remainingCalls, RemainingWallTimeSeconds: budget.MaxWallTimeSeconds},
+					}), plan)
+				}
 			}
 		}
 		if len(actions) == 0 {
@@ -245,6 +251,10 @@ func (s *Service) Orchestrate(ctx context.Context, actor *model.AppUser, runID i
 		}
 		roundResult, executeErr := s.executePlannerRound(runCtx, actor, runID, plan, actions, budget.MaxConcurrentSkills)
 		if roundResult != nil {
+			if databasePlan != nil {
+				databasePlan.Assessment = s.assessDatabaseDiagnosisRound(runCtx, actor, runID, roundResult.ActionIDs)
+			}
+			roundResult.Database = databasePlan
 			outcome.Rounds = append(outcome.Rounds, *roundResult)
 			outcome.Usage.RoundsCompleted++
 			outcome.Usage.SkillCalls += len(roundResult.ActionIDs)

@@ -44,15 +44,16 @@ type DataSourceLister interface {
 }
 
 type Service struct {
-	repository          Repository
-	evidence            EvidenceCreator
-	dataSources         DataSourceLister
-	skills              RoundOneSkillExecutor
-	skillCatalog        PlannerSkillCatalog
-	plannerModel        PlannerModel
-	now                 func() time.Time
-	orchestratorMu      sync.Mutex
-	activeOrchestrators map[int64]context.CancelFunc
+	repository                 Repository
+	evidence                   EvidenceCreator
+	dataSources                DataSourceLister
+	skills                     RoundOneSkillExecutor
+	skillCatalog               PlannerSkillCatalog
+	plannerModel               PlannerModel
+	databaseDiagnosisProviders []DatabaseDiagnosisProvider
+	now                        func() time.Time
+	orchestratorMu             sync.Mutex
+	activeOrchestrators        map[int64]context.CancelFunc
 }
 
 type RoundOneSkillExecutor interface {
@@ -162,7 +163,8 @@ type RecoveryPlan struct {
 func NewService(repository Repository, evidence EvidenceCreator, dataSources DataSourceLister) *Service {
 	return &Service{
 		repository: repository, evidence: evidence, dataSources: dataSources,
-		now: func() time.Time { return time.Now().UTC() }, activeOrchestrators: map[int64]context.CancelFunc{},
+		databaseDiagnosisProviders: []DatabaseDiagnosisProvider{NewTiDBDatabaseDiagnosisProvider()},
+		now:                        func() time.Time { return time.Now().UTC() }, activeOrchestrators: map[int64]context.CancelFunc{},
 	}
 }
 
