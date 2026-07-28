@@ -169,7 +169,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize skill registry: %w", err)
 	}
-	rcaService.WithSkillExecutor(skillRegistry)
+	rcaService.WithSkillExecutor(skillRegistry).
+		WithPlanner(skillRegistry, rcasvc.NewLLMPlanner(llmRepository, credentialManager, llmClient))
 	scopeResolver := agentruntime.NewNaturalLanguageScopeResolver(topologyService, dataSourceService, cfg.RCA.DefaultTimeWindow)
 	agentRuntime, err := agentruntime.NewRuntime(skillRegistry, agentRunRepository, agentruntime.Limits{}, agentruntime.BuiltinAgentsWithCoordinator(agentruntime.NewCoordinatorAgent(scopeResolver))...)
 	if err != nil {

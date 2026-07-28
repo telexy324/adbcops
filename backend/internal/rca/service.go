@@ -42,11 +42,13 @@ type DataSourceLister interface {
 }
 
 type Service struct {
-	repository  Repository
-	evidence    EvidenceCreator
-	dataSources DataSourceLister
-	skills      RoundOneSkillExecutor
-	now         func() time.Time
+	repository   Repository
+	evidence     EvidenceCreator
+	dataSources  DataSourceLister
+	skills       RoundOneSkillExecutor
+	skillCatalog PlannerSkillCatalog
+	plannerModel PlannerModel
+	now          func() time.Time
 }
 
 type RoundOneSkillExecutor interface {

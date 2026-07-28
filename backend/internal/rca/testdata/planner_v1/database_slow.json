@@ -1,0 +1,27 @@
+{
+  "fixtureVersion": "rca-planner-fixture-v1",
+  "query": "订单服务变慢，请查询可能原因",
+  "scope": {
+    "environment": "prod",
+    "serviceName": "order-service",
+    "topologyNodeKey": "svc:order",
+    "tidbDataSourceId": 7
+  },
+  "evidence": [
+    {
+      "sourceType": "log",
+      "summary": "database call took 2400ms",
+      "signals": {
+        "durationMs": 2400
+      }
+    }
+  ],
+  "expectedHypothesisIds": [
+    "database-latency"
+  ],
+  "expectedSkills": [
+    "find_topology_node",
+    "find_dependencies",
+    "query_tidb_slow_queries"
+  ]
+}

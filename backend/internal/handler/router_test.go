@@ -219,6 +219,7 @@ func TestRCARunAPIRequiresAuthentication(t *testing.T) {
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/api/rca/runs", nil),
 		httptest.NewRequest(http.MethodPost, "/api/rca/runs/1/round-one/collect", nil),
+		httptest.NewRequest(http.MethodPost, "/api/rca/runs/1/plan", nil),
 	} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)

@@ -2,6 +2,25 @@
 
 API 契约基线见 [`features.md`](../features-v1.2.md)。
 
+## RCA Planner
+
+```http
+POST /api/rca/runs/{id}/plan
+Content-Type: application/json
+
+{
+  "existingHypotheses": [],
+  "budget": {
+    "remainingRounds": 2,
+    "remainingSkillCalls": 8,
+    "remainingWallTimeSeconds": 120
+  },
+  "useLlm": true
+}
+```
+
+响应包含版本化假设、支持/反证 Evidence ID、证据缺口、下一步已校验的只读 Skill 动作、停止判断及确定性降级状态。省略请求体时按当前 RCA Run 计算默认预算。
+
 ## Auth
 
 除登录与健康检查外，认证接口使用：
