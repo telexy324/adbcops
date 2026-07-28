@@ -25,6 +25,7 @@ Compose 会启动 PostgreSQL、先运行一次 `migrate up`，再启动 API。AP
 
 ```dotenv
 HTTP_SERVER_WRITE_TIMEOUT_SECONDS=300
+RCA_DEFAULT_TIME_WINDOW_MINUTES=30
 LOG_LEVEL=info
 ```
 

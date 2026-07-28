@@ -156,8 +156,12 @@ func NewRuntime(skills *skillframework.Registry, audit AuditRepository, limits L
 }
 
 func BuiltinAgents() []Agent {
+	return BuiltinAgentsWithCoordinator(CoordinatorAgent{})
+}
+
+func BuiltinAgentsWithCoordinator(coordinator CoordinatorAgent) []Agent {
 	return []Agent{
-		CoordinatorAgent{},
+		coordinator,
 		EchoAgent{},
 		KnowledgeAgent{},
 		LogAgent{},

@@ -30,6 +30,7 @@ const (
 	defaultParseTimeout      = 120
 	defaultWriteTimeout      = 300
 	defaultDocumentPassScore = 70
+	defaultRCATimeWindow     = 30
 )
 
 var allowedSSLMode = map[string]struct{}{
@@ -91,6 +92,10 @@ type KnowledgeQualityConfig struct {
 	DocumentPassScore int
 }
 
+type RCAConfig struct {
+	DefaultTimeWindow time.Duration
+}
+
 // DSN returns a PostgreSQL URL. The returned value contains the database
 // password and must only be passed directly to database drivers.
 func (c DatabaseConfig) DSN() string {
@@ -120,6 +125,7 @@ type Config struct {
 	KnowledgeParse   KnowledgeParseConfig
 	HTTPServer       HTTPServerConfig
 	KnowledgeQuality KnowledgeQualityConfig
+	RCA              RCAConfig
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -169,6 +175,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	rca, err := loadRCAConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Environment:      valueOrDefault(os.Getenv("APP_ENV"), defaultEnvironment),
@@ -183,7 +193,16 @@ func Load() (Config, error) {
 		KnowledgeParse:   knowledgeParse,
 		HTTPServer:       httpServer,
 		KnowledgeQuality: knowledgeQuality,
+		RCA:              rca,
 	}, nil
+}
+
+func loadRCAConfig() (RCAConfig, error) {
+	minutes, err := loadPositiveInt("RCA_DEFAULT_TIME_WINDOW_MINUTES", defaultRCATimeWindow, 1440)
+	if err != nil {
+		return RCAConfig{}, err
+	}
+	return RCAConfig{DefaultTimeWindow: time.Duration(minutes) * time.Minute}, nil
 }
 
 func loadLogLevel() (string, error) {

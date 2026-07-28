@@ -13,6 +13,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_TIMEZONE", "")
 	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "")
 	t.Setenv("KNOWLEDGE_DOCUMENT_PASS_SCORE", "")
+	t.Setenv("RCA_DEFAULT_TIME_WINDOW_MINUTES", "")
 	setDatabaseEnv(t)
 
 	cfg, err := Load()
@@ -49,6 +50,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.KnowledgeQuality.DocumentPassScore != defaultDocumentPassScore {
 		t.Fatalf("KnowledgeQuality = %+v", cfg.KnowledgeQuality)
 	}
+	if cfg.RCA.DefaultTimeWindow != time.Duration(defaultRCATimeWindow)*time.Minute {
+		t.Fatalf("RCA = %+v", cfg.RCA)
+	}
 }
 
 func TestLoadFromEnvironment(t *testing.T) {
@@ -71,6 +75,7 @@ func TestLoadFromEnvironment(t *testing.T) {
 	t.Setenv("KNOWLEDGE_PARSE_TIMEOUT_SECONDS", "30")
 	t.Setenv("HTTP_SERVER_WRITE_TIMEOUT_SECONDS", "600")
 	t.Setenv("KNOWLEDGE_DOCUMENT_PASS_SCORE", "85")
+	t.Setenv("RCA_DEFAULT_TIME_WINDOW_MINUTES", "45")
 	setAuthEnv(t)
 	setCredentialEnv(t)
 
@@ -106,6 +111,17 @@ func TestLoadFromEnvironment(t *testing.T) {
 	}
 	if cfg.KnowledgeQuality.DocumentPassScore != 85 {
 		t.Fatalf("KnowledgeQuality = %+v", cfg.KnowledgeQuality)
+	}
+	if cfg.RCA.DefaultTimeWindow != 45*time.Minute {
+		t.Fatalf("RCA = %+v", cfg.RCA)
+	}
+}
+
+func TestLoadRejectsInvalidRCADefaultTimeWindow(t *testing.T) {
+	setDatabaseEnv(t)
+	t.Setenv("RCA_DEFAULT_TIME_WINDOW_MINUTES", "1441")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want invalid RCA_DEFAULT_TIME_WINDOW_MINUTES error")
 	}
 }
 

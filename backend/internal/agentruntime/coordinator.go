@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"time"
 
+	"aiops-platform/backend/internal/model"
 	"aiops-platform/backend/internal/skillframework"
 )
 
@@ -33,15 +35,40 @@ const (
 	WorkflowGeneralRCA      = "general_rca_workflow"
 )
 
-type CoordinatorAgent struct{}
+type CoordinatorAgent struct {
+	scopeResolver CoordinatorScopeResolver
+}
+
+type CoordinatorScopeResolver interface {
+	Resolve(ctx context.Context, actor *model.AppUser, input AgentContext) ScopeResolution
+}
+
+type ScopeResolution struct {
+	Scope                    map[string]any
+	MissingParameters        []string
+	Source                   string
+	DefaultTimeWindowMinutes int
+	Ambiguous                bool
+	CandidateCount           int
+	Degraded                 bool
+}
+
+type CoordinatorResolution struct {
+	Source                   string `json:"source"`
+	DefaultTimeWindowMinutes int    `json:"defaultTimeWindowMinutes"`
+	Ambiguous                bool   `json:"ambiguous"`
+	CandidateCount           int    `json:"candidateCount"`
+	Degraded                 bool   `json:"degraded"`
+}
 
 type CoordinatorPlan struct {
-	Intent            string         `json:"intent"`
-	Scope             map[string]any `json:"scope"`
-	Workflow          string         `json:"workflow"`
-	Agents            []string       `json:"agents"`
-	Reason            string         `json:"reason"`
-	MissingParameters []string       `json:"missingParameters"`
+	Intent            string                `json:"intent"`
+	Scope             map[string]any        `json:"scope"`
+	Workflow          string                `json:"workflow"`
+	Agents            []string              `json:"agents"`
+	Reason            string                `json:"reason"`
+	MissingParameters []string              `json:"missingParameters"`
+	Resolution        CoordinatorResolution `json:"resolution"`
 }
 
 func (CoordinatorAgent) Name() string {
@@ -52,11 +79,15 @@ func (CoordinatorAgent) Description() string {
 	return "Classifies intent, extracts analysis scope, and selects read-only workflow and specialist agents."
 }
 
-func (CoordinatorAgent) Analyze(_ context.Context, input AgentContext, runtime *RunContext) (*AgentResult, error) {
+func (a CoordinatorAgent) Analyze(ctx context.Context, input AgentContext, runtime *RunContext) (*AgentResult, error) {
 	if err := runtime.Step("classify intent and select workflow"); err != nil {
 		return nil, err
 	}
-	plan := BuildCoordinatorPlan(input)
+	resolution := defaultScopeResolution(input)
+	if a.scopeResolver != nil {
+		resolution = a.scopeResolver.Resolve(ctx, runtime.actor, input)
+	}
+	plan := buildCoordinatorPlan(input, resolution)
 	raw, err := json.Marshal(plan)
 	if err != nil {
 		return nil, ErrInvalidInput
@@ -74,10 +105,15 @@ func (CoordinatorAgent) Analyze(_ context.Context, input AgentContext, runtime *
 }
 
 func BuildCoordinatorPlan(input AgentContext) CoordinatorPlan {
-	scope := extractCoordinatorScope(input)
+	return buildCoordinatorPlan(input, defaultScopeResolution(input))
+}
+
+func buildCoordinatorPlan(input AgentContext, resolution ScopeResolution) CoordinatorPlan {
+	scope := resolution.Scope
 	intent := classifyIntent(input.Query, scope)
 	workflow, agents := selectWorkflowAndAgents(intent)
-	missing := missingParameters(intent, scope)
+	missing := append([]string{}, resolution.MissingParameters...)
+	missing = appendUnique(missing, missingParameters(intent, scope)...)
 	return CoordinatorPlan{
 		Intent:            intent,
 		Scope:             scope,
@@ -85,21 +121,25 @@ func BuildCoordinatorPlan(input AgentContext) CoordinatorPlan {
 		Agents:            agents,
 		Reason:            coordinatorReason(intent, workflow, missing),
 		MissingParameters: missing,
+		Resolution: CoordinatorResolution{
+			Source: resolution.Source, DefaultTimeWindowMinutes: resolution.DefaultTimeWindowMinutes,
+			Ambiguous: resolution.Ambiguous, CandidateCount: resolution.CandidateCount, Degraded: resolution.Degraded,
+		},
 	}
 }
 
 func CoordinatorPlanSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","required":["intent","scope","workflow","agents","reason","missingParameters"],"properties":{"intent":{"type":"string"},"scope":{"type":"object"},"workflow":{"type":"string"},"agents":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"},"missingParameters":{"type":"array","items":{"type":"string"}}}}`)
+	return json.RawMessage(`{"type":"object","required":["intent","scope","workflow","agents","reason","missingParameters","resolution"],"properties":{"intent":{"type":"string"},"scope":{"type":"object"},"workflow":{"type":"string"},"agents":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"},"missingParameters":{"type":"array","items":{"type":"string"}},"resolution":{"type":"object","required":["source","defaultTimeWindowMinutes","ambiguous","candidateCount","degraded"]}}}`)
 }
 
 func extractCoordinatorScope(input AgentContext) map[string]any {
 	scope := map[string]any{}
-	for key, value := range input.Scope {
+	for key, value := range input.Variables {
 		if !isZeroVariable(value) {
 			scope[key] = value
 		}
 	}
-	for key, value := range input.Variables {
+	for key, value := range input.Scope {
 		if !isZeroVariable(value) {
 			scope[key] = value
 		}
@@ -132,6 +172,8 @@ func extractTextValue(scope map[string]any, text, key string, pattern *regexp.Re
 func classifyIntent(query string, scope map[string]any) string {
 	text := strings.ToLower(query)
 	switch {
+	case scope["symptom"] == "performance_degradation":
+		return IntentGeneralRCA
 	case hasAny(text, "nacos", "服务注册", "注册中心", "配置推送", "配置监听"):
 		return IntentNacosDiagnosis
 	case hasAny(text, "redis", "sentinel", "cluster slots", "slowlog", "缓存", "主从", "集群槽", "连接池") ||
@@ -154,6 +196,24 @@ func classifyIntent(query string, scope map[string]any) string {
 	default:
 		return IntentKnowledge
 	}
+}
+
+func defaultScopeResolution(input AgentContext) ScopeResolution {
+	resolver := NewNaturalLanguageScopeResolver(nil, nil, 30*time.Minute)
+	return resolver.Resolve(context.Background(), nil, input)
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	result := make([]string, 0, len(values)+len(additions))
+	for _, value := range append(values, additions...) {
+		if _, ok := seen[value]; ok || value == "" {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func selectWorkflowAndAgents(intent string) (string, []string) {
@@ -243,9 +303,16 @@ func hasAny(text string, keywords ...string) bool {
 }
 
 func hasProductionScope(scope map[string]any) bool {
-	for _, key := range []string{"dataSourceId", "namespace", "podName", "from", "to", "promql", "query"} {
+	for _, key := range []string{"dataSourceId", "namespace", "podName", "promql", "query"} {
 		if value, ok := scope[key]; ok && !isZeroVariable(value) {
 			return true
+		}
+	}
+	if scope["timeRangeSource"] != "default" {
+		for _, key := range []string{"from", "to"} {
+			if value, ok := scope[key]; ok && !isZeroVariable(value) {
+				return true
+			}
 		}
 	}
 	return false

@@ -164,7 +164,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize skill registry: %w", err)
 	}
-	agentRuntime, err := agentruntime.NewRuntime(skillRegistry, agentRunRepository, agentruntime.Limits{}, agentruntime.BuiltinAgents()...)
+	scopeResolver := agentruntime.NewNaturalLanguageScopeResolver(topologyService, dataSourceService, cfg.RCA.DefaultTimeWindow)
+	agentRuntime, err := agentruntime.NewRuntime(skillRegistry, agentRunRepository, agentruntime.Limits{}, agentruntime.BuiltinAgentsWithCoordinator(agentruntime.NewCoordinatorAgent(scopeResolver))...)
 	if err != nil {
 		return fmt.Errorf("initialize agent runtime: %w", err)
 	}

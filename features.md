@@ -2,8 +2,8 @@
 
 > 文档类型：产品需求 + 软件架构 + 数据模型 + API 契约 + Codex 研发任务  
 > 目标读者：Codex、开发人员、架构师、测试人员、运维人员  
-> 文档版本：v1.4
-> 更新日期：2026-07-18
+> 文档版本：v1.5
+> 更新日期：2026-07-28
 > 默认语言：中文  
 > 默认部署环境：内网、私有化部署  
 > 默认安全模式：只读分析，不自动修改生产环境
@@ -11602,6 +11602,548 @@ Task 2.16
 6. 保持现有 data_source 和 server_file 功能兼容。
 7. 不实现 SSH 连接、命令执行、前端和 Workflow。
 8. 添加 repository 和 migration 测试。
+9. 执行 gofmt、go test ./...、go vet ./...。
+10. 按文档规定的 Codex Task 输出格式报告。
+```
+
+---
+
+# 第二十八部分：自然语言多轮 RCA 增量设计（v1.5 新增）
+
+> 本部分新增“用户输入自然语言问题，平台基于日志、指标、知识库和拓扑进行多轮只读排查”的研发任务。
+> 本部分不替代既有日志、Prometheus、Knowledge Center、Topology、TiDB、Redis、Nacos、Nginx、Agent、Workflow 和 Evidence 设计，而是在其上增加统一编排与证据闭环。
+> 默认示例问题为：“订单服务变慢，请查询可能原因。”
+
+## 203. 功能目标
+
+平台必须支持以下诊断过程：
+
+1. 用户只输入自然语言问题，可选指定环境、服务和时间范围；
+2. 平台识别服务实体、环境、时间窗口和故障现象；
+3. 第一轮并行执行：
+   - Elasticsearch / OpenSearch 可疑日志查询；
+   - Prometheus 可疑指标查询和基线比较；
+   - Knowledge Center 语义检索，获取历史故障和 Runbook；
+4. 平台根据第一轮事实形成结构化假设；
+5. 第二轮结合系统拓扑查询相关数据库、中间件和上下游服务；
+6. 如果证据指向数据库耗时，查询慢 SQL、连接、锁等待和数据库健康信息；
+7. 第三轮针对慢 SQL 深入分析执行计划、统计信息、热点、锁竞争或资源压力；
+8. 达到收敛条件、查询预算或最大轮数后生成证据支持的 RCA 报告；
+9. 报告必须区分 FACT、RULE、KNOWLEDGE 和 HYPOTHESIS；
+10. 全流程只读，不得自动执行修复、DDL、DML、重启、扩缩容或配置变更。
+
+## 204. 目标执行模型
+
+```text
+Natural Language Query
+        │
+        ▼
+Scope Resolver
+        │
+        ├── service / component
+        ├── environment
+        ├── time window
+        └── topology node + data source bindings
+        │
+        ▼
+Round 1: Parallel Evidence Collection
+        ├── query_logs
+        ├── query_metrics / compare_metric_baseline
+        └── hybrid_search_knowledge
+        │
+        ▼
+Hypothesis Planner
+        │
+        ▼
+Round 2: Topology-guided Expansion
+        ├── find_topology_node
+        ├── expand_topology
+        ├── find_dependencies
+        └── component diagnosis skills
+        │
+        ▼
+Round 3: Deep Diagnosis
+        ├── query_*_slow_queries
+        ├── process / connection pressure
+        ├── lock waits
+        ├── statistics health
+        └── controlled EXPLAIN
+        │
+        ▼
+Evidence-backed RCA Report
+```
+
+诊断循环必须是受控的：
+
+```text
+max_rounds = 3
+max_skill_calls <= Agent Runtime configured limit
+max_wall_time <= Workflow configured timeout
+read_only = true
+```
+
+每一轮必须保存输入、执行动作、查询参数摘要、输出证据、假设变化、缺失证据和停止原因。
+
+## 205. 统一诊断状态
+
+多轮诊断至少包含以下状态：
+
+```text
+rca_run
+rca_round
+rca_hypothesis
+rca_action
+rca_evidence_link
+```
+
+`rca_run` 至少包含：
+
+```text
+id
+user_id
+conversation_id
+question
+resolved_scope_json
+status
+current_round
+max_rounds
+confidence
+stop_reason
+started_at
+finished_at
+```
+
+`rca_action` 至少包含：
+
+```text
+round_id
+skill_name
+target_entity
+sanitized_input_json
+status
+evidence_ids
+error_code
+started_at
+finished_at
+```
+
+`rca_hypothesis` 至少包含：
+
+```text
+round_id
+summary
+confidence
+supporting_evidence_ids
+contradicting_evidence_ids
+next_actions_json
+status
+```
+
+禁止将大段原始日志、完整 SQL、凭据或外部系统响应直接复制到诊断状态。原始内容必须由现有 Evidence 引用机制保存，并执行脱敏、截断和权限校验。
+
+## 206. 结构化规划协议
+
+诊断规划器必须输出符合 JSON Schema 的结构化结果：
+
+```json
+{
+  "round": 1,
+  "hypotheses": [
+    {
+      "summary": "订单服务的数据库调用耗时异常",
+      "confidence": 0.76,
+      "supportingEvidenceIds": ["evidence-log-18", "evidence-metric-7"],
+      "contradictingEvidenceIds": []
+    }
+  ],
+  "nextActions": [
+    {
+      "skill": "expand_topology",
+      "reason": "确认订单服务依赖的数据库和中间件",
+      "targetEntity": "order-service",
+      "arguments": {
+        "direction": "downstream",
+        "depth": 2
+      }
+    }
+  ],
+  "missingEvidence": [
+    "尚未确认订单数据库的慢 SQL 情况"
+  ],
+  "shouldStop": false,
+  "stopReason": ""
+}
+```
+
+约束：
+
+1. `nextActions[].skill` 必须来自允许的只读 Skill Catalog；
+2. 参数必须通过目标 Skill 的 JSON Schema 校验；
+3. Planner 不得生成 Shell、SQL 执行器 URL 或任意 HTTP 请求；
+4. Planner 不得直接访问外部系统；
+5. 每个假设必须引用证据或明确标记为低置信度推测；
+6. 没有新证据时不得仅通过重复表述提高置信度；
+7. 相同 Skill、目标和参数不得在同一 Run 中无理由重复执行；
+8. Planner 输出无效时使用确定性降级策略，并记录 `planner_degraded=true`。
+
+## 207. Codex 研发任务增量
+
+### Task 3.12A：Natural Language Scope Resolver
+
+目标：
+
+- 从自然语言中识别故障现象、服务、组件、环境和时间范围；
+- 支持“订单服务变慢”“生产 order-service 最近半小时延迟升高”等表达；
+- 服务名称通过 Topology Alias、CMDB 标识和数据源标签解析，不依赖固定的 `服务: xxx` 格式；
+- 未指定时间范围时，使用可配置的默认时间窗；
+- 未指定环境时，根据用户可访问范围和拓扑候选进行解析；
+- 多个候选且无法可靠消歧时返回结构化缺失参数，不得静默选择错误生产对象；
+- 保持现有显式 `scope` 和 `dataSourceId` 输入向后兼容。
+
+验收：
+
+1. “订单服务变慢，请查询可能原因”可识别为 `general_rca`；
+2. “变慢、响应慢、耗时增加、延迟升高、卡顿”均可归一化为性能退化类现象；
+3. 显式 scope 的优先级高于模型推断；
+4. 默认时间窗可配置并记录在审计中；
+5. 无权限的环境、节点和数据源不进入候选；
+6. 候选冲突返回明确的 `missingParameters`；
+7. 中文、英文和中英混合查询有单元测试；
+8. 不调用任何外部写操作。
+
+### Task 4.4G：Topology Skill 与数据源绑定
+
+目标：
+
+- 将现有 Topology 查询能力注册为只读 Skill；
+- 实现：
+  - `find_topology_node`；
+  - `expand_topology`；
+  - `find_dependencies`；
+  - `explain_topology_path`；
+  - `get_topology_data_source_bindings`；
+- 建立 Topology Node 与 Elasticsearch、Prometheus、TiDB、Redis、Nacos、Nginx、Kubernetes 和 Linux 数据源之间的绑定；
+- 支持通过节点属性、Alias、CMDB ID 和显式配置解析数据源；
+- 每个绑定包含来源、置信度、环境和更新时间。
+
+验收：
+
+1. 可从 `order-service` 找到直接和二级依赖；
+2. 可区分数据库、中间件、下游服务和基础设施节点；
+3. 可将节点解析到用户有权访问的数据源 ID；
+4. 低置信度和冲突绑定不会被静默采用；
+5. 拓扑遍历受 depth、maxNodes、maxEdges 限制；
+6. 所有 Skill 标记为 `ReadOnly=true`；
+7. Skill 调用、输入摘要和结果引用可审计；
+8. 缺少绑定时返回 `missingEvidence`，不得伪造数据源。
+
+### Task 3.12B：统一 RCA Evidence 与 Round State
+
+目标：
+
+- 实现第 205 节的多轮诊断状态；
+- 复用现有 Evidence Center，建立日志、指标、知识库、拓扑和组件证据引用；
+- 为证据增加统一的实体、时间范围、来源 Skill、轮次和可信度信息；
+- 支持事实、规则、知识依据和模型推测分类；
+- 支持 Run、Round、Action 和 Evidence 的查询 API；
+- 支持取消、超时、部分成功和失败恢复。
+
+验收：
+
+1. 每个 Root Cause Candidate 至少引用一个 Evidence ID；
+2. 每轮可查看输入假设、新证据、被否定假设和下一步动作；
+3. `partial_success` 不会被展示为完整成功；
+4. 外部查询失败保留安全错误码，不保存凭据；
+5. 日志和 SQL 内容经过脱敏、截断和长度限制；
+6. 用户不能访问其他用户无权限的数据源证据；
+7. migration 支持向前迁移和可验证回滚；
+8. 状态恢复不会重复执行已成功的敏感读取。
+
+### Task 1.9D：RCA 接入 Hybrid Retrieval
+
+目标：
+
+- 新增 `hybrid_search_knowledge` Skill；
+- 复用 Knowledge Center 2.0 的 Query Understanding、Hybrid Retrieval、RRF、Rerank 和 Context Builder；
+- 通用 RCA 不再使用简单 `ILIKE` 搜索作为主检索路径；
+- 检索查询由“原始问题 + 已确认实体 + 日志模板 + 指标异常摘要”组成；
+- 只使用当前已发布版本和用户有权访问的文档；
+- 返回 citation、retrieval trace 和降级状态。
+
+验收：
+
+1. 可语义检索到措辞不同但含义相近的历史故障；
+2. 未配置 Embedding 或 Rerank 时可降级，但必须标记降级渠道；
+3. 日志模板中的动态 ID、IP、时间戳不会污染主要检索词；
+4. 引用可定位到 Document、Version 和 Chunk；
+5. 未发布文档不进入正式 RCA；
+6. 检索输入、过滤条件和结果数量可审计；
+7. 保持现有 Knowledge QA API 兼容；
+8. 添加语义召回和权限隔离测试。
+
+### Task 3.12C：Round 1 多源并行证据采集
+
+目标：
+
+- 新增第一轮证据采集子工作流；
+- 并行执行日志、指标和知识库查询；
+- 根据服务类型和现象从受控模板目录选择 PromQL，不允许模型直接生成任意查询；
+- 支持当前窗口和历史基线比较；
+- 日志查询支持错误、超时、慢调用、依赖名称、Trace ID 和聚类模板；
+- 某个数据源失败时，其余查询继续执行并返回 `partial_success`；
+- 输出统一 Evidence。
+
+验收：
+
+1. ES、Prometheus 和 Knowledge 查询可并行执行；
+2. “订单服务变慢”至少尝试延迟、错误率、QPS 和资源饱和度指标；
+3. PromQL 中的 label 值来自已解析且校验过的实体；
+4. 日志查询不只使用完整用户问题作为唯一关键词；
+5. 当前窗口和基线窗口边界清晰；
+6. 单源失败不会丢失其他已成功证据；
+7. 每次查询受时间范围、结果数、Series 和 Point 上限保护；
+8. 所有结果可追溯到具体数据源和 Skill Run。
+
+### Task 3.12D：Evidence-driven RCA Planner
+
+目标：
+
+- 实现符合第 206 节协议的诊断规划器；
+- 输入当前 Scope、历史轮次、结构化证据、已有假设和剩余预算；
+- 输出新假设、置信度、证据缺口、下一步只读 Skill 动作和停止判断；
+- 支持确定性规则与 LLM 规划结合；
+- 对常见性能问题提供受控规则：
+  - 下游调用耗时；
+  - 数据库慢 SQL；
+  - Redis 延迟或连接池；
+  - Nginx upstream 超时；
+  - Kubernetes 资源压力；
+  - Linux CPU、内存、磁盘 IO 和网络异常；
+- 规划结果必须经过策略、权限和 Schema 校验。
+
+验收：
+
+1. 日志显示数据库调用过长时，可规划拓扑和数据库查询；
+2. 指标正常时可降低相应假设置信度并记录反证；
+3. Planner 不得调用未注册 Skill；
+4. Planner 不得突破用户数据源权限；
+5. 无效 JSON、超时或 LLM 不可用时有确定性降级；
+6. 重复动作可检测并抑制；
+7. 置信度变化必须有新增证据或反证依据；
+8. Planner 的 Prompt、Schema 和回归 Fixture 有版本管理。
+
+### Task 3.12E：Bounded Multi-round RCA Orchestrator
+
+目标：
+
+- 实现“规划 → 并行执行 → 证据归一化 → 重新规划”的受控循环；
+- 默认最多三轮；
+- 支持每轮和全局 Skill Call、Token、上下文大小、墙钟时间和并发预算；
+- Round 1 调用 Task 3.12C；
+- Round 2 优先进行拓扑引导的依赖调查；
+- Round 3 只针对最高优先级根因候选深入诊断；
+- 支持取消、超时、部分成功、幂等恢复；
+- 将现有 `general_rca_workflow` 注册为可执行内置工作流；
+- Coordinator 必须将自然语言性能退化问题路由到该工作流。
+
+停止条件：
+
+1. 已获得相互支持的多源证据并达到配置的置信度；
+2. 没有新的有效证据或下一步动作；
+3. 三轮已完成；
+4. Skill Call、时间或上下文预算耗尽；
+5. 用户取消；
+6. 关键 Scope 无法可靠解析。
+
+验收：
+
+1. 能完成至少三轮的测试场景；
+2. 第二轮参数真实来自第一轮证据和拓扑结果；
+3. 不通过硬编码示例 `dataSourceId` 或固定时间运行；
+4. Condition 节点必须执行真实条件判断，不能只返回 `status=ok`；
+5. 节点支持从前序输出安全映射下一节点输入；
+6. 工作流定义保持 DAG，循环由受控 Orchestrator 管理；
+7. 恢复执行不会重复写入相同 Evidence；
+8. 最终保存明确的 `stopReason`。
+
+### Task 3.12F：Topology-guided Component Investigation
+
+目标：
+
+- 根据第一轮证据选择相关上下游，不做无边界全图扫描；
+- 支持数据库、Redis、Nacos、Nginx、Kubernetes 和 Linux 节点的只读调查；
+- 根据边类型、方向、置信度和时间有效性排序候选依赖；
+- 将组件 Skill 输出转换为统一 Evidence；
+- 允许 Planner 根据反证回退到其他依赖。
+
+验收：
+
+1. 日志中的依赖名称可与拓扑 Alias 对齐；
+2. `order-service -> order-db` 可触发数据库诊断；
+3. `order-service -> redis` 可触发 Redis 诊断；
+4. 不相关组件不会因固定工作流被全部查询；
+5. 拓扑缺失时返回缺失证据，并可使用显式数据源范围降级；
+6. 同一依赖不会被重复无效查询；
+7. 过期或冲突拓扑关系必须标记；
+8. 组件结论引用原始 Skill Evidence。
+
+### Task 3.12G：Slow SQL Deep Diagnosis
+
+目标：
+
+- 以现有 TiDB Skills 为第一实现；
+- 当第二轮确认数据库存在慢 SQL 时，第三轮按需执行：
+  - `query_tidb_slow_queries`；
+  - `query_tidb_processlist`；
+  - `query_tidb_lock_waits`；
+  - `query_tidb_hot_regions`；
+  - `query_tidb_statistics_health`；
+  - `explain_tidb_sql`；
+- 对 SQL 文本进行指纹化和脱敏；
+- 将慢 SQL 与服务、时间范围、Trace、调用量和基线关联；
+- 区分执行计划退化、锁竞争、统计信息异常、热点、连接压力和资源压力；
+- 为后续 MySQL、PostgreSQL 实现统一 `DatabaseDiagnosisProvider` 接口。
+
+验收：
+
+1. 可定位最高影响的慢 SQL 指纹，而不只按单次最长耗时排序；
+2. 只有通过只读 SQL 校验的语句才能执行 EXPLAIN；
+3. 生产环境禁止自动执行 `EXPLAIN ANALYZE`；
+4. 不执行 DDL、DML、事务控制和存储过程；
+5. SQL Literal、账号、Token 和个人信息必须脱敏；
+6. 无执行计划证据时不得断言索引失效；
+7. 根因必须引用慢 SQL及至少一种补充证据，或明确标记为低置信度；
+8. TiDB 不可用时返回 `partial_success` 和明确缺失证据；
+9. Provider 接口不得伪装已经支持 MySQL 或 PostgreSQL。
+
+### Task 3.12H：RCA Report Aggregation
+
+目标：
+
+- 汇总三轮 Scope、Timeline、Facts、Rules、Knowledge、Hypotheses 和 Missing Evidence；
+- 输出影响范围、根因候选、置信度、证据链、排查过程、建议和风险提示；
+- 根因候选按证据强度排序；
+- 同时呈现支持证据和反证；
+- 建议只展示，不自动执行；
+- 支持生成 Incident 和 RCA 文档草稿。
+
+验收：
+
+1. 报告可回答“查了什么、发现什么、为什么继续查、为什么停止”；
+2. 每个事实和根因可点击查看 Evidence；
+3. 推测不得显示为已确认事实；
+4. `partial_success` 和缺失数据源显著展示；
+5. 没有充分证据时允许输出“暂无法定位”；
+6. LLM 不可用时仍可生成确定性结构化报告；
+7. 报告不包含凭据和未脱敏原文；
+8. 报告可追溯到 Workflow Run、Agent Run 和 Skill Run。
+
+### Task 4.12：多轮智能分析前端
+
+目标：
+
+- 用户可直接输入自然语言问题；
+- 支持可选的环境、服务和时间范围；
+- 展示 Scope 解析结果和歧义提示；
+- 实时展示 Round 1～3 的状态；
+- 每轮展示查询目标、Skill、证据摘要、假设变化和下一步原因；
+- 提供日志、指标、知识库、拓扑和慢 SQL 证据详情；
+- 支持取消、重试、恢复和历史记录；
+- 最终展示 RCA 报告。
+
+验收：
+
+1. “订单服务变慢，请查询可能原因”可直接发起分析；
+2. 默认时间范围在执行前可见；
+3. 并行查询以独立状态展示；
+4. 拓扑扩展过程可视化；
+5. 慢 SQL 只展示脱敏文本或 SQL 指纹；
+6. `partial_success`、超时、权限不足和缺失证据有不同提示；
+7. 页面刷新后可恢复运行进度；
+8. 取消后不会继续发起新的 Skill；
+9. FACT、RULE、KNOWLEDGE、HYPOTHESIS 使用明确标签；
+10. 不提供自动修复或任意 SQL 执行入口。
+
+### Task 5.7：Multi-round RCA Security、Observability 与 E2E
+
+目标：
+
+- 完成多轮 RCA 的权限、审计、资源保护和端到端测试；
+- 增加 Run、Round、Planner、Skill、Evidence 的指标和结构化日志；
+- 建立标准演示 Fixture 和故障场景；
+- 验证取消、超时、降级、部分成功和恢复；
+- 对 Prompt Injection、恶意日志、恶意知识文档和恶意 SQL 文本进行安全测试。
+
+必测场景：
+
+1. 订单服务正常，无异常证据；
+2. 订单服务日志出现数据库调用超时；
+3. Prometheus 显示数据库延迟同步升高；
+4. 历史 Incident 命中相似慢 SQL；
+5. 拓扑定位 order-db；
+6. TiDB 发现慢 SQL 和锁等待；
+7. ES 不可用但指标和知识库成功；
+8. Prometheus 不可用但日志成功；
+9. Topology 无绑定；
+10. LLM 不可用，确定性降级；
+11. 用户无权访问目标数据库；
+12. 用户中途取消；
+13. Planner 重复生成相同动作；
+14. 恶意日志诱导 Agent 执行命令；
+15. 三轮结束仍无充分证据。
+
+验收：
+
+1. 全部外部访问保持只读；
+2. 所有 Skill 调用可审计；
+3. 权限在 Run 创建和每次 Skill 执行时均校验；
+4. 单用户和全局并发限制有效；
+5. Token、时间、轮次、数据量和 Skill Call 预算有效；
+6. Prompt Injection 不得改变 Skill Allowlist 和只读策略；
+7. 日志中不出现密码、Token、API Key、私钥和完整敏感 SQL；
+8. E2E 可证明第二轮和第三轮由前序证据触发；
+9. 无证据时不会生成确定性根因；
+10. `go test ./...`、`go vet ./...`、前端 lint、build 和 E2E 全部通过。
+
+## 208. 推荐实施顺序
+
+```text
+Task 3.12A
+ -> Task 4.4G
+ -> Task 3.12B
+ -> Task 1.9D
+ -> Task 3.12C
+ -> Task 3.12D
+ -> Task 3.12E
+ -> Task 3.12F
+ -> Task 3.12G
+ -> Task 3.12H
+ -> Task 4.12
+ -> Task 5.7
+```
+
+说明：
+
+1. 不应先开发固定三段式页面，再补后端证据状态；
+2. 不应使用硬编码数据源、固定 PromQL 或固定日期通过验收；
+3. 不应把多轮循环实现为带环 Workflow DAG；
+4. 推荐由 RCA Orchestrator 管理轮次，每轮内部继续复用 Workflow DAG 并行执行；
+5. TiDB 为第一阶段数据库实现，MySQL、PostgreSQL 必须通过后续 Provider Task 单独验收。
+
+## 209. 推荐第一条 Codex 指令
+
+```text
+请读取 features.md，只执行 Task 3.12A：Natural Language Scope Resolver。
+
+要求：
+1. 保持现有 Coordinator、Analysis API 和显式 scope 输入兼容。
+2. 将“订单服务变慢，请查询可能原因”识别为 general_rca。
+3. 支持性能退化类中文同义表达。
+4. 实现默认时间窗配置。
+5. 通过 Topology Alias 和用户权限解析服务候选。
+6. 候选冲突时返回结构化 missingParameters，不静默选择。
+7. 不执行任何外部写操作。
+8. 添加中英文、权限、冲突和降级测试。
 9. 执行 gofmt、go test ./...、go vet ./...。
 10. 按文档规定的 Codex Task 输出格式报告。
 ```
