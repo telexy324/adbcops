@@ -528,6 +528,7 @@ func (s *Service) validatePlannerResult(actor *model.AppUser, input PlannerInput
 		action.ActionKey = truncateText(action.ActionKey, 160)
 		action.Reason = truncateText(action.Reason, 512)
 		action.TargetEntity = truncateText(action.TargetEntity, 256)
+		action.EvidenceIDs = filterEvidenceIDs(action.EvidenceIDs, evidenceIDSet(input.Evidence))
 		actions = append(actions, action)
 		if len(actions) >= input.Budget.RemainingSkillCalls {
 			break
@@ -541,6 +542,14 @@ func (s *Service) validatePlannerResult(actor *model.AppUser, input PlannerInput
 	}
 	if result.ShouldStop && strings.TrimSpace(result.StopReason) == "" {
 		result.StopReason = "planner_stopped"
+	}
+	return result
+}
+
+func evidenceIDSet(values []PlannerEvidence) map[int64]struct{} {
+	result := map[int64]struct{}{}
+	for _, value := range values {
+		result[value.ID] = struct{}{}
 	}
 	return result
 }

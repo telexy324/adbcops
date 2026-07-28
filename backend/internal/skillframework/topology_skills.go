@@ -53,6 +53,7 @@ type topologyNodeReference struct {
 	DisplayName string `json:"displayName,omitempty"`
 	Kind        string `json:"kind"`
 	Category    string `json:"category,omitempty"`
+	HostID      int64  `json:"hostId,omitempty"`
 	Environment string `json:"environment,omitempty"`
 	Cluster     string `json:"cluster,omitempty"`
 	Namespace   string `json:"namespace,omitempty"`
@@ -61,11 +62,15 @@ type topologyNodeReference struct {
 }
 
 type topologyEdgeReference struct {
-	EdgeKey     string  `json:"edgeKey"`
-	FromNodeKey string  `json:"fromNodeKey"`
-	ToNodeKey   string  `json:"toNodeKey"`
-	EdgeType    string  `json:"edgeType"`
-	Confidence  float64 `json:"confidence"`
+	EdgeKey        string  `json:"edgeKey"`
+	FromNodeKey    string  `json:"fromNodeKey"`
+	ToNodeKey      string  `json:"toNodeKey"`
+	EdgeType       string  `json:"edgeType"`
+	Confidence     float64 `json:"confidence"`
+	Status         string  `json:"status"`
+	LastObservedAt string  `json:"lastObservedAt,omitempty"`
+	StaleAt        string  `json:"staleAt,omitempty"`
+	UpdatedAt      string  `json:"updatedAt,omitempty"`
 }
 
 type topologyBinding struct {
@@ -914,7 +919,8 @@ func containsAnyTopology(text string, values ...string) bool {
 func toTopologyNodeReference(node model.TopologyNode) topologyNodeReference {
 	result := topologyNodeReference{
 		NodeKey: node.NodeKey, Name: node.Name, DisplayName: stringFromPointer(node.DisplayName),
-		Kind: node.Kind, Environment: stringFromPointer(node.Environment), Cluster: stringFromPointer(node.Cluster),
+		Kind: node.Kind, HostID: integerFromJSON(node.SourceRef, "hostId"),
+		Environment: stringFromPointer(node.Environment), Cluster: stringFromPointer(node.Cluster),
 		Namespace: stringFromPointer(node.Namespace), SourceType: node.SourceType,
 	}
 	if !node.UpdatedAt.IsZero() {
@@ -930,10 +936,20 @@ func toTopologyEdgeReference(edge model.TopologyEdge) topologyEdgeReference {
 	} else if edge.Confidence != nil {
 		confidence = *edge.Confidence
 	}
-	return topologyEdgeReference{
+	result := topologyEdgeReference{
 		EdgeKey: edge.EdgeKey, FromNodeKey: edge.FromNodeKey, ToNodeKey: edge.ToNodeKey,
-		EdgeType: edge.EdgeType, Confidence: confidence,
+		EdgeType: edge.EdgeType, Confidence: confidence, Status: edge.Status,
 	}
+	if edge.LastObservedAt != nil {
+		result.LastObservedAt = edge.LastObservedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	if edge.StaleAt != nil {
+		result.StaleAt = edge.StaleAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	if !edge.UpdatedAt.IsZero() {
+		result.UpdatedAt = edge.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	return result
 }
 
 func normalizeTopologyLabel(value string) string {

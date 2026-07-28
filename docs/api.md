@@ -45,6 +45,15 @@ Content-Type: application/json
 
 Orchestrator 执行“第一轮多源采集 → 规划 → 并行只读 Skill → Evidence 归一化 → 重新规划”。最多执行三轮，并在 `rca_run.stop_reason` 保存明确停止原因。恢复执行复用成功 Action 和已有 Evidence Key，不重复执行或写入。
 
+第二轮响应的 `rounds[].topologyInvestigation` 包含：
+
+- `rootNodeKey`、`observedAliases`；
+- 已排序的 `candidates` 与实际执行的 `selected`；
+- 候选边的 `confidence`、`freshness`、`aliasMatched`、绑定状态和 Evidence ID；
+- `missingEvidence`、`conflicts` 与 `fallbackUsed`。
+
+拓扑扩展固定为有界查询。低置信度、过期、冲突或无权限的数据源绑定不会触发组件 Skill；拓扑缺失时，仅使用请求 Scope 内显式且已授权的数据源进行降级调查。
+
 ## Auth
 
 除登录与健康检查外，认证接口使用：

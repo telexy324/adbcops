@@ -7,3 +7,9 @@
 `general_rca_workflow` 是可执行、保持无环的内置 Workflow：先真实校验 Scope，再由 Coordinator 确认 `general_rca` 路由。Workflow 节点支持从 `workflowInput` 或已完成节点 `previous` 输出进行白名单路径映射；Condition 节点执行 `exists`、`not_exists`、`equals`、`not_equals` 或 `truthy` 判断。
 
 多轮循环不放入 Workflow DAG，而由 RCA Orchestrator 负责。Orchestrator 默认最多三轮，统一限制每轮/全局 Skill Call、并发、估算 Token、上下文大小及墙钟时间，并将每次只读 Skill 输出归一化为 Evidence 后重新规划。
+
+### 第二轮拓扑引导组件调查
+
+第一轮结束后，Orchestrator 从日志 Evidence 和 Scope 提取依赖名，先通过 Topology Alias 解析真实节点，再以根服务为起点执行受 `depth`、`maxNodes`、`maxEdges` 限制的上下游遍历。候选节点按边类型、方向、置信度、跳数、时间新鲜度及 Alias 命中排序；同类候选分数接近时标记冲突，不静默选择。
+
+只有证据相关且绑定到当前用户可访问只读数据源的组件会进入调查。目前覆盖 TiDB、Redis、Nacos、Nginx、Kubernetes 和 Linux。拓扑或绑定缺失时记录 `missingEvidence`，并仅在 Scope 明确给出对应数据源时降级。组件 Skill Evidence 的 `sourceRef.inputEvidenceIds` 保留首轮及拓扑 Evidence ID，形成可追溯证据链；重复节点和重复动作在执行前去重。

@@ -236,13 +236,16 @@ func plannerTestCatalog() fakePlannerCatalog {
 	}
 	add("find_topology_node", model.SkillRiskSafeRead, `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"environment":{"type":"string"},"limit":{"type":"integer"}}}`)
 	add("find_dependencies", model.SkillRiskSafeRead, `{"type":"object","required":["nodeKey"],"properties":{"nodeKey":{"type":"string"},"direction":{"type":"string"},"depth":{"type":"integer"},"maxNodes":{"type":"integer"},"maxEdges":{"type":"integer"},"environment":{"type":"string"}}}`)
+	add("get_topology_data_source_bindings", model.SkillRiskSafeRead, `{"type":"object","required":["nodeKey"],"properties":{"nodeKey":{"type":"string"},"environment":{"type":"string"},"explicitDataSourceIds":{"type":"array","items":{"type":"integer"}},"minimumConfidence":{"type":"number"}}}`)
 	add("query_tidb_slow_queries", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"minutes":{"type":"integer"},"limit":{"type":"integer"}}}`)
 	add("query_tidb_processlist", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"limit":{"type":"integer"}}}`)
 	add("query_redis_latency", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"}}}`)
 	add("diagnose_redis_connection_pool", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"}}}`)
 	add("diagnose_nginx_504", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"limit":{"type":"integer"}}}`)
 	add("diagnose_nginx_upstream", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"limit":{"type":"integer"}}}`)
+	add("diagnose_nacos_registration", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId"],"properties":{"dataSourceId":{"type":"integer"},"namespace":{"type":"string"},"serviceName":{"type":"string"}}}`)
 	add("run_k8s_diagnostic_rules", model.SkillRiskSensitiveRead, `{"type":"object","required":["dataSourceId","namespace","podName"],"properties":{"dataSourceId":{"type":"integer"},"namespace":{"type":"string"},"podName":{"type":"string"},"logTailLines":{"type":"integer"}}}`)
+	add("diagnose_linux_host_health", model.SkillRiskSafeRead, `{"type":"object","required":["hostId"],"properties":{"hostId":{"type":"integer"},"topN":{"type":"integer"}}}`)
 	for _, name := range []string{"diagnose_linux_cpu_pressure", "diagnose_linux_memory_pressure", "diagnose_linux_disk_io", "diagnose_linux_network"} {
 		add(name, model.SkillRiskSafeRead, `{"type":"object","required":["hostId"],"properties":{"hostId":{"type":"integer"},"topN":{"type":"integer"}}}`)
 	}

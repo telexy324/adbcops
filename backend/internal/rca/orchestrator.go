@@ -66,12 +66,13 @@ type OrchestratorUsage struct {
 }
 
 type OrchestratorRoundResult struct {
-	RoundNumber int            `json:"roundNumber"`
-	Status      string         `json:"status"`
-	Plan        *PlannerResult `json:"plan,omitempty"`
-	ActionIDs   []int64        `json:"actionIds"`
-	EvidenceIDs []int64        `json:"evidenceIds"`
-	Errors      []string       `json:"errors,omitempty"`
+	RoundNumber int                          `json:"roundNumber"`
+	Status      string                       `json:"status"`
+	Plan        *PlannerResult               `json:"plan,omitempty"`
+	Topology    *TopologyInvestigationResult `json:"topologyInvestigation,omitempty"`
+	ActionIDs   []int64                      `json:"actionIds"`
+	EvidenceIDs []int64                      `json:"evidenceIds"`
+	Errors      []string                     `json:"errors,omitempty"`
 }
 
 type OrchestratorResult struct {
@@ -208,10 +209,25 @@ func (s *Service) Orchestrate(ctx context.Context, actor *model.AppUser, runID i
 			outcome.StopReason = StopReasonConfirmed
 			break
 		}
-		actions := plan.NextActions
 		if run.CurrentRound == 1 {
-			actions = prioritizeTopologyActions(actions)
+			roundResult, executeErr := s.executeTopologyGuidedRound(runCtx, actor, runID, plan, remainingCalls)
+			if roundResult != nil {
+				outcome.Rounds = append(outcome.Rounds, *roundResult)
+				outcome.Usage.RoundsCompleted++
+				outcome.Usage.SkillCalls += len(roundResult.ActionIDs)
+				if len(roundResult.Errors) > 0 || roundResult.Status != model.RCARoundStatusSuccess {
+					outcome.Degraded = true
+				}
+			}
+			if executeErr != nil && !errors.Is(executeErr, ErrRoundPartial) {
+				return s.finishAfterExecutionError(ctx, actor, runID, outcome, executeErr)
+			}
+			if executeErr != nil {
+				outcome.Degraded = true
+			}
+			continue
 		}
+		actions := plan.NextActions
 		if run.CurrentRound == 2 {
 			actions = highestPriorityActions(plan.Hypotheses, actions)
 			if len(actions) == 0 {
@@ -506,6 +522,7 @@ func (s *Service) addPlannerActionEvidence(ctx context.Context, actor *model.App
 		RoundID: round.ID, ActionID: &execution.action.ID, EvidenceKey: key,
 		SourceType: plannerEvidenceSource(execution.plan.SkillName), SourceRef: mustJSON(map[string]any{
 			"skillRunId": execution.result.RunID, "actionKey": execution.plan.ActionKey,
+			"inputEvidenceIds": execution.plan.EvidenceIDs,
 		}),
 		ObservedAt: &now, Summary: plannerEvidenceSummary(execution.plan.SkillName, execution.result.Output),
 		Content: execution.result.Output, Confidence: &confidence, Sensitivity: model.EvidenceSensitivityInternal,

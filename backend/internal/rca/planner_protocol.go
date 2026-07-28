@@ -21,7 +21,7 @@ var PlannerOutputSchema = json.RawMessage(`{
   "properties":{
     "hypotheses":{"type":"array","items":{"type":"object","required":["id","summary","confidence","supportingEvidenceIds","contradictingEvidenceIds"],"properties":{"id":{"type":"string"},"summary":{"type":"string"},"confidence":{"type":"number"},"supportingEvidenceIds":{"type":"array","items":{"type":"integer"}},"contradictingEvidenceIds":{"type":"array","items":{"type":"integer"}},"rationale":{"type":"string"}}}},
     "missingEvidence":{"type":"array","items":{"type":"string"}},
-    "nextActions":{"type":"array","items":{"type":"object","required":["actionKey","skillName","input","reason"],"properties":{"actionKey":{"type":"string"},"skillName":{"type":"string"},"input":{"type":"object"},"reason":{"type":"string"},"targetEntity":{"type":"string"}}}},
+    "nextActions":{"type":"array","items":{"type":"object","required":["actionKey","skillName","input","reason"],"properties":{"actionKey":{"type":"string"},"skillName":{"type":"string"},"input":{"type":"object"},"reason":{"type":"string"},"targetEntity":{"type":"string"},"evidenceIds":{"type":"array","items":{"type":"integer"}}}}},
     "shouldStop":{"type":"boolean"},
     "stopReason":{"type":"string"}
   }
@@ -89,6 +89,7 @@ type PlannerAction struct {
 	Input        json.RawMessage `json:"input"`
 	Reason       string          `json:"reason"`
 	TargetEntity string          `json:"targetEntity,omitempty"`
+	EvidenceIDs  []int64         `json:"evidenceIds,omitempty"`
 }
 
 type PlannerResult struct {

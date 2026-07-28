@@ -3,6 +3,7 @@ package skillframework
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,21 @@ func TestTopologySkillsAreRegisteredReadOnly(t *testing.T) {
 		if !definition.ReadOnly || definition.RiskLevel != model.SkillRiskSafeRead {
 			t.Fatalf("%s must be a safe read-only skill: %+v", name, definition)
 		}
+	}
+}
+
+func TestTopologyNodeReferenceExposesOnlySafeLinuxHostID(t *testing.T) {
+	reference := toTopologyNodeReference(model.TopologyNode{
+		NodeKey: "host:9", Name: "orders-host", Kind: model.TopologyNodeKindHost,
+		SourceType: model.TopologySourceTypeLinuxServer,
+		SourceRef:  []byte(`{"hostId":9,"password":"must-not-leak"}`),
+	})
+	raw, err := json.Marshal(reference)
+	if err != nil {
+		t.Fatalf("marshal node reference: %v", err)
+	}
+	if reference.HostID != 9 || !strings.Contains(string(raw), `"hostId":9`) || strings.Contains(string(raw), "password") {
+		t.Fatalf("Linux host reference is missing its safe identity or leaked source metadata: %s", raw)
 	}
 }
 
