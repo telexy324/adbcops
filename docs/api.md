@@ -1026,8 +1026,15 @@ Content-Type: application/json
 - `run_k8s_diagnostic_rules`：运行确定性 K8s 诊断规则；
 - `query_metrics`：执行 Prometheus instant/range 查询；
 - `compare_metric_baseline`：对比当前窗口与 baseline 窗口的指标均值。
+- `find_topology_node`：通过 Node Key、名称、Alias 或 CMDB 标识解析拓扑节点；
+- `expand_topology`：在 depth、maxNodes、maxEdges 限制内展开上下游拓扑；
+- `find_dependencies`：查找并分类数据库、中间件、下游服务和基础设施依赖；
+- `explain_topology_path`：返回两个节点之间的受限路径、置信度和证据引用；
+- `get_topology_data_source_bindings`：通过显式配置、Source Ref、Alias、CMDB 标识和标签解析用户可访问的数据源绑定。
 
 其中日志、K8s 和指标类 Skill 风险等级为 `sensitive_read`，直接执行要求管理员；普通用户仍通过专用分析 API 或后续 Workflow 间接使用。Tool 调用失败时，Skill 会返回结构化 `{ "partial": true, "error": {...} }`，便于 Workflow 继续汇总部分结果。
+
+Topology Skill 均为 `safe_read` 且 `ReadOnly=true`。数据源绑定只返回当前用户可访问、已启用并标记为只读的数据源；低置信度候选和同类型冲突不会进入 `bindings`，缺少可靠绑定时返回 `missingEvidence`。
 
 ## Agent Runtime
 

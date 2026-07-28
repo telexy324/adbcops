@@ -160,6 +160,7 @@ func run() error {
 	skills = append(skills, skillframework.K8sAndMetricsSkills(k8sService, metricsService)...)
 	skills = append(skills, skillframework.ChangeSkills(changeService)...)
 	skills = append(skills, skillframework.IncidentAnalysisSkills(timelineService, correlationService)...)
+	skills = append(skills, skillframework.TopologySkills(topologyService, dataSourceService)...)
 	skillRegistry, err := skillframework.NewRegistry(toolRegistry, skillRunRepository, skills...)
 	if err != nil {
 		return fmt.Errorf("initialize skill registry: %w", err)
